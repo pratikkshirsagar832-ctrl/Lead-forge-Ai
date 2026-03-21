@@ -1,0 +1,38 @@
+# Dependencies & env
+.venv/
+venv/
+env/
+__pycache__/
+*.pyc
+*.pyo
+.env
+.env.local
+
+# Git
+.git/
+.gitignore
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Scrapling source (copied explicitly in Dockerfile)
+Scrapling/.git/
+Scrapling/__pycache__/
+
+# google-maps-scraper build artifacts (rebuilt in Dockerfile)
+google-maps-scraper/.git/
+google-maps-scraper/img/
+google-maps-scraper/docs/
+google-maps-scraper/testdata/
+google-maps-scraper/sponsors/
+
+# Scripts and tools (not needed in container)
+scripts/
+tools/
+
+# Logs and temp
+*.log
+tmp/

@@ -64,10 +64,13 @@ export const useAuthStore = create<AuthState>((set) => ({
         console.log('[Auth] initialize finished: Success');
       } catch (error) {
         console.error('[Auth] /api/auth/me failed:', error);
-        await supabase.auth.signOut().catch(() => {});
         set({
-          user: null,
-          isAuthenticated: false,
+          user: {
+            id: session.user.id,
+            email: session.user.email || '',
+            user_metadata: session.user.user_metadata || {},
+          },
+          isAuthenticated: true,
           isLoading: false,
         });
       }

@@ -2,10 +2,12 @@
 
 import { useEffect, useRef } from 'react';
 import { useAuth } from '@/hooks/useAuth';
+import { useAuthStore } from '@/stores/authStore';
 import { supabase } from '@/lib/supabase';
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
-  const { fetchProfile, signOut } = useAuth();
+  const { fetchProfile } = useAuth();
+  const logout = useAuthStore((state) => state.logout);
   const initref = useRef(false);
 
   useEffect(() => {
@@ -17,11 +19,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
     // Listen for auth changes from Supabase
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
-      async (event, session) => {
+      async (event) => {
         if (event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED') {
           await fetchProfile();
         } else if (event === 'SIGNED_OUT') {
-          signOut();
+          logout();
           window.location.href = '/login';
         }
       }
@@ -30,7 +32,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     return () => {
       subscription.unsubscribe();
     };
-  }, [fetchProfile, signOut]);
+  }, [fetchProfile, logout]);
 
   return <>{children}</>;
 }

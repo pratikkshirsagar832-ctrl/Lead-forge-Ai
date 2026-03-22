@@ -23,12 +23,19 @@ def _get_scraper_path() -> str:
     """Resolve the scraper binary path from config."""
     settings = get_settings()
     path = settings.scraper_binary_path
-    # On Windows, append .exe if not already present
-    if os.name == "nt" and not str(path).endswith(".exe"):
-        exe_path = Path(f"{path}.exe")
-        if exe_path.exists():
-            return str(exe_path)
-    return str(path)
+    
+    # Check if path exists as-is first
+    if os.path.exists(path):
+        return path
+    
+    # On Windows, try with .exe extension
+    if os.name == "nt":
+        exe_path = path if str(path).endswith(".exe") else f"{path}.exe"
+        if os.path.exists(exe_path):
+            return exe_path
+    
+    # Return original path and let FileNotFoundError handle it
+    return path
 
 
 async def run_maps_scraper(
@@ -71,28 +78,50 @@ async def run_maps_scraper(
             "-email"
         ]
 
+        logger.info(f"[Scraper:{run_id}] Binary path: {scraper_path}")
+        logger.info(f"[Scraper:{run_id}] Binary exists: {os.path.exists(scraper_path)}")
         logger.info(f"[Scraper:{run_id}] Starting: {' '.join(cmd)}")
 
         import subprocess
         
         def run_in_thread():
+            # Don't set cwd in containerized environments - causes permission issues
+            cwd = None
+            if os.name == "nt":
+                # Only set cwd on Windows if directory exists
+                scraper_dir = os.path.dirname(scraper_path)
+                if scraper_dir and os.path.isdir(scraper_dir):
+                    cwd = scraper_dir
+            
             return subprocess.run(
                 cmd,
                 capture_output=True,
                 timeout=timeout_seconds,
-                cwd=os.path.dirname(scraper_path) or None,
+                cwd=cwd,
+                env={**os.environ},
             )
 
         try:
             process = await asyncio.to_thread(run_in_thread)
-            stdout = process.stdout
-            stderr = process.stderr
+            stdout = process.stdout.decode(errors='replace') if process.stdout else ""
+            stderr = process.stderr.decode(errors='replace') if process.stderr else ""
+            
             if stdout:
-                logger.debug(f"[Scraper:{run_id}] stdout: {stdout.decode(errors='replace')[:500]}")
+                logger.info(f"[Scraper:{run_id}] stdout: {stdout[:1000]}")
             if stderr:
-                logger.warning(f"[Scraper:{run_id}] stderr: {stderr.decode(errors='replace')[:500]}")
-        except subprocess.TimeoutExpired:
+                logger.warning(f"[Scraper:{run_id}] stderr: {stderr[:1000]}")
+                
+            # Log return code
+            logger.info(f"[Scraper:{run_id}] Process returned code: {process.returncode}")
+        except subprocess.TimeoutExpired as e:
             logger.warning(f"[Scraper:{run_id}] Timeout after {timeout_seconds}s")
+            # Try to decode partial output
+            stdout = e.stdout.decode(errors='replace') if e.stdout else ""
+            stderr = e.stderr.decode(errors='replace') if e.stderr else ""
+            if stdout:
+                logger.info(f"[Scraper:{run_id}] Partial stdout: {stdout[:500]}")
+            if stderr:
+                logger.warning(f"[Scraper:{run_id}] Partial stderr: {stderr[:500]}")
 
         # Parse results (even on timeout, partial CSV may exist)
         results = _parse_csv_results(output_file, max_results)
@@ -113,15 +142,24 @@ async def run_maps_scraper(
         
         return results
 
-    except FileNotFoundError:
+    except FileNotFoundError as e:
         logger.error(f"[Scraper:{run_id}] Binary not found at: {scraper_path}")
+        logger.error(f"[Scraper:{run_id}] Absolute path would be: {Path(scraper_path).resolve()}")
+        logger.error(f"[Scraper:{run_id}] Current working directory: {os.getcwd()}")
+        logger.error(f"[Scraper:{run_id}] OS type: {os.name}")
         raise RuntimeError(f"Scraper binary not found at: {scraper_path}")
+    except PermissionError as e:
+        logger.error(f"[Scraper:{run_id}] Permission denied: {scraper_path}")
+        logger.error(f"[Scraper:{run_id}] File mode: {oct(os.stat(scraper_path).st_mode) if os.path.exists(scraper_path) else 'N/A'}")
+        raise RuntimeError(f"Scraper binary is not executable: {scraper_path}")
     except Exception as e:
-        logger.error(f"[Scraper:{run_id}] Error:{type(e).__name__} {str(e)}")
+        logger.error(f"[Scraper:{run_id}] Error: {type(e).__name__}: {str(e)}")
         # Try to return partial results if output file exists
         if os.path.exists(output_file):
             try:
-                return _parse_csv_results(output_file, max_results)
+                partial_results = _parse_csv_results(output_file, max_results)
+                logger.warning(f"[Scraper:{run_id}] Returning {len(partial_results)} partial results")
+                return partial_results
             except Exception:
                 pass
         raise e
@@ -141,6 +179,13 @@ def _parse_csv_results(output_file: str, max_results: int) -> list[dict]:
     
     if os.path.getsize(output_file) == 0:
         logger.warning(f"Output file is completely empty: {output_file}")
+        # Try to read file content to see if there's an error message
+        try:
+            with open(output_file, "r", encoding="utf-8", errors="replace") as f:
+                content = f.read()
+                logger.warning(f"Empty CSV content: '{content}'")
+        except Exception as e:
+            logger.error(f"Could not read empty CSV: {e}")
         raise RuntimeError(f"Scraper returned no data: output CSV empty.")
 
     results = []
@@ -158,6 +203,14 @@ def _parse_csv_results(output_file: str, max_results: int) -> list[dict]:
         logger.info(f"CSV Parse: {raw_count} raw rows found, {len(results)} distinct businesses returned (max {max_results})")
     except Exception as e:
         logger.error(f"Failed to parse CSV: {e}")
+        # Try to read raw content for debugging
+        try:
+            with open(output_file, "r", encoding="utf-8", errors="replace") as f:
+                preview = f.read()[:500]
+                logger.warning(f"Raw CSV preview: {preview}")
+        except Exception:
+            pass
+        raise RuntimeError(f"Failed to parse CSV output: {e}")
 
     return results
 

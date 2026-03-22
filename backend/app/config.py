@@ -45,7 +45,15 @@ class Settings(BaseSettings):
     @property
     def scraper_binary_path(self) -> Path:
         """Resolved path to the google-maps-scraper binary."""
-        return Path(self.gmaps_scraper_path).resolve()
+        path = Path(self.gmaps_scraper_path)
+        
+        # If running in production (Docker/Cloud), use absolute path
+        if self.is_production:
+            # Docker sets this to /app/google-maps-scraper/google-maps-scraper
+            if not path.is_absolute():
+                path = Path("/app") / path
+        
+        return path.resolve()
 
     @property
     def cors_origins(self) -> list[str]:

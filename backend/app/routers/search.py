@@ -326,3 +326,37 @@ async def debug_test_scraper(request: DebugSearchRequest):
         except: pass
         try: os.remove(output_path)
         except: pass
+
+
+# Production-safe scraper health check
+@router.get("/scraper-health")
+async def scraper_health_check():
+    """Check if scraper binary exists and is executable."""
+    from app.config import get_settings
+    from app.services.scraper_service import _get_scraper_path
+    import os
+    import stat
+    
+    settings = get_settings()
+    scraper_path = _get_scraper_path()
+    
+    result = {
+        "scraper_path": str(scraper_path),
+        "exists": os.path.exists(scraper_path),
+        "is_file": False,
+        "is_executable": False,
+        "environment": settings.environment,
+        "os_type": os.name,
+    }
+    
+    if os.path.exists(scraper_path):
+        result["is_file"] = os.path.isfile(scraper_path)
+        result["is_executable"] = os.access(scraper_path, os.X_OK)
+        try:
+            file_stat = os.stat(scraper_path)
+            result["file_mode"] = oct(file_stat.st_mode)
+            result["file_size_bytes"] = file_stat.st_size
+        except Exception as e:
+            result["stat_error"] = str(e)
+    
+    return result

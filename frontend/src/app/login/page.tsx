@@ -20,6 +20,21 @@ const loginSchema = z.object({
 
 type LoginSchema = z.infer<typeof loginSchema>;
 
+function mapLoginErrorMessage(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error ?? '');
+  const normalized = message.toLowerCase();
+
+  if (normalized.includes('invalid login credentials')) {
+    return 'Email/password match nahi hua. Agar account Google se bana tha to "Continue with Google" use karo. Naye deploy par ho to pehle production app me Sign up karo.';
+  }
+
+  if (normalized.includes('email not confirmed')) {
+    return 'Email verify nahi hua hai. Inbox me verification mail check karke phir login karo.';
+  }
+
+  return message || 'Failed to login';
+}
+
 export default function LoginPage() {
   const [isLoading, setIsLoading] = useState(false);
   const router = useRouter();
@@ -34,7 +49,7 @@ export default function LoginPage() {
     try {
       setIsLoading(true);
       const { error } = await supabase.auth.signInWithPassword({
-        email: data.email,
+        email: data.email.trim().toLowerCase(),
         password: data.password,
       });
 
@@ -46,7 +61,7 @@ export default function LoginPage() {
       showToast('Welcome back!', 'success');
       router.push('/dashboard');
     } catch (error: any) {
-      showToast(error.message || 'Failed to login', 'error');
+      showToast(mapLoginErrorMessage(error), 'error');
     } finally {
       setIsLoading(false);
     }

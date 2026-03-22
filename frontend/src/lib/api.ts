@@ -1,8 +1,23 @@
 import axios from 'axios';
 import { supabase } from './supabase';
 
+const envApiUrl = process.env.NEXT_PUBLIC_API_URL?.trim();
+const defaultApiUrl = 'http://localhost:8000';
+const canUseWindow = typeof window !== 'undefined';
+const shouldForceHttps =
+  canUseWindow &&
+  window.location.protocol === 'https:' &&
+  !!envApiUrl &&
+  envApiUrl.startsWith('http://') &&
+  !envApiUrl.includes('localhost') &&
+  !envApiUrl.includes('127.0.0.1');
+
+const apiBaseUrl = shouldForceHttps
+  ? envApiUrl.replace('http://', 'https://')
+  : envApiUrl || defaultApiUrl;
+
 const api = axios.create({
-  baseURL: process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000',
+  baseURL: apiBaseUrl,
   headers: { 'Content-Type': 'application/json' },
   timeout: 10000,
 });

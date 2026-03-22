@@ -5,7 +5,7 @@ import { useAuth } from '@/hooks/useAuth';
 import { supabase } from '@/lib/supabase';
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
-  const { fetchProfile, logout } = useAuth();
+  const { fetchProfile, signOut } = useAuth();
   const initref = useRef(false);
 
   useEffect(() => {
@@ -21,7 +21,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         if (event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED') {
           await fetchProfile();
         } else if (event === 'SIGNED_OUT') {
-          logout();
+          signOut();
           window.location.href = '/login';
         }
       }
@@ -30,7 +30,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     return () => {
       subscription.unsubscribe();
     };
-  }, [fetchProfile, logout]);
+  }, [fetchProfile, signOut]);
 
   return <>{children}</>;
 }

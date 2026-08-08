@@ -1,0 +1,30 @@
+/* Hyperclients — Brand Tokens
+   Drop into your global stylesheet. Load Montserrat (400,500,700,800) from Google Fonts. */
+@import url('https://fonts.googleapis.com/css2?family=Montserrat:wght@400;500;700;800&display=swap');
+
+:root {
+  /* Core palette */
+  --hc-indigo:  #2A35E0;  /* primary — brand, links, key UI */
+  --hc-cyan:    #13E0C2;  /* accent — the focus dot, highlights, success */
+  --hc-ink:     #0C1024;  /* near-black — dark surfaces, headings on light */
+  --hc-paper:   #FFFFFF;  /* light surface */
+
+  /* Supporting tints (derive from core — do not introduce new hues) */
+  --hc-indigo-700: #1E27B8;
+  --hc-indigo-050: #EEF0FE;
+  --hc-text:       #14182E;  /* body text on light */
+  --hc-text-muted: #6B6E86;
+
+  /* Type */
+  --hc-font: 'Montserrat', 'Helvetica Neue', Arial, sans-serif;
+  --hc-wordmark-tracking: -0.03em;
+
+  /* Radii */
+  --hc-radius-app-icon: 21.875%; /* iOS squircle ratio used in app icon */
+}
+
+/* Wordmark recipe — if you typeset the logo in HTML rather than using the SVG */
+.hc-wordmark { font-family: var(--hc-font); letter-spacing: var(--hc-wordmark-tracking); }
+.hc-wordmark .hyper   { font-weight: 800; color: var(--hc-indigo); }
+.hc-wordmark .clients { font-weight: 500; color: var(--hc-text); }
+/* On dark backgrounds: .hyper -> #FFFFFF, .clients -> var(--hc-cyan) */

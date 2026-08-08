@@ -1,0 +1,49 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+
+# Node
+node_modules/
+.next/
+*.tsbuildinfo
+next-env.d.ts
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Project specific
+backend/supabase/
+backend/scripts/
+backend/tools/
+backend/google-maps-scraper/google-maps-scraper.exe
+backend/google-maps-scraper/env/
+backend/Scrapling/Website-analysis/
+
+# Docker
+deploy/nginx/hyperclients.conf
+
+# Old standalone LinkedIn scraper
+Linkdin_Scraper/
+
+# Cloned MCP server repo (not part of project)
+linkedin-mcp-server/
+
+# KeeLead source (code copied to frontend)
+/keelead
+

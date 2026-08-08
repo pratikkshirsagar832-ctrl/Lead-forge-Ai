@@ -8,7 +8,10 @@ function getOrCreateClient(): SupabaseClient {
     const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY?.trim();
 
     if (!supabaseUrl || !supabaseAnonKey) {
-      throw new Error('Missing Supabase environment variables');
+      console.error(
+        '[supabase] Not configured: set NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_ANON_KEY. Auth features will fail.'
+      );
+      return createUnconfiguredClient();
     }
 
     _supabase = createClient(supabaseUrl, supabaseAnonKey, {
@@ -20,6 +23,23 @@ function getOrCreateClient(): SupabaseClient {
     });
   }
   return _supabase;
+}
+
+function createUnconfiguredClient(): SupabaseClient {
+  const notConfigured = new Error(
+    'Supabase is not configured. Set NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_ANON_KEY environment variables.'
+  );
+  const method = () => Promise.reject(notConfigured);
+  const namespace = () =>
+    new Proxy({} as Record<string, unknown>, {
+      get: (_t, key) =>
+        key === 'onAuthStateChange'
+          ? () => ({ data: { subscription: { unsubscribe() {} } } })
+          : method,
+    });
+  return new Proxy({} as SupabaseClient, {
+    get: () => namespace(),
+  });
 }
 
 export const supabase = new Proxy<SupabaseClient>({} as SupabaseClient, {

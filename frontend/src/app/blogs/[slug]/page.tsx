@@ -1,0 +1,182 @@
+import type { Metadata } from 'next';
+import Link from 'next/link';
+import { notFound } from 'next/navigation';
+import { CalendarDays, Clock, ArrowRight } from 'lucide-react';
+import { getBlog } from '../../../../lib/blog-store';
+import { renderMarkdown } from '../../../components/blog-markdown';
+
+export const dynamic = 'force-dynamic';
+
+interface PageProps {
+  params: { slug: string };
+}
+
+export async function generateMetadata({ params }: PageProps): Promise<Metadata> {
+  const post = getBlog(params.slug);
+  if (!post) return {};
+  const url = `https://hyperclients.online/blogs/${post.slug}`;
+  return {
+    title: post.metaTitle || post.title,
+    description: post.metaDescription || post.excerpt,
+    keywords: post.keywords,
+    alternates: { canonical: url },
+    openGraph: {
+      title: post.metaTitle || post.title,
+      description: post.metaDescription || post.excerpt,
+      url,
+      type: 'article',
+      publishedTime: `${post.date}T10:00:00.000Z`,
+      authors: [post.author],
+      siteName: 'Hyperclients',
+    },
+    robots: { index: true, follow: true },
+  };
+}
+
+export default function BlogPostPage({ params }: PageProps) {
+  const post = getBlog(params.slug);
+  if (!post) notFound();
+
+  const jsonLd = {
+    '@context': 'https://schema.org',
+    '@graph': [
+      {
+        '@type': 'BlogPosting',
+        headline: post.title,
+        description: post.metaDescription || post.excerpt,
+        datePublished: `${post.date}T10:00:00.000Z`,
+        dateModified: `${post.date}T10:00:00.000Z`,
+        author: { '@type': 'Person', name: post.author },
+        publisher: { '@type': 'Organization', name: 'Hyperclients', url: 'https://hyperclients.online' },
+        mainEntityOfPage: `https://hyperclients.online/blogs/${post.slug}`,
+        keywords: post.keywords?.join(', ') || post.category,
+      },
+      ...(post.faqs?.length
+        ? [
+            {
+              '@type': 'FAQPage',
+              mainEntity: post.faqs.map((f) => ({
+                '@type': 'Question',
+                name: f.q,
+                acceptedAnswer: { '@type': 'Answer', text: f.a },
+              })),
+            },
+          ]
+        : []),
+    ],
+  };
+
+  const displayDate = new Date(post.date).toLocaleDateString('en-IN', {
+    day: 'numeric',
+    month: 'long',
+    year: 'numeric',
+  });
+  const readMinutes = Math.max(1, Math.round(post.content.split(' ').length / 200));
+
+  return (
+    <div className="min-h-screen bg-navy text-ice font-sans">
+      <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: JSON.stringify(jsonLd) }} />
+
+      <div className="container mx-auto px-6 pt-28 pb-20 max-w-3xl">
+        <nav className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-text-muted mb-6">
+          <Link href="/" className="hover:text-cyan-300 transition-colors">Home</Link>
+          <span>/</span>
+          <Link href="/blogs" className="hover:text-cyan-300 transition-colors">Blog</Link>
+          <span>/</span>
+          <span className="text-cyan-300 truncate max-w-[40ch]">{post.title}</span>
+        </nav>
+
+        <div className="flex flex-wrap items-center gap-3 text-xs font-semibold uppercase tracking-wide text-text-muted mb-4">
+          <span className="px-2.5 py-1 rounded-full bg-primary/15 text-primary-light border border-primary/20">
+            {post.category}
+          </span>
+          <span className="flex items-center gap-1.5">
+            <CalendarDays className="w-3.5 h-3.5" />
+            {displayDate}
+          </span>
+          <span className="flex items-center gap-1.5">
+            <Clock className="w-3.5 h-3.5" />
+            {readMinutes} min read
+          </span>
+        </div>
+
+        <h1 className="text-3xl md:text-5xl font-bold text-offwhite font-heading leading-tight mb-8">
+          {post.title.split(/\s*\(\s*/)[0]}
+          {post.title.includes('(') && (
+            <>
+              {' '}
+              <span className="gradient-text-premium">({post.title.split('(').slice(1).join('(')}</span>
+            </>
+          )}
+        </h1>
+
+        <article className="text-[17px]">{renderMarkdown(post.content)}</article>
+
+        <div className="glass-card gradient-border rounded-2xl p-6 md:p-8 mt-10">
+          <h2 className="text-2xl font-bold text-offwhite font-heading mb-3">
+            Ready to Build a Predictable Pipeline?
+          </h2>
+          <p className="text-text-secondary leading-relaxed mb-6">
+            Hyperclients turns these signals into a ranked list of ready-to-buy leads - traffic drops,
+            competitor gaps, ad dependence, expansion triggers, and intent searches, all in one dashboard.
+          </p>
+          <div className="flex flex-wrap gap-3">
+            <Link
+              href="/login"
+              className="btn-gradient-cyan rounded-xl px-6 py-3 text-sm inline-flex items-center gap-2"
+            >
+              Try It Free <ArrowRight className="w-4 h-4" />
+            </Link>
+            <Link href="/pricing" className="btn-glass rounded-xl px-6 py-3 text-sm">
+              See Pricing
+            </Link>
+          </div>
+        </div>
+
+        {post.faqs && post.faqs.length > 0 && (
+          <section className="mt-12">
+            <h2 className="text-2xl md:text-3xl font-bold text-offwhite font-heading mb-4">
+              Frequently Asked Questions
+            </h2>
+            <div className="space-y-3">
+              {post.faqs.map((faq, i) => (
+                <details
+                  key={i}
+                  className="group glass-card rounded-xl overflow-hidden open:border-cyan-300/30"
+                >
+                  <summary className="list-none flex items-center justify-between gap-4 cursor-pointer px-5 py-4 font-semibold text-offwhite hover:text-cyan-200 transition-colors select-none">
+                    {faq.q}
+                    <span className="text-cyan-300 text-xl leading-none transition-transform duration-300 group-open:rotate-45">
+                      +
+                    </span>
+                  </summary>
+                  <p className="px-5 pb-5 text-text-secondary leading-relaxed text-sm">{faq.a}</p>
+                </details>
+              ))}
+            </div>
+          </section>
+        )}
+
+        <aside className="mt-12 glass-card rounded-2xl p-6 md:p-8 border-t-2 border-t-cyan-300/40">
+          <p className="text-xs font-bold uppercase tracking-widest text-cyan-300 mb-3">About the Author</p>
+          <div className="flex items-start gap-4">
+            <div className="w-12 h-12 shrink-0 rounded-full bg-gradient-to-br from-primary to-cyan-300 flex items-center justify-center text-offwhite font-heading font-bold text-lg">
+              {post.author
+                .split(' ')
+                .map((w) => w[0])
+                .join('')
+                .slice(0, 2)
+                .toUpperCase()}
+            </div>
+            <div>
+              <h3 className="font-heading font-bold text-offwhite">{post.author}</h3>
+              {post.authorBio && (
+                <p className="text-text-secondary leading-relaxed text-sm mt-1">{post.authorBio}</p>
+              )}
+            </div>
+          </div>
+        </aside>
+      </div>
+    </div>
+  );
+}

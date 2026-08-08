@@ -14,10 +14,11 @@ const nextConfig = {
   },
   async rewrites() {
     // Proxy FastAPI endpoints (/api/searches, /api/leads, /api/auth, ...) to the
-    // Python backend. Local Next.js API routes under /api/hyper-agent are kept.
+    // Python backend. Local Next.js API routes under /api/hyper-agent and the
+    // admin blog API (/api/admin/...) are kept.
     return [
       {
-        source: '/api/:path((?!hyper-agent/).*)',
+        source: '/api/:path((?!hyper-agent/|admin/).*)',
         destination: `${apiUrl}/api/:path`,
       },
     ];

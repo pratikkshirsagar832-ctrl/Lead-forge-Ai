@@ -4,6 +4,7 @@ import { notFound } from 'next/navigation';
 import { CalendarDays, Clock, ArrowRight } from 'lucide-react';
 import { getBlog } from '../../../../lib/blog-store';
 import { renderMarkdown } from '../../../components/blog-markdown';
+import { BlogBackground } from '../../../components/blog-background';
 
 export const dynamic = 'force-dynamic';
 
@@ -74,10 +75,11 @@ export default function BlogPostPage({ params }: PageProps) {
   const readMinutes = Math.max(1, Math.round(post.content.split(' ').length / 200));
 
   return (
-    <div className="min-h-screen bg-navy text-ice font-sans">
+    <div className="relative min-h-screen bg-navy text-ice font-sans overflow-hidden">
       <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: JSON.stringify(jsonLd) }} />
+      <BlogBackground />
 
-      <div className="container mx-auto px-6 pt-28 pb-20 max-w-3xl">
+      <div className="container relative z-10 mx-auto px-6 pt-28 pb-20 max-w-3xl">
         <nav className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-text-muted mb-6">
           <Link href="/" className="hover:text-cyan-300 transition-colors">Home</Link>
           <span>/</span>
@@ -116,7 +118,7 @@ export default function BlogPostPage({ params }: PageProps) {
           <h2 className="text-2xl font-bold text-offwhite font-heading mb-3">
             Ready to Build a Predictable Pipeline?
           </h2>
-          <p className="text-text-secondary leading-relaxed mb-6">
+          <p className="text-ice/85 leading-relaxed mb-6">
             Hyperclients turns these signals into a ranked list of ready-to-buy leads - traffic drops,
             competitor gaps, ad dependence, expansion triggers, and intent searches, all in one dashboard.
           </p>
@@ -150,7 +152,7 @@ export default function BlogPostPage({ params }: PageProps) {
                       +
                     </span>
                   </summary>
-                  <p className="px-5 pb-5 text-text-secondary leading-relaxed text-sm">{faq.a}</p>
+                  <p className="px-5 pb-5 text-ice/85 leading-relaxed text-sm">{faq.a}</p>
                 </details>
               ))}
             </div>
@@ -171,7 +173,7 @@ export default function BlogPostPage({ params }: PageProps) {
             <div>
               <h3 className="font-heading font-bold text-offwhite">{post.author}</h3>
               {post.authorBio && (
-                <p className="text-text-secondary leading-relaxed text-sm mt-1">{post.authorBio}</p>
+                <p className="text-ice/80 leading-relaxed text-sm mt-1">{post.authorBio}</p>
               )}
             </div>
           </div>

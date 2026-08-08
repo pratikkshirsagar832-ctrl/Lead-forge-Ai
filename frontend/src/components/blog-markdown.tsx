@@ -22,7 +22,7 @@ export function renderMarkdown(content: string): ReactNode[] {
   const flushList = () => {
     if (list.length) {
       nodes.push(
-        <ul key={key++} className="list-disc pl-6 space-y-2 text-text-secondary leading-relaxed">
+        <ul key={key++} className="list-disc pl-6 space-y-2 text-ice/90 leading-relaxed">
           {list.map((item, i) => (
             <li key={i}>{renderInline(item)}</li>
           ))}
@@ -57,7 +57,7 @@ export function renderMarkdown(content: string): ReactNode[] {
       nodes.push(
         <blockquote
           key={key++}
-          className="glass-card rounded-xl border-l-2 border-l-cyan-300 p-5 my-6 text-text-secondary leading-relaxed"
+          className="glass-card rounded-xl border-l-2 border-l-cyan-300 p-5 my-6 text-ice/90 leading-relaxed"
         >
           {renderInline(line.slice(2))}
         </blockquote>
@@ -67,7 +67,7 @@ export function renderMarkdown(content: string): ReactNode[] {
     } else {
       flushList();
       nodes.push(
-        <p key={key++} className="text-text-secondary leading-relaxed my-4">
+        <p key={key++} className="text-ice/90 leading-relaxed my-4">
           {renderInline(line)}
         </p>
       );

@@ -45,7 +45,7 @@ function createUnconfiguredClient(): SupabaseClient {
       get: (_t, key) =>
         key === 'onAuthStateChange'
           ? () => ({ data: { subscription: { unsubscribe() {} } }, error: null })
-          : (methods[key] ?? (async () => ({ data: null, error: notConfigured() }))),
+          : (methods[key as string] ?? (async () => ({ data: null, error: notConfigured() }))),
     });
   return new Proxy({} as SupabaseClient, {
     get: () => namespace(),

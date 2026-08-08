@@ -52,6 +52,16 @@ RUN pip install patchright --upgrade 2>&1 && \
 COPY --from=go-builder /google-maps-scraper /app/google-maps-scraper/google-maps-scraper
 RUN chmod +x /app/google-maps-scraper/google-maps-scraper
 
+# Vendor the Playwright driver for google-maps-scraper (pins playwright-go -> driver 1.52.0).
+# MS CDN purged all playwright-*-linux.zip builds, but the driver is just the
+# playwright-core npm tarball. Place it where playwright-go expects it and use
+# the system node binary. Browsers (chromium build 1169) are still on the CDN.
+RUN apt-get update && apt-get install -y --no-install-recommends nodejs && rm -rf /var/lib/apt/lists/* && \
+    mkdir -p /opt/ms-playwright/1.52.0 && cd /opt/ms-playwright/1.52.0 && \
+    curl -fsSL https://registry.npmjs.org/playwright-core/-/playwright-core-1.52.0.tgz -o driver.tgz && \
+    tar -xzf driver.tgz && rm -f driver.tgz && \
+    test -f package/cli.js && echo "DRIVER_OK"
+
 # Create sessions directory for LinkedIn cookies
 RUN mkdir -p /app/sessions
 
@@ -60,6 +70,8 @@ COPY app/ /app/app/
 
 # Set environment defaults
 ENV GMAPS_SCRAPER_PATH=/app/google-maps-scraper/google-maps-scraper
+ENV PLAYWRIGHT_DRIVER_PATH=/opt/ms-playwright/1.52.0
+ENV PLAYWRIGHT_NODEJS_PATH=/usr/bin/node
 ENV ENVIRONMENT=production
 ENV PORT=8000
 

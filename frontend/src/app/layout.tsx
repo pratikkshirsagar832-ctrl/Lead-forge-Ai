@@ -33,20 +33,25 @@ export default function RootLayout({
     <html lang="en" data-scroll-behavior="smooth" suppressHydrationWarning>
       <body className={`${montserrat.className} ${spaceGrotesk.variable} min-h-screen bg-navy text-ice antialiased selection:bg-violet/30 selection:text-offwhite`}>
           <Script src="https://checkout.razorpay.com/v1/checkout.js" strategy="lazyOnload" />
-          <script type="text/javascript">
-            {`(function(c,l,a,r,i,t,y){
-              c[a]=c[a]||function(){(c[a].q=c[a].q||[]).push(arguments)};
-              t=l.createElement(r);t.async=1;t.src="https://www.clarity.ms/tag/"+i;
-              y=l.getElementsByTagName(r)[0];y.parentNode.insertBefore(t,y);
-            })(window, document, "clarity", "script", "xdko5ui3zm");`}
-          </script>
+          <script
+            type="text/javascript"
+            dangerouslySetInnerHTML={{
+              __html: `(function(c,l,a,r,i,t,y){
+                c[a]=c[a]||function(){(c[a].q=c[a].q||[]).push(arguments)};
+                t=l.createElement(r);t.async=1;t.src="https://www.clarity.ms/tag/"+i;
+                y=l.getElementsByTagName(r)[0];y.parentNode.insertBefore(t,y);
+              })(window, document, "clarity", "script", "xdko5ui3zm");`,
+            }}
+          />
           <script async src="https://www.googletagmanager.com/gtag/js?id=G-RVV56NV108"></script>
-          <script>
-            {`window.dataLayer = window.dataLayer || [];
-            function gtag(){dataLayer.push(arguments);}
-            gtag('js', new Date());
-            gtag('config', 'G-RVV56NV108');`}
-          </script>
+          <script
+            dangerouslySetInnerHTML={{
+              __html: `window.dataLayer = window.dataLayer || [];
+              function gtag(){dataLayer.push(arguments);}
+              gtag('js', new Date());
+              gtag('config', 'G-RVV56NV108');`,
+            }}
+          />
         <ThemeProvider
           attribute="class"
           defaultTheme="system"

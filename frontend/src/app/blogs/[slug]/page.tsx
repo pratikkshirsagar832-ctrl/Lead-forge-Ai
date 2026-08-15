@@ -5,6 +5,7 @@ import { CalendarDays, Clock, ArrowRight } from 'lucide-react';
 import { getBlog } from '../../../../lib/blog-store';
 import { renderMarkdown } from '../../../components/blog-markdown';
 import { BlogBackground } from '../../../components/blog-background';
+import { BlogImage } from '../../../components/blog-image';
 
 export const dynamic = 'force-dynamic';
 
@@ -29,6 +30,7 @@ export async function generateMetadata({ params }: PageProps): Promise<Metadata>
       publishedTime: `${post.date}T10:00:00.000Z`,
       authors: [post.author],
       siteName: 'Hyperclients',
+      ...(post.coverImage ? { images: [{ url: post.coverImage, alt: post.title }] } : {}),
     },
     robots: { index: true, follow: true },
   };
@@ -111,6 +113,16 @@ export default function BlogPostPage({ params }: PageProps) {
             </>
           )}
         </h1>
+
+        {post.coverImage && (
+          <BlogImage
+            src={post.coverImage}
+            alt={post.title}
+            wrapperClassName="relative rounded-2xl overflow-hidden mb-8 border border-steel/20 shadow-2xl shadow-black/40"
+            imgClassName="w-full aspect-[21/9] object-cover"
+            overlayClassName="absolute inset-0 bg-gradient-to-t from-[#0C1024]/60 via-transparent to-transparent"
+          />
+        )}
 
         <article className="text-[17px]">{renderMarkdown(post.content)}</article>
 

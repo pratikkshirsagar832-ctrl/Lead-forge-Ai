@@ -1,0 +1,68 @@
+<svg width="1200" height="630" viewBox="0 0 1200 630" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <radialGradient id="glow1" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(180 80) rotate(0) scale(420 420)">
+      <stop stop-color="#2A35E0" stop-opacity="0.5"/>
+      <stop offset="1" stop-color="#2A35E0" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="glow2" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(1050 560) rotate(0) scale(480 480)">
+      <stop stop-color="#13E0C2" stop-opacity="0.4"/>
+      <stop offset="1" stop-color="#13E0C2" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="bar" x1="0" y1="0" x2="1" y2="0">
+      <stop stop-color="#13E0C2"/>
+      <stop offset="1" stop-color="#2A35E0"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="1200" height="630" fill="#0C1024"/>
+  <rect width="1200" height="630" fill="url(#glow1)"/>
+  <rect width="1200" height="630" fill="url(#glow2)"/>
+
+  <g stroke="#3B82C4" stroke-opacity="0.07" stroke-width="1">
+    <line x1="0" y1="105" x2="1200" y2="105"/>
+    <line x1="0" y1="210" x2="1200" y2="210"/>
+    <line x1="0" y1="315" x2="1200" y2="315"/>
+    <line x1="0" y1="420" x2="1200" y2="420"/>
+    <line x1="0" y1="525" x2="1200" y2="525"/>
+    <line x1="200" y1="0" x2="200" y2="630"/>
+    <line x1="400" y1="0" x2="400" y2="630"/>
+    <line x1="600" y1="0" x2="600" y2="630"/>
+    <line x1="800" y1="0" x2="800" y2="630"/>
+    <line x1="1000" y1="0" x2="1000" y2="630"/>
+  </g>
+
+  <rect x="88" y="80" width="72" height="72" rx="16" fill="url(#bar)" opacity="0.15"/>
+  <g transform="translate(92 84) scale(1.125)">
+    <path d="M14 23 L14 14 L23 14" stroke="#2A35E0" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M41 14 L50 14 L50 23" stroke="#2A35E0" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M50 41 L50 50 L41 50" stroke="#2A35E0" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M23 50 L14 50 L14 41" stroke="#2A35E0" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
+    <circle cx="32" cy="32" r="7" fill="#13E0C2"/>
+  </g>
+  <text x="176" y="112" fill="#F1F5F9" font-family="Arial, sans-serif" font-size="30" font-weight="800" letter-spacing="-0.5">Hyperclients</text>
+  <text x="178" y="138" fill="#94A3B8" font-family="Arial, sans-serif" font-size="16" letter-spacing="2">LEAD GENERATION PLAYBOOK</text>
+
+  <rect x="88" y="192" width="7" height="330" rx="3.5" fill="url(#bar)"/>
+
+  <text x="120" y="236" fill="#13E0C2" font-family="Arial, sans-serif" font-size="22" font-weight="700" letter-spacing="4">BLOG · LEAD SCORING</text>
+  <text x="118" y="304" fill="#F1F5F9" font-family="Arial, sans-serif" font-size="64" font-weight="800" letter-spacing="-1.5">5 Signs a Local Business</text>
+  <text x="118" y="384" fill="url(#bar)" font-family="Arial, sans-serif" font-size="64" font-weight="800" letter-spacing="-1.5">Is Ready to Buy SEO</text>
+
+  <rect x="120" y="428" width="560" height="4" rx="2" fill="url(#bar)" opacity="0.6"/>
+
+  <text x="122" y="472" fill="#E2E8F0" font-family="Arial, sans-serif" font-size="26" font-weight="400" opacity="0.85">Not just businesses with problems —</text>
+  <text x="122" y="510" fill="#E2E8F0" font-family="Arial, sans-serif" font-size="26" font-weight="400" opacity="0.85">businesses ready to buy. Spot the difference.</text>
+
+  <g transform="translate(860 200)">
+    <rect width="260" height="260" rx="32" fill="#14182E" opacity="0.6" stroke="#2A35E0" stroke-opacity="0.25"/>
+    <g transform="translate(66 66) scale(2)">
+      <path d="M14 23 L14 14 L23 14" stroke="#2A35E0" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
+      <path d="M41 14 L50 14 L50 23" stroke="#2A35E0" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
+      <path d="M50 41 L50 50 L41 50" stroke="#2A35E0" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
+      <path d="M23 50 L14 50 L14 41" stroke="#2A35E0" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
+      <circle cx="32" cy="32" r="7" fill="#13E0C2"/>
+    </g>
+  </g>
+
+  <text x="860" y="520" fill="#64748B" font-family="Arial, sans-serif" font-size="16" letter-spacing="1">hyperclients.online</text>
+</svg>

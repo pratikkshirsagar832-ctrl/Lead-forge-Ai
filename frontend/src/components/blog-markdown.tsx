@@ -38,6 +38,28 @@ export function renderMarkdown(content: string): ReactNode[] {
       flushList();
       continue;
     }
+    const imgMatch = line.trim().match(/^!\[([^\]]*)\]\(([^)\s]+)(?:\s+"([^"]*)")?\)$/);
+    if (imgMatch) {
+      flushList();
+      nodes.push(
+        <figure key={key++} className="my-6">
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            src={imgMatch[2]}
+            alt={imgMatch[1] || ''}
+            title={imgMatch[3]}
+            className="w-full rounded-xl border border-steel/15 shadow-2xl shadow-black/30"
+            loading="lazy"
+          />
+          {imgMatch[1] && (
+            <figcaption className="text-center text-xs text-text-muted mt-2 italic">
+              {imgMatch[1]}
+            </figcaption>
+          )}
+        </figure>
+      );
+      continue;
+    }
     if (line.startsWith('### ')) {
       flushList();
       nodes.push(

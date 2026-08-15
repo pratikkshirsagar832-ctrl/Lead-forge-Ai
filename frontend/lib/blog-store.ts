@@ -15,6 +15,7 @@ export interface BlogPost {
   category: string;
   date: string;
   content: string;
+  coverImage?: string;
   faqs?: BlogFaq[];
   metaTitle?: string;
   metaDescription?: string;
@@ -90,6 +91,7 @@ export function createBlog(input: Partial<BlogPost>): { post?: BlogPost; error?:
     category: input.category || 'General',
     date: input.date || new Date().toISOString().slice(0, 10),
     content: input.content,
+    coverImage: input.coverImage?.trim() || undefined,
     faqs: input.faqs || [],
     metaTitle: input.metaTitle,
     metaDescription: input.metaDescription,

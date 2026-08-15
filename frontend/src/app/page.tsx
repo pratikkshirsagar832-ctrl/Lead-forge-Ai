@@ -32,18 +32,24 @@ export default function LandingPage() {
           </Link>
 
           <nav className="hidden md:flex items-center gap-8 text-sm font-medium text-ice/60">
-            {['Features', 'How it Works', 'Pricing'].map((item, i) => (
+            {[
+              { label: 'Features', href: '#features' },
+              { label: 'How it Works', href: '#how-it-works' },
+              { label: 'SEO Checker', href: '/tools/seo-score-checker' },
+              { label: 'Pricing', href: '/pricing' },
+              { label: 'Blog', href: '/blogs' },
+            ].map((item, i) => (
               <motion.div
-                key={item}
+                key={item.label}
                 initial={{ opacity: 0, y: -8 }}
                 animate={{ opacity: 1, y: 0 }}
                 transition={{ delay: 0.1 + i * 0.05, duration: 0.4 }}
               >
                 <Link
-                  href={item === 'Pricing' ? '/pricing' : `#${item.toLowerCase().replace(/\s/g, '-')}`}
+                  href={item.href}
                   className="hover:text-offwhite transition-all duration-200 relative group"
                 >
-                  {item}
+                  {item.label}
                   <span className="absolute -bottom-1 left-0 right-0 h-px bg-steel/60 scale-x-0 group-hover:scale-x-100 transition-transform duration-300" />
                 </Link>
               </motion.div>

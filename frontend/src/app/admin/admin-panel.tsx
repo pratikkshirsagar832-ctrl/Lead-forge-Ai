@@ -17,6 +17,7 @@ interface BlogPost {
   category: string;
   date: string;
   content: string;
+  coverImage?: string;
   faqs?: BlogFaq[];
   metaTitle?: string;
   metaDescription?: string;
@@ -32,6 +33,7 @@ const emptyForm = {
   excerpt: '',
   date: new Date().toISOString().slice(0, 10),
   content: '',
+  coverImage: '',
   faqs: '',
   metaTitle: '',
   metaDescription: '',
@@ -81,6 +83,7 @@ export default function AdminPanel() {
       category: form.category.trim() || 'General',
       date: form.date,
       content: form.content,
+      coverImage: form.coverImage.trim() || undefined,
       faqs: form.faqs
         .split('\n')
         .map((line) => line.trim())
@@ -137,6 +140,7 @@ export default function AdminPanel() {
       excerpt: blog.excerpt,
       date: blog.date,
       content: blog.content,
+      coverImage: blog.coverImage || '',
       faqs: (blog.faqs || []).map((f) => `${f.q} | ${f.a}`).join('\n'),
       metaTitle: blog.metaTitle || '',
       metaDescription: blog.metaDescription || '',
@@ -273,6 +277,26 @@ export default function AdminPanel() {
                   onChange={(e) => setField('excerpt', e.target.value)}
                   placeholder="Short summary shown on the blog index..."
                 />
+              </div>
+              <div className="md:col-span-2">
+                <label className={labelCls}>Cover Image URL</label>
+                <input
+                  className={inputCls}
+                  value={form.coverImage}
+                  onChange={(e) => setField('coverImage', e.target.value)}
+                  placeholder="https://example.com/cover.jpg (shown on /blogs and at the top of the article)"
+                />
+                {form.coverImage && (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img
+                    src={form.coverImage}
+                    alt="Cover preview"
+                    className="mt-3 w-full max-h-52 object-cover rounded-xl border border-primary/20"
+                    onError={(e) => {
+                      (e.target as HTMLImageElement).style.display = 'none';
+                    }}
+                  />
+                )}
               </div>
               <div className="md:col-span-2">
                 <label className={labelCls}>Content (markdown-lite) *</label>

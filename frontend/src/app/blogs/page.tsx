@@ -65,18 +65,6 @@ export default function BlogsIndexPage() {
                     {post.title}
                   </h2>
                   <p className="text-ice/85 leading-relaxed">{post.excerpt}</p>
-                  {post.keywords && post.keywords.length > 0 && (
-                    <div className="mt-3 flex flex-wrap gap-2">
-                      {post.keywords.slice(0, 3).map((k) => (
-                        <span
-                          key={k}
-                          className="px-2.5 py-0.5 rounded-full bg-white/[0.04] border border-steel/25 text-[11px] text-ice/70"
-                        >
-                          {k}
-                        </span>
-                      ))}
-                    </div>
-                  )}
                   <div className="mt-4 inline-flex items-center gap-1.5 text-sm font-semibold text-cyan-200 group-hover:gap-3 transition-all">
                     Read article <ArrowRight className="w-4 h-4" />
                   </div>

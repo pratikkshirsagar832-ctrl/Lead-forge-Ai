@@ -121,19 +121,6 @@ export default function BlogPostPage({ params }: PageProps) {
           </span>
         </div>
 
-        {post.keywords && post.keywords.length > 0 && (
-          <div className="flex flex-wrap gap-2 mb-6">
-            {post.keywords.map((k) => (
-              <span
-                key={k}
-                className="px-2.5 py-1 rounded-full bg-white/[0.04] border border-steel/25 text-[11px] font-medium text-ice/70 hover:border-cyan-300/30 hover:text-cyan-200 transition-colors"
-              >
-                {k}
-              </span>
-            ))}
-          </div>
-        )}
-
         <h1 className="text-3xl md:text-5xl font-bold text-offwhite font-heading leading-tight mb-8">
           {post.title.split(/\s*\(\s*/)[0]}
           {post.title.includes('(') && (

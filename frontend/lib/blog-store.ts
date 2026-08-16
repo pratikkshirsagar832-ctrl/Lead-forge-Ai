@@ -77,6 +77,51 @@ export function slugify(title: string): string {
     .replace(/^-+|-+$/g, '');
 }
 
+function normalizeKeywords(input: unknown): string[] {
+  if (Array.isArray(input)) {
+    return input.map((k) => String(k).trim()).filter(Boolean);
+  }
+  if (typeof input === 'string') {
+    return input
+      .split(',')
+      .map((k) => k.trim())
+      .filter(Boolean);
+  }
+  return [];
+}
+
+function normalizeFaqs(input: unknown): { q: string; a: string }[] {
+  if (Array.isArray(input)) {
+    return input
+      .filter((f) => f && typeof f === 'object' && (f as { q?: string }).q)
+      .map((f) => ({
+        q: String((f as { q: string }).q).trim(),
+        a: String((f as { a?: string }).a || '').trim(),
+      }))
+      .filter((f) => f.q && f.a);
+  }
+  if (typeof input === 'string') {
+    return input
+      .split('\n')
+      .map((line) => {
+        const sep = line.indexOf('|');
+        return sep > -1
+          ? { q: line.slice(0, sep).trim(), a: line.slice(sep + 1).trim() }
+          : { q: line.trim(), a: '' };
+      })
+      .filter((f) => f.q && f.a);
+  }
+  return [];
+}
+
+function cleanExcerpt(text: string): string {
+  return text
+    .replace(/^[#>\-*\s]+/gm, '')
+    .replace(/#/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
 export function createBlog(input: Partial<BlogPost>): { post?: BlogPost; error?: string } {
   if (!input.title || !input.title.trim()) return { error: 'Title is required' };
   if (!input.content || !input.content.trim()) return { error: 'Content is required' };
@@ -88,15 +133,15 @@ export function createBlog(input: Partial<BlogPost>): { post?: BlogPost; error?:
     id: crypto.randomUUID(),
     slug,
     title: input.title.trim(),
-    excerpt: (input.excerpt || input.content.trim().slice(0, 160)).trim(),
+    excerpt: (input.excerpt || cleanExcerpt(input.content)).trim(),
     category: input.category || 'General',
     date: input.date || new Date().toISOString().slice(0, 10),
     content: input.content,
     coverImage: input.coverImage?.trim() || undefined,
-    faqs: input.faqs || [],
+    faqs: normalizeFaqs(input.faqs),
     metaTitle: input.metaTitle,
     metaDescription: input.metaDescription,
-    keywords: input.keywords || [],
+    keywords: normalizeKeywords(input.keywords),
     author: input.author || 'Hyperclients Team',
     authorBio: input.authorBio || '',
     createdAt: new Date().toISOString(),
@@ -116,6 +161,9 @@ export function updateBlog(slug: string, input: Partial<BlogPost>): { post?: Blo
     slug,
     id: posts[idx].id,
     createdAt: posts[idx].createdAt,
+    excerpt: (input.excerpt || posts[idx].excerpt).trim(),
+    faqs: normalizeFaqs(input.faqs ?? posts[idx].faqs),
+    keywords: normalizeKeywords(input.keywords ?? posts[idx].keywords),
   };
   posts[idx] = updated;
   writeAll(posts);

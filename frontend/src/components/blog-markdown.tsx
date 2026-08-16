@@ -52,6 +52,10 @@ function renderInline(text: string): ReactNode[] {
   });
 }
 
+function cleanHeading(text: string) {
+  return renderInline(text.replace(/#/g, '').trim());
+}
+
 export function renderMarkdown(content: string): ReactNode[] {
   const lines = content.split('\n');
   const nodes: ReactNode[] = [];
@@ -103,42 +107,42 @@ export function renderMarkdown(content: string): ReactNode[] {
       flushList();
       nodes.push(
         <h6 key={key++} className="text-sm font-bold text-text-muted font-heading mt-5 mb-2 uppercase tracking-wide">
-          {renderInline(line.slice(7))}
+          {cleanHeading(line.slice(7))}
         </h6>
       );
     } else if (line.startsWith('##### ')) {
       flushList();
       nodes.push(
         <h5 key={key++} className="text-base font-bold text-offwhite font-heading mt-5 mb-2">
-          {renderInline(line.slice(6))}
+          {cleanHeading(line.slice(6))}
         </h5>
       );
     } else if (line.startsWith('#### ')) {
       flushList();
       nodes.push(
-        <h4 key={key++} className="text-lg font-bold text-offwhite font-heading mt-6 mb-2">
-          {renderInline(line.slice(5))}
+        <h4 key={key++} className="text-lg font-semibold text-offwhite font-heading mt-6 mb-2">
+          {cleanHeading(line.slice(5))}
         </h4>
       );
     } else if (line.startsWith('### ')) {
       flushList();
       nodes.push(
-        <h3 key={key++} className="text-xl font-bold text-offwhite font-heading mt-6 mb-2">
-          {renderInline(line.slice(4))}
+        <h3 key={key++} className="text-xl md:text-2xl font-semibold text-offwhite font-heading mt-8 mb-3">
+          {cleanHeading(line.slice(4))}
         </h3>
       );
     } else if (line.startsWith('## ')) {
       flushList();
       nodes.push(
-        <h2 key={key++} className="text-2xl md:text-3xl font-bold text-offwhite font-heading mt-8 mb-4">
-          {renderInline(line.slice(3))}
+        <h2 key={key++} className="text-2xl md:text-[1.75rem] font-bold tracking-tight text-offwhite font-heading mt-10 mb-4">
+          {cleanHeading(line.slice(3))}
         </h2>
       );
     } else if (line.startsWith('# ')) {
       flushList();
       nodes.push(
-        <h1 key={key++} className="text-3xl md:text-4xl font-bold text-offwhite font-heading mt-8 mb-4">
-          {renderInline(line.slice(2))}
+        <h1 key={key++} className="text-3xl md:text-4xl font-extrabold tracking-tight text-offwhite font-heading mt-10 mb-6">
+          {cleanHeading(line.slice(2))}
         </h1>
       );
     } else if (line.startsWith('> ')) {

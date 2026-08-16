@@ -311,8 +311,10 @@ export default function AdminPanel() {
   const labelCls = 'block text-xs font-semibold uppercase tracking-wider text-cyan-300/80 mb-1.5';
 
   return (
-    <div className="min-h-screen bg-navy text-ice font-sans">
-      <div className="container mx-auto px-6 pt-24 pb-16 max-w-5xl">
+    <div className="relative min-h-screen bg-navy text-ice font-sans overflow-hidden">
+      <div className="pointer-events-none absolute -top-32 -right-32 w-96 h-96 bg-primary/10 rounded-full blur-[120px]" />
+      <div className="pointer-events-none absolute bottom-0 -left-32 w-96 h-96 bg-cyan-300/[0.06] rounded-full blur-[120px]" />
+      <div className="relative z-10 container mx-auto px-6 pt-24 pb-16 max-w-5xl">
         <header className="flex items-center justify-between flex-wrap gap-4 mb-8">
           <div>
             <h1 className="text-3xl md:text-4xl font-bold text-offwhite font-heading">
@@ -456,14 +458,14 @@ export default function AdminPanel() {
               <div className="md:col-span-2">
                 <label className={labelCls}>Content (markdown-lite) *</label>
                 <div className="flex flex-wrap items-center gap-1.5 mb-2">
-                  <ToolbarBtn onClick={() => insertAtLineStart('# ')} title="Heading 1">
-                    H1
+                  <ToolbarBtn onClick={() => insertAtLineStart('# ')} title="Heading 1 — biggest">
+                    <span className="text-base font-extrabold leading-none">H1</span>
                   </ToolbarBtn>
-                  <ToolbarBtn onClick={() => insertAtLineStart('## ')} title="Heading 2">
-                    H2
+                  <ToolbarBtn onClick={() => insertAtLineStart('## ')} title="Heading 2 — medium">
+                    <span className="text-sm font-bold leading-none">H2</span>
                   </ToolbarBtn>
-                  <ToolbarBtn onClick={() => insertAtLineStart('### ')} title="Heading 3">
-                    H3
+                  <ToolbarBtn onClick={() => insertAtLineStart('### ')} title="Heading 3 — small">
+                    <span className="text-xs font-semibold leading-none">H3</span>
                   </ToolbarBtn>
                   <span className="w-px h-5 bg-steel/20 mx-1" />
                   <ToolbarBtn onClick={() => insertAtCursor('**', '**', 'bold text')} title="Bold">
@@ -545,10 +547,11 @@ export default function AdminPanel() {
                   </div>
                 )}
                 <p className="text-[11px] text-text-muted mt-1.5">
-                  Supports <code># ## ### #### headings</code>, <code>**bold**</code>,{' '}
-                  <code>[links](/blogs/slug)</code>, <code>![images](url)</code>, <code>- lists</code>,{' '}
-                  and <code>&gt; quotes</code>. Use the <b>Interlink blog...</b> dropdown to link other
-                  posts.
+                  Supports <code># ## ### #### headings</code> — H1 is the biggest, each extra{' '}
+                  <code>#</code> makes it smaller: <code># H1</code>, <code>## H2</code>,{' '}
+                  <code>### H3</code>. Also <code>**bold**</code>, <code>[links](/blogs/slug)</code>,{' '}
+                  <code>![images](url)</code>, <code>- lists</code>, and <code>&gt; quotes</code>. Use the{' '}
+                  <b>Interlink blog...</b> dropdown to link other posts.
                 </p>
               </div>
               <div className="md:col-span-2">
@@ -640,7 +643,7 @@ export default function AdminPanel() {
               {blogs.map((blog) => (
                 <div
                   key={blog.id}
-                  className="glass-card-premium rounded-xl p-4 md:p-5 flex flex-wrap items-center gap-4"
+                  className="glass-card-premium rounded-xl p-4 md:p-5 flex flex-wrap items-center gap-4 transition-colors hover:border-cyan-300/20"
                 >
                   <div className="flex-1 min-w-52">
                     <h3 className="font-heading font-bold text-offwhite">{blog.title}</h3>

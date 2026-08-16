@@ -35,8 +35,10 @@ export default function AdminLogin() {
   }
 
   return (
-    <div className="min-h-screen bg-navy text-ice font-sans flex items-center justify-center px-6">
-      <div className="w-full max-w-md">
+    <div className="relative min-h-screen bg-navy text-ice font-sans flex items-center justify-center px-6 overflow-hidden">
+      <div className="pointer-events-none absolute -top-32 -right-32 w-96 h-96 bg-primary/10 rounded-full blur-[120px]" />
+      <div className="pointer-events-none absolute bottom-0 -left-32 w-96 h-96 bg-cyan-300/[0.06] rounded-full blur-[120px]" />
+      <div className="relative z-10 w-full max-w-md">
         <div className="text-center mb-8">
           <div className="inline-flex items-center justify-center w-14 h-14 rounded-2xl bg-gradient-to-br from-primary to-cyan-300 mb-4">
             <Lock className="w-6 h-6 text-offwhite" />

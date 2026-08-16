@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { Plus, Trash2, Pencil, X, LogOut, ExternalLink, CheckCircle2, Bold, Link2, List, Quote, Image as ImageIcon, Eye, PenLine } from 'lucide-react';
+import { Plus, Trash2, Pencil, X, LogOut, ExternalLink, CheckCircle2, Bold, Link2, List, Quote, Image as ImageIcon, Eye, PenLine, UploadCloud, Loader2 } from 'lucide-react';
 import { renderMarkdown } from '../../components/blog-markdown';
 
 function ToolbarBtn({
@@ -73,7 +73,58 @@ export default function AdminPanel() {
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState('');
   const [showPreview, setShowPreview] = useState(false);
+  const [uploading, setUploading] = useState(false);
   const contentRef = useRef<HTMLTextAreaElement>(null);
+  const coverImgRef = useRef<HTMLInputElement>(null);
+  const contentImgRef = useRef<HTMLInputElement>(null);
+
+  async function uploadFile(file: File): Promise<string> {
+    const fd = new FormData();
+    fd.append('file', file);
+    const res = await fetch('/api/admin/upload', { method: 'POST', body: fd });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || `Upload failed (${res.status})`);
+    return data.url as string;
+  }
+
+  async function handleCoverFile(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    setUploading(true);
+    try {
+      const url = await uploadFile(file);
+      setField('coverImage', url);
+      flash('Cover uploaded');
+    } catch (err) {
+      alert((err as Error).message);
+    } finally {
+      setUploading(false);
+    }
+  }
+
+  async function handleContentImageFile(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) {
+      const url = window.prompt('Image URL (https://... or /local-image.png):');
+      if (!url) return;
+      const alt = window.prompt('Alt text (optional):') || '';
+      insertAtCursor(`![${alt}](${url})`, '', '');
+      return;
+    }
+    setUploading(true);
+    try {
+      const url = await uploadFile(file);
+      const alt = window.prompt('Alt text (optional):') || 'Image';
+      insertAtCursor(`![${alt}](${url})`, '', '');
+      flash('Image added to content');
+    } catch (err) {
+      alert((err as Error).message);
+    } finally {
+      setUploading(false);
+    }
+  }
 
   function insertAtCursor(before: string, after: string, placeholder: string) {
     const ta = contentRef.current;
@@ -122,10 +173,7 @@ export default function AdminPanel() {
   }
 
   function insertImage() {
-    const url = window.prompt('Image URL (https://... or /local-image.png):');
-    if (!url) return;
-    const alt = window.prompt('Alt text (optional):') || '';
-    insertAtCursor(`![${alt}](${url})`, '', '');
+    contentImgRef.current?.click();
   }
 
   const flash = (msg: string) => {
@@ -356,24 +404,54 @@ export default function AdminPanel() {
                 />
               </div>
               <div className="md:col-span-2">
-                <label className={labelCls}>Cover Image URL</label>
+                <label className={labelCls}>Cover Image</label>
                 <input
                   className={inputCls}
                   value={form.coverImage}
                   onChange={(e) => setField('coverImage', e.target.value)}
-                  placeholder="https://example.com/cover.jpg (shown on /blogs and at the top of the article)"
+                  placeholder="https://example.com/cover.jpg (or click the image below to upload)"
                 />
-                {form.coverImage && (
-                  // eslint-disable-next-line @next/next/no-img-element
-                  <img
-                    src={form.coverImage}
-                    alt="Cover preview"
-                    className="mt-3 w-full max-h-52 object-cover rounded-xl border border-primary/20"
-                    onError={(e) => {
-                      (e.target as HTMLImageElement).style.display = 'none';
-                    }}
-                  />
+                {form.coverImage ? (
+                  <button
+                    type="button"
+                    onClick={() => coverImgRef.current?.click()}
+                    title="Click to replace cover"
+                    className="mt-3 w-full text-left block"
+                  >
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img
+                      src={form.coverImage}
+                      alt="Cover preview — click to replace"
+                      className="w-full max-h-52 object-cover rounded-xl border border-primary/20"
+                      onError={(e) => {
+                        (e.target as HTMLImageElement).style.display = 'none';
+                      }}
+                    />
+                    <span className="mt-1.5 text-[11px] text-cyan-300 inline-flex items-center gap-1">
+                      <UploadCloud className="w-3.5 h-3.5" />
+                      {uploading ? 'Uploading...' : 'Click image to upload a new one'}
+                    </span>
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => coverImgRef.current?.click()}
+                    className="mt-3 w-full min-h-36 rounded-xl border-2 border-dashed border-steel/30 hover:border-cyan-300/50 bg-bg-hover/40 flex flex-col items-center justify-center gap-2 text-text-muted hover:text-cyan-200 transition-colors"
+                  >
+                    <UploadCloud className="w-6 h-6" />
+                    <span className="text-xs font-semibold">
+                      {uploading ? 'Uploading...' : 'Click to upload cover image'}
+                    </span>
+                    <span className="text-[10px]">PNG, JPG, WEBP, GIF or SVG · max 5MB</span>
+                  </button>
                 )}
+                <input
+                  ref={coverImgRef}
+                  type="file"
+                  accept="image/png,image/jpeg,image/webp,image/gif,image/svg+xml"
+                  className="hidden"
+                  onChange={handleCoverFile}
+                />
               </div>
               <div className="md:col-span-2">
                 <label className={labelCls}>Content (markdown-lite) *</label>
@@ -403,9 +481,20 @@ export default function AdminPanel() {
                   <ToolbarBtn onClick={() => insertAtLineStart('> ')} title="Quote / callout">
                     <Quote className="w-3.5 h-3.5" />
                   </ToolbarBtn>
-                  <ToolbarBtn onClick={insertImage} title="Insert image">
-                    <ImageIcon className="w-3.5 h-3.5" />
+                  <ToolbarBtn onClick={insertImage} title="Insert image (upload or paste URL)">
+                    {uploading ? (
+                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    ) : (
+                      <ImageIcon className="w-3.5 h-3.5" />
+                    )}
                   </ToolbarBtn>
+                  <input
+                    ref={contentImgRef}
+                    type="file"
+                    accept="image/png,image/jpeg,image/webp,image/gif,image/svg+xml"
+                    className="hidden"
+                    onChange={handleContentImageFile}
+                  />
                   <span className="w-px h-5 bg-steel/20 mx-1" />
                   <select
                     defaultValue=""

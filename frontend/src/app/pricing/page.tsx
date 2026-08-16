@@ -66,8 +66,11 @@ export default function PricingPage() {
 
   if (isLoading) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-navy font-sans">
-        <Loader2 className="w-6 h-6 text-steel animate-spin" />
+      <div className="min-h-screen flex flex-col bg-navy font-sans">
+        <div className="flex-1 flex items-center justify-center">
+          <Loader2 className="w-6 h-6 text-steel animate-spin" />
+        </div>
+        <Footer />
       </div>
     );
   }

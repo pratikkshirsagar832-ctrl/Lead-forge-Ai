@@ -41,7 +41,8 @@ function readAll(): BlogPost[] {
   try {
     const file = dataFile();
     if (fs.existsSync(file)) {
-      const posts: BlogPost[] = JSON.parse(fs.readFileSync(file, 'utf-8'));
+      const raw = fs.readFileSync(file, 'utf-8').replace(/^\uFEFF/, '');
+      const posts: BlogPost[] = JSON.parse(raw);
       cached = posts;
       return posts;
     }

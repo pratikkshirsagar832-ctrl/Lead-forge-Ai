@@ -90,6 +90,22 @@ export default function BlogPostPage({ params }: PageProps) {
           <span className="text-cyan-300 truncate max-w-[40ch]">{post.title}</span>
         </nav>
 
+        <Link
+          href="/"
+          className="inline-flex items-center gap-2.5 rounded-full border border-steel/20 bg-white/[0.04] backdrop-blur-sm px-3.5 py-1.5 mb-5 hover:border-cyan-300/30 transition-colors"
+        >
+          <img
+            src="/publisher.png"
+            alt="Hyperclients"
+            width={24}
+            height={24}
+            className="w-6 h-6 rounded-full object-cover"
+          />
+          <span className="text-xs font-semibold text-ice/80">
+            Published by <span className="text-cyan-200 font-bold">Hyperclients</span>
+          </span>
+        </Link>
+
         <div className="flex flex-wrap items-center gap-3 text-xs font-semibold uppercase tracking-wide text-text-muted mb-4">
           <span className="px-2.5 py-1 rounded-full bg-primary/15 text-primary-light border border-primary/20">
             {post.category}

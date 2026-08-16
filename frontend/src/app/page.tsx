@@ -5,10 +5,20 @@ import { Features } from '@/components/landing/Features';
 import { HowItWorks } from '@/components/landing/HowItWorks';
 import { Footer } from '@/components/landing/Footer';
 import Link from 'next/link';
-import { Sparkles } from 'lucide-react';
-import { motion } from 'framer-motion';
+import { Sparkles, Menu, X } from 'lucide-react';
+import { motion, AnimatePresence } from 'framer-motion';
+import { useState } from 'react';
+
+const NAV_LINKS = [
+  { label: 'Features', href: '#features' },
+  { label: 'How it Works', href: '#how-it-works' },
+  { label: 'SEO Checker', href: '/tools/seo-score-checker' },
+  { label: 'Pricing', href: '/pricing' },
+  { label: 'Blog', href: '/blogs' },
+];
 
 export default function LandingPage() {
+  const [menuOpen, setMenuOpen] = useState(false);
   return (
     <div className="min-h-screen flex flex-col font-sans selection:bg-violet/30 selection:text-offwhite">
       {/* Premium Sticky Header — Fade in from top */}
@@ -32,13 +42,7 @@ export default function LandingPage() {
           </Link>
 
           <nav className="hidden md:flex items-center gap-8 text-sm font-medium text-ice/60">
-            {[
-              { label: 'Features', href: '#features' },
-              { label: 'How it Works', href: '#how-it-works' },
-              { label: 'SEO Checker', href: '/tools/seo-score-checker' },
-              { label: 'Pricing', href: '/pricing' },
-              { label: 'Blog', href: '/blogs' },
-            ].map((item, i) => (
+            {NAV_LINKS.map((item, i) => (
               <motion.div
                 key={item.label}
                 initial={{ opacity: 0, y: -8 }}
@@ -72,8 +76,42 @@ export default function LandingPage() {
                 Try It Free
               </span>
             </Link>
+
+            <button
+              onClick={() => setMenuOpen((v) => !v)}
+              aria-label={menuOpen ? 'Close menu' : 'Open menu'}
+              aria-expanded={menuOpen}
+              className="md:hidden text-ice/80 hover:text-offwhite p-2 -mr-2 rounded-lg hover:bg-white/5 transition-colors"
+            >
+              {menuOpen ? <X className="w-6 h-6" /> : <Menu className="w-6 h-6" />}
+            </button>
           </motion.div>
         </div>
+
+        <AnimatePresence>
+          {menuOpen && (
+            <motion.nav
+              initial={{ opacity: 0, height: 0 }}
+              animate={{ opacity: 1, height: 'auto' }}
+              exit={{ opacity: 0, height: 0 }}
+              transition={{ duration: 0.25, ease: 'easeInOut' }}
+              className="md:hidden overflow-hidden border-t border-steel/10 bg-navy/95 backdrop-blur-xl"
+            >
+              <div className="container mx-auto px-6 py-4 flex flex-col gap-1">
+                {NAV_LINKS.map((item) => (
+                  <Link
+                    key={item.label}
+                    href={item.href}
+                    onClick={() => setMenuOpen(false)}
+                    className="px-3 py-3 rounded-lg text-sm font-medium text-ice/80 hover:text-offwhite hover:bg-white/5 transition-colors"
+                  >
+                    {item.label}
+                  </Link>
+                ))}
+              </div>
+            </motion.nav>
+          )}
+        </AnimatePresence>
       </motion.header>
 
       <main className="flex-1">

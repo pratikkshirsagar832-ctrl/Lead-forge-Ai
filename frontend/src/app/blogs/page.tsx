@@ -22,11 +22,8 @@ export default function BlogsIndexPage() {
       <div className="container relative z-10 mx-auto px-6 pt-28 pb-16 max-w-4xl">
         <p className="text-xs font-semibold uppercase tracking-widest text-cyan-300 mb-2">Blog</p>
         <h1 className="text-4xl md:text-5xl font-bold text-offwhite font-heading mb-3">
-          Lead Generation <span className="gradient-text-premium">Playbooks</span>
+          Lead Generation <span className="gradient-text-premium">Guides and Blogs</span>
         </h1>
-        <p className="text-ice/80 text-lg mb-12">
-          Practical filters for finding businesses ready to buy - not just businesses with problems.
-        </p>
 
         {posts.length === 0 ? (
           <div className="glass-card rounded-2xl p-10 text-center">

@@ -4,6 +4,7 @@ import { CalendarDays, ArrowRight } from 'lucide-react';
 import { getBlogs } from '../../../lib/blog-store';
 import { BlogBackground } from '../../components/blog-background';
 import { BlogImage } from '../../components/blog-image';
+import { Footer } from '../../components/landing/Footer';
 
 export const dynamic = 'force-dynamic';
 
@@ -35,14 +36,14 @@ export default function BlogsIndexPage() {
               <Link
                 key={post.slug}
                 href={`/blogs/${post.slug}`}
-                className="block group glass-card-premium rounded-2xl overflow-hidden transition-all duration-300 hover:border-secondary/40 hover:-translate-y-0.5"
+                className="block group glass-card-premium rounded-2xl overflow-hidden transition-colors duration-300 hover:border-secondary/40"
               >
                 {post.coverImage && (
                   <BlogImage
                     src={post.coverImage}
                     alt={post.title}
                     wrapperClassName="relative aspect-[16/7] overflow-hidden"
-                    imgClassName="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105"
+                    imgClassName="w-full h-full object-cover"
                     overlayClassName="absolute inset-0 bg-gradient-to-t from-[#0C1024] via-transparent to-transparent"
                   />
                 )}
@@ -73,6 +74,7 @@ export default function BlogsIndexPage() {
           </div>
         )}
       </div>
+      <Footer />
     </div>
   );
 }

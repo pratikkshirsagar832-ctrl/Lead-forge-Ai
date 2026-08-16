@@ -112,7 +112,7 @@ export function Features() {
               whileInView={{ opacity: 1, y: 0 }}
               viewport={{ once: true, margin: '-50px' }}
               transition={{ duration: 0.45, delay: idx * 0.06, ease: [0.25, 0.1, 0.25, 1] }}
-              className="group relative p-6 rounded-2xl border border-steel/20 hover:border-steel/40 transition-all duration-300 bg-gradient-to-br from-sapphire/30 to-navy/95 hover:shadow-xl hover:shadow-steel/5 hover:-translate-y-1"
+              className="group relative p-6 rounded-2xl border border-steel/20 hover:border-steel/40 transition-colors duration-300 bg-gradient-to-br from-sapphire/30 to-navy/95"
             >
               {/* Premium hover gradient overlay */}
               <div className="absolute inset-0 rounded-2xl bg-gradient-to-br from-violet/5 via-transparent to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-500 pointer-events-none" />
@@ -122,7 +122,7 @@ export function Features() {
 
               <div className="relative z-10">
                 <div
-                  className={`w-11 h-11 rounded-xl bg-gradient-to-br ${feature.gradient} flex items-center justify-center mb-5 group-hover:scale-110 group-hover:shadow-lg transition-all duration-300 ${feature.color}`}
+                  className={`w-11 h-11 rounded-xl bg-gradient-to-br ${feature.gradient} flex items-center justify-center mb-5 transition-colors duration-300 ${feature.color}`}
                 >
                   {feature.icon}
                 </div>

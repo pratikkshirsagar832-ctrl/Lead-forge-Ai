@@ -33,12 +33,11 @@ export const GlassCard = forwardRef<HTMLDivElement, GlassCardProps>(
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.45, delay, ease: [0.25, 0.1, 0.25, 1] }}
         whileHover={hoverEffect ? {
-          y: -4,
-          boxShadow: '0 20px 60px -12px rgba(0, 0, 0, 0.4), 0 0 0 1px rgba(59, 130, 196, 0.2)',
+          borderColor: 'rgba(19, 224, 194, 0.3)',
           transition: { duration: 0.25, ease: 'easeOut' },
         } : undefined}
         className={cn(
-          'relative group overflow-hidden rounded-2xl bg-gradient-to-br from-sapphire/40 to-navy/85 border border-steel/20 shadow-lg shadow-black/30 transition-all duration-300',
+          'relative group overflow-hidden rounded-2xl bg-gradient-to-br from-sapphire/40 to-navy/85 border border-steel/20 transition-colors duration-300',
           gradient && 'before:absolute before:inset-0 before:bg-gradient-to-br before:from-violet/5 before:via-transparent before:to-teal/5 before:pointer-events-none',
           glowBorder && 'animate-border-glow',
           interactive && 'cursor-pointer',

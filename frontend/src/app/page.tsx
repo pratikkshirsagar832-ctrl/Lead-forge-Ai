@@ -26,13 +26,13 @@ export default function LandingPage() {
         initial={{ y: -20, opacity: 0 }}
         animate={{ y: 0, opacity: 1 }}
         transition={{ duration: 0.6, ease: [0.25, 0.1, 0.25, 1] }}
-        className="fixed top-0 inset-x-0 z-50 bg-navy/85 backdrop-blur-xl border-b border-steel/10 before:absolute before:inset-0 before:bg-gradient-to-r before:from-transparent before:via-steel/[0.02] before:to-transparent before:animate-shimmer before:pointer-events-none"
+        className="fixed top-0 inset-x-0 z-50 bg-navy/85 backdrop-blur-xl border-b border-steel/10"
       >
         <div className="container mx-auto px-6 h-16 flex items-center justify-between">
           <Link href="/" className="flex items-center gap-2 group">
             <motion.div
               whileHover={{ scale: 1.05 }}
-              className="bg-gradient-to-br from-violet to-steel rounded-lg p-1 transition-transform duration-300 shadow-lg shadow-violet/20"
+              className="bg-steel/15 rounded-lg p-1"
             >
               <Image src="/hyperclients-icon.svg" alt="Hyperclients" width={40} height={40} className="object-contain" />
             </motion.div>
@@ -68,9 +68,8 @@ export default function LandingPage() {
           >
             <Link
               href="/login"
-              className="group relative text-sm font-medium bg-gradient-to-r from-cta to-cta-light text-white px-5 py-2.5 rounded-lg overflow-hidden transition-all duration-200 hover:shadow-lg hover:shadow-cta/25 active:scale-[0.97]"
+              className="group relative text-sm font-medium bg-cta text-white px-5 py-2.5 rounded-lg transition-colors duration-200 hover:bg-cta-light"
             >
-              <span className="absolute inset-0 bg-white/10 opacity-0 group-hover:opacity-100 transition-opacity duration-300" />
               <span className="relative flex items-center gap-1.5">
                 <Sparkles className="w-3.5 h-3.5" />
                 Try It Free

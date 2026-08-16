@@ -93,7 +93,7 @@ export function HowItWorks() {
 
                 {/* Icon */}
                 <div
-                  className={`w-12 h-12 rounded-xl bg-gradient-to-br ${step.color} flex items-center justify-center mb-5 group-hover:scale-110 group-hover:shadow-lg transition-all duration-300 ${step.iconColor}`}
+                  className={`w-12 h-12 rounded-xl bg-gradient-to-br ${step.color} flex items-center justify-center mb-5 transition-colors duration-300 ${step.iconColor}`}
                 >
                   <Icon className="w-5.5 h-5.5" />
                 </div>

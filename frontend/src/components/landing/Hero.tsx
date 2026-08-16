@@ -30,7 +30,7 @@ export function Hero() {
           animate="visible"
         >
           <motion.div variants={fadeInUp}>
-            <span className="inline-flex items-center gap-2 px-4 py-1.5 rounded-full bg-gradient-to-r from-violet/20 to-steel/20 text-ice text-sm font-semibold mb-6 border border-violet/30 shadow-lg shadow-violet/5 group">
+            <span className="inline-flex items-center gap-2 px-4 py-1.5 rounded-full bg-gradient-to-r from-violet/20 to-steel/20 text-ice text-sm font-semibold mb-6 border border-violet/30 group">
               <Sparkles className="w-4 h-4 text-violet-400" />
               AI-Powered Lead Engine
               <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
@@ -63,18 +63,16 @@ export function Hero() {
           >
             <Link
               href="/login"
-              className="group relative w-full sm:w-auto px-8 py-4 bg-gradient-to-r from-cta to-cta-light text-white rounded-xl font-semibold text-lg overflow-hidden transition-all duration-300"
+              className="group relative w-full sm:w-auto px-8 py-4 bg-cta text-white rounded-xl font-semibold text-lg hover:bg-cta-light transition-colors duration-300"
             >
-              <span className="absolute inset-0 bg-white/10 opacity-0 group-hover:opacity-100 transition-opacity duration-300" />
               <span className="relative flex items-center justify-center gap-2">
                 Get Started Free
                 <ArrowRight className="w-5 h-5 group-hover:translate-x-1.5 transition-transform duration-200" />
               </span>
-              <span className="absolute -top-1 -right-1 w-3 h-3 bg-white/30 rounded-full blur-sm group-hover:bg-white/50 transition-all duration-500" />
             </Link>
             <Link
               href="#features"
-              className="group w-full sm:w-auto px-8 py-4 bg-gradient-to-r from-ocean/40 to-navy/80 text-ice border border-steel/30 rounded-xl font-semibold text-lg hover:bg-ocean/60 hover:border-steel/50 active:scale-[0.97] transition-all duration-200 flex items-center justify-center gap-2"
+              className="group w-full sm:w-auto px-8 py-4 bg-gradient-to-r from-ocean/40 to-navy/80 text-ice border border-steel/30 rounded-xl font-semibold text-lg hover:bg-ocean/60 hover:border-steel/50 transition-colors duration-200 flex items-center justify-center gap-2"
             >
               How it works
               <BarChart3 className="w-4 h-4 group-hover:translate-x-0.5 transition-transform" />
@@ -121,15 +119,12 @@ export function Hero() {
           transition={{ duration: 0.7, delay: 0.6, ease: [0.25, 0.1, 0.25, 1] }}
           className="mt-16 mx-auto max-w-6xl relative"
         >
-          {/* Glow behind mockup */}
-          <div className="absolute -inset-8 bg-gradient-to-r from-steel/5 via-violet/5 to-teal/5 rounded-[32px] blur-[40px] pointer-events-none" />
-
-          <div className="relative rounded-2xl border border-steel/30 bg-navy/60 p-2 shadow-2xl shadow-black/40 backdrop-blur-sm overflow-hidden ring-1 ring-steel/10">
-            <div className="rounded-xl border border-steel/20 bg-navy/90 p-4 shadow-sm overflow-hidden h-[400px] md:h-[600px] relative">
+          <div className="relative rounded-2xl border border-steel/30 bg-navy/60 p-2 overflow-hidden ring-1 ring-steel/10">
+            <div className="rounded-xl border border-steel/20 bg-navy/90 p-4 overflow-hidden h-[400px] md:h-[600px] relative">
               {/* Mockup header */}
               <div className="flex items-center justify-between border-b border-steel/20 pb-4 mb-6">
                 <div className="flex items-center gap-4">
-                  <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-violet/40 to-steel/30 flex items-center justify-center shadow-lg shadow-violet/10">
+                  <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-violet/40 to-steel/30 flex items-center justify-center">
                     <Target className="w-4 h-4 text-offwhite" />
                   </div>
                   <div className="h-5 w-40 bg-gradient-to-r from-steel/40 to-steel/20 rounded" />

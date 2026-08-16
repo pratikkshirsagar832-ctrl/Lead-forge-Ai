@@ -1,8 +1,30 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { Plus, Trash2, Pencil, X, LogOut, ExternalLink, CheckCircle2 } from 'lucide-react';
+import { Plus, Trash2, Pencil, X, LogOut, ExternalLink, CheckCircle2, Bold, Link2, List, Quote, Image as ImageIcon, Eye, PenLine } from 'lucide-react';
+import { renderMarkdown } from '../../components/blog-markdown';
+
+function ToolbarBtn({
+  onClick,
+  title,
+  children,
+}: {
+  onClick: () => void;
+  title: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      title={title}
+      className="px-2.5 py-1.5 rounded-lg bg-bg-hover text-text-secondary hover:text-cyan-300 hover:bg-steel/20 text-xs font-semibold transition-colors"
+    >
+      {children}
+    </button>
+  );
+}
 
 interface BlogFaq {
   q: string;
@@ -50,6 +72,61 @@ export default function AdminPanel() {
   const [editingSlug, setEditingSlug] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState('');
+  const [showPreview, setShowPreview] = useState(false);
+  const contentRef = useRef<HTMLTextAreaElement>(null);
+
+  function insertAtCursor(before: string, after: string, placeholder: string) {
+    const ta = contentRef.current;
+    if (!ta) return;
+    const start = ta.selectionStart;
+    const end = ta.selectionEnd;
+    const selected = form.content.slice(start, end) || placeholder;
+    const next = form.content.slice(0, start) + before + selected + after + form.content.slice(end);
+    setField('content', next);
+    requestAnimationFrame(() => {
+      ta.focus();
+      const pos = start + before.length + selected.length;
+      ta.setSelectionRange(pos, pos);
+    });
+  }
+
+  function insertAtLineStart(prefix: string) {
+    const ta = contentRef.current;
+    if (!ta) return;
+    const start = ta.selectionStart;
+    const lineStart = form.content.lastIndexOf('\n', start - 1) + 1;
+    const rest = form.content.slice(lineStart).replace(/^\s*/, '');
+    const next = form.content.slice(0, lineStart) + prefix + rest;
+    setField('content', next);
+    requestAnimationFrame(() => {
+      ta.focus();
+      const pos = lineStart + prefix.length;
+      ta.setSelectionRange(pos, pos);
+    });
+  }
+
+  function insertInterlink(slug: string, title: string) {
+    const ta = contentRef.current;
+    if (!ta) return;
+    const start = ta.selectionStart;
+    const end = ta.selectionEnd;
+    const label = form.content.slice(start, end) || title;
+    const link = `[${label}](/blogs/${slug})`;
+    const next = form.content.slice(0, start) + link + form.content.slice(end);
+    setField('content', next);
+    requestAnimationFrame(() => {
+      ta.focus();
+      const pos = start + link.length;
+      ta.setSelectionRange(pos, pos);
+    });
+  }
+
+  function insertImage() {
+    const url = window.prompt('Image URL (https://... or /local-image.png):');
+    if (!url) return;
+    const alt = window.prompt('Alt text (optional):') || '';
+    insertAtCursor(`![${alt}](${url})`, '', '');
+  }
 
   const flash = (msg: string) => {
     setNotice(msg);
@@ -300,16 +377,89 @@ export default function AdminPanel() {
               </div>
               <div className="md:col-span-2">
                 <label className={labelCls}>Content (markdown-lite) *</label>
+                <div className="flex flex-wrap items-center gap-1.5 mb-2">
+                  <ToolbarBtn onClick={() => insertAtLineStart('# ')} title="Heading 1">
+                    H1
+                  </ToolbarBtn>
+                  <ToolbarBtn onClick={() => insertAtLineStart('## ')} title="Heading 2">
+                    H2
+                  </ToolbarBtn>
+                  <ToolbarBtn onClick={() => insertAtLineStart('### ')} title="Heading 3">
+                    H3
+                  </ToolbarBtn>
+                  <span className="w-px h-5 bg-steel/20 mx-1" />
+                  <ToolbarBtn onClick={() => insertAtCursor('**', '**', 'bold text')} title="Bold">
+                    <Bold className="w-3.5 h-3.5" />
+                  </ToolbarBtn>
+                  <ToolbarBtn
+                    onClick={() => insertAtCursor('[', '](https://example.com)', 'link text')}
+                    title="External link"
+                  >
+                    <Link2 className="w-3.5 h-3.5" />
+                  </ToolbarBtn>
+                  <ToolbarBtn onClick={() => insertAtLineStart('- ')} title="List item">
+                    <List className="w-3.5 h-3.5" />
+                  </ToolbarBtn>
+                  <ToolbarBtn onClick={() => insertAtLineStart('> ')} title="Quote / callout">
+                    <Quote className="w-3.5 h-3.5" />
+                  </ToolbarBtn>
+                  <ToolbarBtn onClick={insertImage} title="Insert image">
+                    <ImageIcon className="w-3.5 h-3.5" />
+                  </ToolbarBtn>
+                  <span className="w-px h-5 bg-steel/20 mx-1" />
+                  <select
+                    defaultValue=""
+                    onChange={(e) => {
+                      const slug = e.target.value;
+                      e.target.value = '';
+                      if (!slug) return;
+                      const post = blogs.find((b) => b.slug === slug);
+                      if (post) insertInterlink(post.slug, post.title);
+                    }}
+                    className="bg-bg-hover border border-steel/20 rounded-lg px-2 py-1.5 text-xs text-offwhite"
+                    title="Interlink another blog post"
+                  >
+                    <option value="">Interlink blog...</option>
+                    {blogs.map((b) => (
+                      <option key={b.slug} value={b.slug}>
+                        {b.title}
+                      </option>
+                    ))}
+                  </select>
+                  <span className="flex-1" />
+                  <ToolbarBtn
+                    onClick={() => setShowPreview((v) => !v)}
+                    title={showPreview ? 'Back to editor' : 'Live preview'}
+                  >
+                    {showPreview ? (
+                      <span className="inline-flex items-center gap-1">
+                        <PenLine className="w-3.5 h-3.5" /> Edit
+                      </span>
+                    ) : (
+                      <span className="inline-flex items-center gap-1">
+                        <Eye className="w-3.5 h-3.5" /> Preview
+                      </span>
+                    )}
+                  </ToolbarBtn>
+                </div>
                 <textarea
+                  ref={contentRef}
                   className={`${inputCls} min-h-64 font-mono text-xs leading-relaxed resize-y`}
                   value={form.content}
                   onChange={(e) => setField('content', e.target.value)}
-                  placeholder={'## Heading\n\nParagraph text. Use **bold** for emphasis.\n\n- list item\n\n> callout / quote'}
+                  placeholder={'# Heading 1\n\nParagraph with **bold** text and [internal links](/blogs/slug).\n\n![alt text](https://example.com/image.jpg)\n\n- list item\n\n> callout / quote'}
                   required
                 />
+                {showPreview && (
+                  <div className="mt-3 rounded-xl border border-steel/20 bg-bg-hover/50 p-5 max-h-96 overflow-y-auto">
+                    {renderMarkdown(form.content)}
+                  </div>
+                )}
                 <p className="text-[11px] text-text-muted mt-1.5">
-                  Supports <code>## headings</code>, <code>**bold**</code>, <code>- lists</code>, and{' '}
-                  <code>&gt; quotes</code>.
+                  Supports <code># ## ### #### headings</code>, <code>**bold**</code>,{' '}
+                  <code>[links](/blogs/slug)</code>, <code>![images](url)</code>, <code>- lists</code>,{' '}
+                  and <code>&gt; quotes</code>. Use the <b>Interlink blog...</b> dropdown to link other
+                  posts.
                 </p>
               </div>
               <div className="md:col-span-2">

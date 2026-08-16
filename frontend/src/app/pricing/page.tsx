@@ -9,6 +9,7 @@ import { supabase } from '@/lib/supabase';
 import api from '@/lib/api';
 import { GlassCard } from '@/components/shared/GlassCard';
 import { LoadingButton } from '@/components/shared/LoadingButton';
+import { Footer } from '@/components/landing/Footer';
 import { Check, Zap, Star, Building2, ArrowRight, Loader2 } from 'lucide-react';
 
 const plans = [
@@ -181,6 +182,7 @@ export default function PricingPage() {
           </div>
         </div>
       </section>
+      <Footer />
     </div>
   );
 }

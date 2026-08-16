@@ -35,7 +35,7 @@ function LiveResultCard({ lead, index }: { lead: any; index: number }) {
       transition={{ duration: 0.4, delay: index * 0.08, ease: 'easeOut' }}
     >
       <Link href={`/dashboard/leads/${lead.id}`} className="block group">
-        <div className="glass-card-premium rounded-xl hover:border-steel/30 transition-all duration-300 hover:-translate-y-1">
+        <div className="glass-card-premium rounded-xl hover:border-steel/30 transition-colors duration-300">
           <div className="p-4">
               <div className="flex items-start justify-between mb-2">
                 <div className="flex items-center gap-2">
@@ -311,7 +311,7 @@ export default function SearchPage() {
               {!isSearchActive && resultsTotal > 0 && (
                 <div className="flex justify-center mt-6 gap-4 flex-wrap">
                   <Link href="/dashboard/leads"
-                    className="btn-gradient-cyan inline-flex items-center justify-center px-6 py-2.5 rounded-xl text-sm shadow-lg hover:-translate-y-0.5 transition-all"
+                    className="btn-gradient-cyan inline-flex items-center justify-center px-6 py-2.5 rounded-xl text-sm transition-opacity"
                   >
                     View All Leads in Dashboard
                   </Link>

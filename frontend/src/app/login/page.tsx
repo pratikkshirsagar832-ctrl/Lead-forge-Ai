@@ -10,6 +10,7 @@ import { supabase } from '@/lib/supabase';
 import { Mail, Lock, Eye, EyeOff, Loader2, WifiOff } from 'lucide-react';
 import { GlassCard } from '@/components/shared/GlassCard';
 import { LoadingButton } from '@/components/shared/LoadingButton';
+import { Footer } from '@/components/landing/Footer';
 
 function LoginContent() {
   const router = useRouter();
@@ -95,7 +96,7 @@ function LoginContent() {
 
       <GlassCard className="w-full max-w-md p-8 relative z-10">
         <div className="flex flex-col items-center mb-8">
-          <div className="bg-gradient-to-br from-violet to-steel rounded-xl p-2 mb-4 shadow-lg shadow-violet/20">
+          <div className="bg-steel/15 rounded-xl p-2 mb-4">
             <Image src="/hyperclients-icon.svg" alt="Hyperclients" width={44} height={44} className="object-contain" />
           </div>
           <h1 className="text-2xl font-bold text-offwhite">Welcome to Hyperclients</h1>
@@ -105,13 +106,13 @@ function LoginContent() {
         <div className="flex mb-6 bg-ocean/20 rounded-lg p-1">
           <button
             onClick={() => { setMode('login'); setError(''); setSuccessMessage(''); }}
-            className={`flex-1 py-2 text-sm font-semibold rounded-md transition-all ${mode === 'login' ? 'bg-steel text-offwhite shadow-lg' : 'text-ice/60 hover:text-offwhite'}`}
+            className={`flex-1 py-2 text-sm font-semibold rounded-md transition-colors ${mode === 'login' ? 'bg-steel text-offwhite' : 'text-ice/60 hover:text-offwhite'}`}
           >
             Sign In
           </button>
           <button
             onClick={() => { setMode('signup'); setError(''); setSuccessMessage(''); }}
-            className={`flex-1 py-2 text-sm font-semibold rounded-md transition-all ${mode === 'signup' ? 'bg-steel text-offwhite shadow-lg' : 'text-ice/60 hover:text-offwhite'}`}
+            className={`flex-1 py-2 text-sm font-semibold rounded-md transition-colors ${mode === 'signup' ? 'bg-steel text-offwhite' : 'text-ice/60 hover:text-offwhite'}`}
           >
             Sign Up
           </button>
@@ -218,12 +219,15 @@ function LoginContent() {
 
 export default function LoginPage() {
   return (
-    <Suspense fallback={
-      <div className="min-h-screen flex items-center justify-center bg-navy font-sans">
-        <Loader2 className="w-6 h-6 text-steel animate-spin" />
-      </div>
-    }>
-      <LoginContent />
-    </Suspense>
+    <>
+      <Suspense fallback={
+        <div className="min-h-screen flex items-center justify-center bg-navy font-sans">
+          <Loader2 className="w-6 h-6 text-steel animate-spin" />
+        </div>
+      }>
+        <LoginContent />
+      </Suspense>
+      <Footer />
+    </>
   );
 }

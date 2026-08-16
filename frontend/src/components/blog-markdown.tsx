@@ -1,16 +1,55 @@
 import { Fragment, ReactNode } from 'react';
 
+const INLINE_PATTERN = /(\[[^\]]+\]\([^)\s]+(?:\s+"[^"]*")?\)|!\[[^\]]*\]\([^)\s]+(?:\s+"[^"]*")?\))/g;
+
 function renderInline(text: string): ReactNode[] {
-  const parts = text.split(/(\*\*[^*]+\*\*)/g);
-  return parts.map((part, i) =>
-    part.startsWith('**') && part.endsWith('**') ? (
-      <strong key={i} className="text-offwhite font-semibold">
-        {part.slice(2, -2)}
-      </strong>
-    ) : (
-      <Fragment key={i}>{part}</Fragment>
-    )
-  );
+  const parts = text.split(INLINE_PATTERN);
+  return parts.map((part, i) => {
+    const linkMatch = part.match(/^\[([^\]]+)\]\(([^)\s]+)(?:\s+"[^"]*")?\)$/);
+    if (linkMatch) {
+      const href = linkMatch[2];
+      const internal = href.startsWith('/');
+      return (
+        <a
+          key={i}
+          href={href}
+          target={internal ? undefined : '_blank'}
+          rel={internal ? undefined : 'noopener noreferrer'}
+          className="text-cyan-300 hover:text-cyan-200 underline underline-offset-4 decoration-cyan-300/40"
+        >
+          {renderInline(linkMatch[1])}
+        </a>
+      );
+    }
+    const imgMatch = part.match(/^!\[([^\]]*)\]\(([^)\s]+)(?:\s+"([^"]*)")?\)$/);
+    if (imgMatch) {
+      return (
+        // eslint-disable-next-line @next/next/no-img-element
+        <img
+          key={i}
+          src={imgMatch[2]}
+          alt={imgMatch[1] || ''}
+          title={imgMatch[3]}
+          loading="lazy"
+          className="inline-block max-h-72 rounded-xl border border-steel/15 my-2"
+        />
+      );
+    }
+    const boldParts = part.split(/(\*\*[^*]+\*\*)/g);
+    return (
+      <Fragment key={i}>
+        {boldParts.map((bp, j) =>
+          bp.startsWith('**') && bp.endsWith('**') ? (
+            <strong key={j} className="text-offwhite font-semibold">
+              {bp.slice(2, -2)}
+            </strong>
+          ) : (
+            <Fragment key={j}>{bp}</Fragment>
+          )
+        )}
+      </Fragment>
+    );
+  });
 }
 
 export function renderMarkdown(content: string): ReactNode[] {
@@ -48,7 +87,7 @@ export function renderMarkdown(content: string): ReactNode[] {
             src={imgMatch[2]}
             alt={imgMatch[1] || ''}
             title={imgMatch[3]}
-            className="w-full rounded-xl border border-steel/15 shadow-2xl shadow-black/30"
+            className="w-full rounded-xl border border-steel/15"
             loading="lazy"
           />
           {imgMatch[1] && (
@@ -60,7 +99,28 @@ export function renderMarkdown(content: string): ReactNode[] {
       );
       continue;
     }
-    if (line.startsWith('### ')) {
+    if (line.startsWith('###### ')) {
+      flushList();
+      nodes.push(
+        <h6 key={key++} className="text-sm font-bold text-text-muted font-heading mt-5 mb-2 uppercase tracking-wide">
+          {renderInline(line.slice(7))}
+        </h6>
+      );
+    } else if (line.startsWith('##### ')) {
+      flushList();
+      nodes.push(
+        <h5 key={key++} className="text-base font-bold text-offwhite font-heading mt-5 mb-2">
+          {renderInline(line.slice(6))}
+        </h5>
+      );
+    } else if (line.startsWith('#### ')) {
+      flushList();
+      nodes.push(
+        <h4 key={key++} className="text-lg font-bold text-offwhite font-heading mt-6 mb-2">
+          {renderInline(line.slice(5))}
+        </h4>
+      );
+    } else if (line.startsWith('### ')) {
       flushList();
       nodes.push(
         <h3 key={key++} className="text-xl font-bold text-offwhite font-heading mt-6 mb-2">
@@ -73,6 +133,13 @@ export function renderMarkdown(content: string): ReactNode[] {
         <h2 key={key++} className="text-2xl md:text-3xl font-bold text-offwhite font-heading mt-8 mb-4">
           {renderInline(line.slice(3))}
         </h2>
+      );
+    } else if (line.startsWith('# ')) {
+      flushList();
+      nodes.push(
+        <h1 key={key++} className="text-3xl md:text-4xl font-bold text-offwhite font-heading mt-8 mb-4">
+          {renderInline(line.slice(2))}
+        </h1>
       );
     } else if (line.startsWith('> ')) {
       flushList();

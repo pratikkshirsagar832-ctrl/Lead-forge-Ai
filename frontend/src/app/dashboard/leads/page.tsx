@@ -49,7 +49,7 @@ function LeadsContent() {
         </div>
         <div className="relative">
           <div className="absolute -inset-0.5 bg-gradient-to-r from-steel to-ice rounded-xl blur opacity-30" />
-          <div className="relative flex items-center gap-2 text-sm font-bold text-offwhite bg-navy border border-steel/20 px-4 py-2 rounded-xl shadow-2xl">
+          <div className="relative flex items-center gap-2 text-sm font-bold text-offwhite bg-navy border border-steel/20 px-4 py-2 rounded-xl">
             <span className="text-steel">{totalCount.toLocaleString()}</span> total found
           </div>
         </div>

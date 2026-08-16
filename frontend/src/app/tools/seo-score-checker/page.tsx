@@ -14,6 +14,7 @@ import {
   RefreshCw,
 } from 'lucide-react';
 import { BlogBackground } from '@/components/blog-background';
+import { Footer } from '@/components/landing/Footer';
 
 interface SeoCheck {
   id: string;
@@ -177,7 +178,6 @@ export default function SeoScoreCheckerPage() {
                     initial={{ strokeDashoffset: circumference }}
                     animate={{ strokeDashoffset: circumference * (1 - result.score / 100) }}
                     transition={{ duration: 1.2, ease: 'easeOut' }}
-                    style={{ filter: `drop-shadow(0 0 12px ${gs.ring}66)` }}
                   />
                 </svg>
                 <div className="absolute inset-0 flex flex-col items-center justify-center">
@@ -278,6 +278,7 @@ export default function SeoScoreCheckerPage() {
           </motion.div>
         )}
       </div>
+      <Footer />
     </div>
   );
 }

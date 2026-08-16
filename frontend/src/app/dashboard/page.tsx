@@ -33,7 +33,7 @@ export default function DashboardOverview() {
               </p>
               <Link
                 href="/dashboard/search"
-                className="inline-flex items-center justify-center px-6 py-3 rounded-xl bg-gradient-to-r from-cta to-cta-light text-white font-semibold hover:shadow-lg hover:shadow-cta/30 hover:scale-[1.03] active:scale-[0.97] transition-all duration-200"
+                className="inline-flex items-center justify-center px-6 py-3 rounded-xl bg-gradient-to-r from-cta to-cta-light text-white font-semibold hover:opacity-90 transition-opacity duration-200"
               >
                 <Rocket className="w-5 h-5 mr-2" />
                 Start a Search

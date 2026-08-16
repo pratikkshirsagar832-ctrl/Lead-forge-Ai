@@ -6,6 +6,7 @@ import { getBlog } from '../../../../lib/blog-store';
 import { renderMarkdown } from '../../../components/blog-markdown';
 import { BlogBackground } from '../../../components/blog-background';
 import { BlogImage } from '../../../components/blog-image';
+import { Footer } from '../../../components/landing/Footer';
 
 export const dynamic = 'force-dynamic';
 
@@ -134,7 +135,7 @@ export default function BlogPostPage({ params }: PageProps) {
           <BlogImage
             src={post.coverImage}
             alt={post.title}
-            wrapperClassName="relative rounded-2xl overflow-hidden mb-8 border border-steel/20 shadow-2xl shadow-black/40"
+            wrapperClassName="relative rounded-2xl overflow-hidden mb-8 border border-steel/20"
             imgClassName="w-full aspect-[21/9] object-cover"
             overlayClassName="absolute inset-0 bg-gradient-to-t from-[#0C1024]/60 via-transparent to-transparent"
           />
@@ -190,14 +191,13 @@ export default function BlogPostPage({ params }: PageProps) {
         <aside className="mt-12 glass-card rounded-2xl p-6 md:p-8 border-t-2 border-t-cyan-300/40">
           <p className="text-xs font-bold uppercase tracking-widest text-cyan-300 mb-3">About the Author</p>
           <div className="flex items-start gap-4">
-            <div className="w-12 h-12 shrink-0 rounded-full bg-gradient-to-br from-primary to-cyan-300 flex items-center justify-center text-offwhite font-heading font-bold text-lg">
-              {post.author
-                .split(' ')
-                .map((w) => w[0])
-                .join('')
-                .slice(0, 2)
-                .toUpperCase()}
-            </div>
+            <img
+              src="/publisher.png"
+              alt={post.author}
+              width={48}
+              height={48}
+              className="w-12 h-12 shrink-0 rounded-full object-cover border border-steel/20"
+            />
             <div>
               <h3 className="font-heading font-bold text-offwhite">{post.author}</h3>
               {post.authorBio && (
@@ -207,6 +207,7 @@ export default function BlogPostPage({ params }: PageProps) {
           </div>
         </aside>
       </div>
+      <Footer />
     </div>
   );
 }

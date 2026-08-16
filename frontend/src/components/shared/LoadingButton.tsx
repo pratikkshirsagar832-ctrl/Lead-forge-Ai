@@ -33,29 +33,29 @@ export const LoadingButton = forwardRef<HTMLButtonElement, LoadingButtonProps>(
 
     const variants: Record<string, string> = {
       primary:
-        'bg-steel text-offwhite hover:bg-steel/80 focus:ring-steel/50 shadow-lg shadow-steel/20 hover:shadow-xl hover:shadow-steel/30 active:scale-[0.97]',
+        'bg-steel text-offwhite hover:bg-steel/80 focus:ring-steel/50',
       secondary:
-        'bg-ocean/60 text-ice border border-steel/30 hover:bg-ocean/80 hover:text-offwhite focus:ring-steel/30 shadow-sm active:scale-[0.97]',
+        'bg-ocean/60 text-ice border border-steel/30 hover:bg-ocean/80 hover:text-offwhite focus:ring-steel/30',
       danger:
-        'bg-gradient-to-r from-rose-600 to-red-600 text-white hover:from-rose-500 hover:to-red-500 focus:ring-rose-500/50 shadow-lg shadow-rose-600/20 active:scale-[0.97]',
+        'bg-gradient-to-r from-rose-600 to-red-600 text-white hover:from-rose-500 hover:to-red-500 focus:ring-rose-500/50',
       ghost:
-        'bg-transparent text-ice/60 hover:bg-steel/10 hover:text-ice border border-transparent hover:border-steel/20 active:scale-[0.97]',
+        'bg-transparent text-ice/60 hover:bg-steel/10 hover:text-ice border border-transparent hover:border-steel/20',
       outline:
-        'border-2 border-steel/50 text-steel hover:bg-steel/10 hover:text-ice focus:ring-steel/50 active:scale-[0.97]',
+        'border-2 border-steel/50 text-steel hover:bg-steel/10 hover:text-ice focus:ring-steel/50',
       gradient:
-        'bg-gradient-to-r from-steel to-ocean text-offwhite hover:from-steel/90 hover:to-ocean/90 focus:ring-steel/50 shadow-lg shadow-steel/25 hover:shadow-xl hover:shadow-steel/35 active:scale-[0.97]',
+        'bg-gradient-to-r from-steel to-ocean text-offwhite hover:from-steel/90 hover:to-ocean/90 focus:ring-steel/50',
       gold:
-        'bg-gradient-to-r from-amber to-amber-dark text-navy font-bold hover:from-amber-dark hover:to-amber focus:ring-amber/50 shadow-lg shadow-amber/30 hover:shadow-xl hover:shadow-amber/40 active:scale-[0.97]',
+        'bg-gradient-to-r from-amber to-amber-dark text-navy font-bold hover:from-amber-dark hover:to-amber focus:ring-amber/50',
       premium:
-        'bg-gradient-to-r from-violet to-steel text-offwhite hover:from-violet/90 hover:to-steel/90 focus:ring-violet/50 shadow-lg shadow-violet/25 hover:shadow-xl hover:shadow-violet/35 active:scale-[0.97]',
+        'bg-gradient-to-r from-violet to-steel text-offwhite hover:from-violet/90 hover:to-steel/90 focus:ring-violet/50',
       neon:
-        'btn-neon text-offwhite focus:ring-accent-cyan/50 active:scale-[0.97]',
+        'btn-neon text-offwhite focus:ring-accent-cyan/50',
       'gradient-cyan':
-        'btn-gradient-cyan text-white focus:ring-accent-cyan/50 active:scale-[0.97]',
+        'btn-gradient-cyan text-white focus:ring-accent-cyan/50',
       'gradient-purple':
-        'btn-gradient-purple text-white focus:ring-violet/50 active:scale-[0.97]',
+        'btn-gradient-purple text-white focus:ring-violet/50',
       glass:
-        'btn-glass text-offwhite focus:ring-accent-cyan/30 active:scale-[0.97]',
+        'btn-glass text-offwhite focus:ring-accent-cyan/30',
     };
 
     const sizes: Record<string, string> = {

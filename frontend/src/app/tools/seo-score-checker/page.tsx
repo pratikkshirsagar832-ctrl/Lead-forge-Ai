@@ -1,4 +1,4 @@
-'use client';
+﻿'use client';
 
 import { useState } from 'react';
 import { motion } from 'framer-motion';
@@ -15,6 +15,7 @@ import {
 } from 'lucide-react';
 import { BlogBackground } from '@/components/blog-background';
 import { Footer } from '@/components/landing/Footer';
+import Header from '@/components/landing/Header';
 
 interface SeoCheck {
   id: string;
@@ -99,6 +100,7 @@ export default function SeoScoreCheckerPage() {
   return (
     <div className="relative min-h-screen bg-navy text-ice font-sans overflow-hidden">
       <BlogBackground />
+      <Header />
       <div className="container relative z-10 mx-auto px-6 pt-28 pb-20 max-w-4xl">
         <p className="text-xs font-semibold uppercase tracking-widest text-cyan-300 mb-2 flex items-center gap-2">
           <Gauge className="w-4 h-4" /> Free SEO Tool

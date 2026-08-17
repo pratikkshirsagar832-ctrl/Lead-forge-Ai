@@ -1,10 +1,11 @@
-import type { Metadata } from 'next';
+﻿import type { Metadata } from 'next';
 import Link from 'next/link';
 import { CalendarDays, ArrowRight } from 'lucide-react';
 import { getBlogs } from '../../../lib/blog-store';
 import { BlogBackground } from '../../components/blog-background';
 import { BlogImage } from '../../components/blog-image';
 import { Footer } from '../../components/landing/Footer';
+import Header from '../../components/landing/Header';
 
 export const dynamic = 'force-dynamic';
 
@@ -20,6 +21,7 @@ export default function BlogsIndexPage() {
   return (
     <div className="relative min-h-screen bg-navy text-ice font-sans overflow-hidden">
       <BlogBackground />
+      <Header />
       <div className="container relative z-10 mx-auto px-6 pt-28 pb-16 max-w-4xl">
         <p className="text-xs font-semibold uppercase tracking-widest text-cyan-300 mb-2">Blog</p>
         <h1 className="text-4xl md:text-5xl font-bold text-offwhite font-heading mb-3">

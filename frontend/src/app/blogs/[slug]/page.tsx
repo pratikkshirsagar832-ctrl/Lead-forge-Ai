@@ -7,6 +7,7 @@ import { renderMarkdown } from '../../../components/blog-markdown';
 import { BlogBackground } from '../../../components/blog-background';
 import { BlogImage } from '../../../components/blog-image';
 import { Footer } from '../../../components/landing/Footer';
+import Header from '../../../components/landing/Header';
 
 export const dynamic = 'force-dynamic';
 
@@ -81,6 +82,7 @@ export default function BlogPostPage({ params }: PageProps) {
     <div className="relative min-h-screen bg-navy text-ice font-sans overflow-hidden">
       <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: JSON.stringify(jsonLd) }} />
       <BlogBackground />
+      <Header />
 
       <div className="container relative z-10 mx-auto px-6 pt-28 pb-20 max-w-3xl">
         <nav className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-text-muted mb-6">
@@ -103,7 +105,7 @@ export default function BlogPostPage({ params }: PageProps) {
             className="w-6 h-6 rounded-full object-cover"
           />
           <span className="text-xs font-semibold text-ice/80">
-            Published by <span className="text-cyan-200 font-bold">Hyperclients</span>
+            Published by <span className="text-cyan-200 font-bold">Bhaskar</span>
           </span>
         </Link>
 

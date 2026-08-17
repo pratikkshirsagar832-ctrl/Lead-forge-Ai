@@ -1,4 +1,4 @@
-'use client';
+﻿'use client';
 
 export const dynamic = 'force-dynamic';
 
@@ -11,6 +11,7 @@ import { Mail, Lock, Eye, EyeOff, Loader2, WifiOff } from 'lucide-react';
 import { GlassCard } from '@/components/shared/GlassCard';
 import { LoadingButton } from '@/components/shared/LoadingButton';
 import { Footer } from '@/components/landing/Footer';
+import Header from '@/components/landing/Header';
 
 function LoginContent() {
   const router = useRouter();
@@ -90,9 +91,11 @@ function LoginContent() {
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-navy font-sans p-4 relative overflow-hidden">
+    <div className="min-h-screen flex flex-col bg-navy font-sans relative overflow-hidden">
       <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_top,_var(--tw-gradient-stops))] from-violet/20 via-navy to-navy pointer-events-none" />
       <div className="absolute inset-0 bg-[linear-gradient(rgba(255,255,255,0.02)_1px,transparent_1px),linear-gradient(90deg,rgba(255,255,255,0.02)_1px,transparent_1px)] bg-[size:64px_64px] pointer-events-none" />
+      <Header />
+      <div className="flex-1 flex items-center justify-center p-4 relative z-10">
 
       <GlassCard className="w-full max-w-md p-8 relative z-10">
         <div className="flex flex-col items-center mb-8">
@@ -213,6 +216,7 @@ function LoginContent() {
           By continuing, you agree to our Terms of Service and Privacy Policy.
         </p>
       </GlassCard>
+      </div>
     </div>
   );
 }
@@ -221,8 +225,11 @@ export default function LoginPage() {
   return (
     <>
       <Suspense fallback={
-        <div className="min-h-screen flex items-center justify-center bg-navy font-sans">
-          <Loader2 className="w-6 h-6 text-steel animate-spin" />
+        <div className="min-h-screen flex flex-col bg-navy font-sans">
+          <Header />
+          <div className="flex-1 flex items-center justify-center">
+            <Loader2 className="w-6 h-6 text-steel animate-spin" />
+          </div>
         </div>
       }>
         <LoginContent />

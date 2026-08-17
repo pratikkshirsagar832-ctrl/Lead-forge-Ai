@@ -1,15 +1,15 @@
-'use client';
+﻿'use client';
 
 export const dynamic = 'force-dynamic';
 
 import { useState, useEffect } from 'react';
-import Image from 'next/image';
 import Link from 'next/link';
 import { supabase } from '@/lib/supabase';
 import api from '@/lib/api';
 import { GlassCard } from '@/components/shared/GlassCard';
 import { LoadingButton } from '@/components/shared/LoadingButton';
 import { Footer } from '@/components/landing/Footer';
+import Header from '@/components/landing/Header';
 import { Check, Zap, Star, Building2, ArrowRight, Loader2 } from 'lucide-react';
 
 const plans = [
@@ -67,6 +67,7 @@ export default function PricingPage() {
   if (isLoading) {
     return (
       <div className="min-h-screen flex flex-col bg-navy font-sans">
+        <Header />
         <div className="flex-1 flex items-center justify-center">
           <Loader2 className="w-6 h-6 text-steel animate-spin" />
         </div>
@@ -78,29 +79,7 @@ export default function PricingPage() {
   return (
     <div className="min-h-screen bg-navy font-sans relative overflow-hidden">
       <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_top,_var(--tw-gradient-stops))] from-violet/20 via-navy to-navy pointer-events-none" />
-
-      <header className="relative z-10 border-b border-ocean/30 bg-navy/80 backdrop-blur-md">
-        <div className="container mx-auto px-6 h-16 flex items-center justify-between">
-          <Link href="/" className="flex items-center gap-2">
-            <div className="bg-gradient-to-br from-violet to-steel rounded-lg p-1">
-              <Image src="/hyperclients-icon.svg" alt="Hyperclients" width={28} height={28} className="object-contain" />
-            </div>
-            <span className="font-bold text-lg text-offwhite">Hyperclients</span>
-          </Link>
-          <div className="flex items-center gap-4">
-            {session ? (
-              <Link href="/dashboard/billing" className="text-sm text-ice/60 hover:text-offwhite transition-colors">
-                My Billing
-              </Link>
-            ) : (
-              <>
-                <Link href="/login" className="text-sm text-ice/60 hover:text-offwhite transition-colors">Sign In</Link>
-                <Link href="/login?tab=signup" className="px-4 py-2 bg-steel text-offwhite text-sm font-semibold rounded-lg hover:opacity-90 transition-opacity">Get Started</Link>
-              </>
-            )}
-          </div>
-        </div>
-      </header>
+      <Header />
 
       <section className="relative z-10 py-20 px-6">
         <div className="max-w-6xl mx-auto">

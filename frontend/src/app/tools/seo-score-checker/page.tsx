@@ -38,7 +38,7 @@ interface SeoResult {
 
 const GRADE_STYLES: Record<string, { text: string; ring: string; glow: string }> = {
   A: { text: 'text-emerald-400', ring: '#10B981', glow: 'shadow-emerald-500/20' },
-  B: { text: 'text-cyan-300', ring: '#13E0C2', glow: 'shadow-cyan-500/20' },
+  B: { text: 'text-brand-accent-light', ring: '#FFB020', glow: 'shadow-brand-accent/20' },
   C: { text: 'text-amber-400', ring: '#F59E0B', glow: 'shadow-amber-500/20' },
   D: { text: 'text-orange-400', ring: '#FB923C', glow: 'shadow-orange-500/20' },
   F: { text: 'text-rose-400', ring: '#F43F5E', glow: 'shadow-rose-500/20' },
@@ -102,7 +102,7 @@ export default function SeoScoreCheckerPage() {
       <BlogBackground />
       <Header />
       <div className="container relative z-10 mx-auto px-6 pt-28 pb-20 max-w-4xl">
-        <p className="text-xs font-semibold uppercase tracking-widest text-cyan-300 mb-2 flex items-center gap-2">
+        <p className="text-xs font-semibold uppercase tracking-widest text-brand-accent-light mb-2 flex items-center gap-2">
           <Gauge className="w-4 h-4" /> Free SEO Tool
         </p>
         <h1 className="text-4xl md:text-5xl font-bold text-offwhite font-heading mb-3">
@@ -117,7 +117,7 @@ export default function SeoScoreCheckerPage() {
           onSubmit={runCheck}
           className="glass-card rounded-2xl p-3 flex flex-col sm:flex-row gap-3 mb-10"
         >
-          <div className="flex-1 flex items-center gap-3 bg-navy/50 rounded-xl px-4 border border-steel/20 focus-within:border-cyan-300/50 transition-colors">
+          <div className="flex-1 flex items-center gap-3 bg-navy/50 rounded-xl px-4 border border-steel/20 focus-within:border-brand-accent/50 transition-colors">
             <Globe className="w-4.5 h-4.5 text-ice/40 shrink-0" />
             <input
               type="text"
@@ -209,7 +209,7 @@ export default function SeoScoreCheckerPage() {
                 <button
                   onClick={runCheck}
                   disabled={loading}
-                  className="mt-6 inline-flex items-center gap-2 text-xs font-semibold text-cyan-200 hover:text-cyan-100 transition-colors disabled:opacity-50"
+                  className="mt-6 inline-flex items-center gap-2 text-xs font-semibold text-brand-accent hover:text-brand-accent-light transition-colors disabled:opacity-50"
                 >
                   <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} /> Re-run check
                 </button>
@@ -217,7 +217,7 @@ export default function SeoScoreCheckerPage() {
             </div>
 
             <div className="p-6 md:p-10">
-              <h3 className="flex items-center gap-2 text-sm font-bold uppercase tracking-widest text-cyan-300 mb-6">
+              <h3 className="flex items-center gap-2 text-sm font-bold uppercase tracking-widest text-brand-accent-light mb-6">
                 <FileSearch className="w-4 h-4" /> Audit Breakdown
               </h3>
               <div className="space-y-4">

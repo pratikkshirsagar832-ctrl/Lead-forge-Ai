@@ -47,13 +47,13 @@ export const LoadingButton = forwardRef<HTMLButtonElement, LoadingButtonProps>(
       gold:
         'bg-gradient-to-r from-amber to-amber-dark text-navy font-bold hover:from-amber-dark hover:to-amber focus:ring-amber/50',
       premium:
-        'bg-gradient-to-r from-violet to-steel text-offwhite hover:from-violet/90 hover:to-steel/90 focus:ring-violet/50',
+        'bg-gradient-to-r from-primary to-steel text-offwhite hover:from-primary/90 hover:to-steel/90 focus:ring-steel/50',
       neon:
         'btn-neon text-offwhite focus:ring-accent-cyan/50',
       'gradient-cyan':
-        'btn-gradient-cyan text-white focus:ring-accent-cyan/50',
+        'btn-gradient-cyan text-navy focus:ring-accent-cyan/50',
       'gradient-purple':
-        'btn-gradient-purple text-white focus:ring-violet/50',
+        'btn-gradient-cyan text-navy focus:ring-accent-cyan/50',
       glass:
         'btn-glass text-offwhite focus:ring-accent-cyan/30',
     };

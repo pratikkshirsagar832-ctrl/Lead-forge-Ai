@@ -15,7 +15,7 @@ function renderInline(text: string): ReactNode[] {
           href={href}
           target={internal ? undefined : '_blank'}
           rel={internal ? undefined : 'noopener noreferrer'}
-          className="text-cyan-300 hover:text-cyan-200 underline underline-offset-4 decoration-cyan-300/40"
+          className="text-brand-accent-light hover:text-brand-accent underline underline-offset-4 decoration-brand-accent/40"
         >
           {renderInline(linkMatch[1])}
         </a>

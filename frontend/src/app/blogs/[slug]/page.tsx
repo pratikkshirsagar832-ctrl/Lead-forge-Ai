@@ -86,16 +86,16 @@ export default function BlogPostPage({ params }: PageProps) {
 
       <div className="container relative z-10 mx-auto px-6 pt-28 pb-20 max-w-3xl">
         <nav className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-text-muted mb-6">
-          <Link href="/" className="hover:text-cyan-300 transition-colors">Home</Link>
+          <Link href="/" className="hover:text-brand-accent-light transition-colors">Home</Link>
           <span>/</span>
-          <Link href="/blogs" className="hover:text-cyan-300 transition-colors">Blog</Link>
+          <Link href="/blogs" className="hover:text-brand-accent-light transition-colors">Blog</Link>
           <span>/</span>
-          <span className="text-cyan-300 truncate max-w-[40ch]">{post.title}</span>
+          <span className="text-brand-accent-light truncate max-w-[40ch]">{post.title}</span>
         </nav>
 
         <Link
           href="/"
-          className="inline-flex items-center gap-2.5 rounded-full border border-steel/20 bg-white/[0.04] backdrop-blur-sm px-3.5 py-1.5 mb-5 hover:border-cyan-300/30 transition-colors"
+          className="inline-flex items-center gap-2.5 rounded-full border border-steel/20 bg-white/[0.04] backdrop-blur-sm px-3.5 py-1.5 mb-5 hover:border-brand-accent/30 transition-colors"
         >
           <img
             src="/publisher.png"
@@ -105,7 +105,7 @@ export default function BlogPostPage({ params }: PageProps) {
             className="w-6 h-6 rounded-full object-cover"
           />
           <span className="text-xs font-semibold text-ice/80">
-            Published by <span className="text-cyan-200 font-bold">Bhaskar</span>
+            Published by <span className="text-brand-accent font-bold">Bhaskar</span>
           </span>
         </Link>
 
@@ -139,7 +139,7 @@ export default function BlogPostPage({ params }: PageProps) {
             alt={post.title}
             wrapperClassName="relative rounded-2xl overflow-hidden mb-8 border border-steel/20"
             imgClassName="w-full aspect-[21/9] object-cover"
-            overlayClassName="absolute inset-0 bg-gradient-to-t from-[#0C1024]/60 via-transparent to-transparent"
+            overlayClassName="absolute inset-0 bg-gradient-to-t from-[#06231F]/60 via-transparent to-transparent"
           />
         )}
 
@@ -175,11 +175,11 @@ export default function BlogPostPage({ params }: PageProps) {
               {post.faqs.map((faq, i) => (
                 <details
                   key={i}
-                  className="group glass-card rounded-xl overflow-hidden open:border-cyan-300/30"
+                  className="group glass-card rounded-xl overflow-hidden open:border-brand-accent/30"
                 >
-                  <summary className="list-none flex items-center justify-between gap-4 cursor-pointer px-5 py-4 font-semibold text-offwhite hover:text-cyan-200 transition-colors select-none">
+                  <summary className="list-none flex items-center justify-between gap-4 cursor-pointer px-5 py-4 font-semibold text-offwhite hover:text-brand-accent transition-colors select-none">
                     {faq.q}
-                    <span className="text-cyan-300 text-xl leading-none transition-transform duration-300 group-open:rotate-45">
+                    <span className="text-brand-accent-light text-xl leading-none transition-transform duration-300 group-open:rotate-45">
                       +
                     </span>
                   </summary>
@@ -191,7 +191,7 @@ export default function BlogPostPage({ params }: PageProps) {
         )}
 
         <aside className="mt-12 glass-card rounded-2xl p-6 md:p-8 border-t-2 border-t-cyan-300/40">
-          <p className="text-xs font-bold uppercase tracking-widest text-cyan-300 mb-3">About the Author</p>
+          <p className="text-xs font-bold uppercase tracking-widest text-brand-accent-light mb-3">About the Author</p>
           <div className="flex items-start gap-4">
             <img
               src="/publisher.png"

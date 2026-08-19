@@ -8,6 +8,7 @@ import { useState } from 'react';
 const NAV_LINKS = [
   { label: 'Features', href: '/#features' },
   { label: 'How it Works', href: '/#how-it-works' },
+  { label: 'About', href: '/about-us' },
   { label: 'SEO Checker', href: '/tools/seo-score-checker' },
   { label: 'Pricing', href: '/pricing' },
   { label: 'Blog', href: '/blogs' },
@@ -24,12 +25,13 @@ export default function Header() {
     >
       <div className="container mx-auto px-6 h-16 flex items-center justify-between">
         <Link href="/" className="flex items-center gap-2 group">
-          <motion.div whileHover={{ scale: 1.05 }} className="bg-steel/15 rounded-lg p-1">
-            <Image src="/hyperclients-icon.svg" alt="Hyperclients" width={40} height={40} className="object-contain" />
-          </motion.div>
-          <span className="font-bold text-xl tracking-tight text-offwhite" style={{ fontFamily: 'var(--font-heading)' }}>
-            Hyperclients
-          </span>
+          <Image
+            src="/logo-lockup.png"
+            alt="Hyperclients"
+            width={160}
+            height={40}
+            className="h-9 w-auto object-contain"
+          />
         </Link>
 
         <nav className="hidden md:flex items-center gap-8 text-sm font-medium text-ice/60">

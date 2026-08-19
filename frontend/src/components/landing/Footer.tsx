@@ -12,10 +12,13 @@ export function Footer() {
         <div className="grid grid-cols-1 md:grid-cols-4 gap-12 mb-12 border-b border-steel/15 pb-12">
           <div className="md:col-span-2">
             <Link href="/" className="flex items-center gap-2 mb-6 text-offwhite w-fit group">
-              <div className="bg-steel/15 rounded-lg p-1">
-                <Image src="/hyperclients-icon.svg" alt="Hyperclients" width={40} height={40} className="object-contain" />
-              </div>
-              <span className="font-bold text-xl tracking-tight" style={{ fontFamily: 'var(--font-heading)' }}>Hyperclients</span>
+              <Image
+                src="/logo-lockup.png"
+                alt="Hyperclients"
+                width={160}
+                height={40}
+                className="h-8 w-auto object-contain"
+              />
             </Link>
             <p className="max-w-xs leading-relaxed text-sm text-ice/50">
               The automated lead generation engine built for agency owners, freelancers, and B2B founders who want to scale faster.
@@ -35,8 +38,8 @@ export function Footer() {
           <div>
             <h4 className="text-offwhite font-semibold mb-4 text-sm uppercase tracking-wider">Product</h4>
             <ul className="space-y-3 text-sm">
-              <li><Link href="#features" className="hover:text-steel transition-colors duration-200">Features</Link></li>
-              <li><Link href="#how-it-works" className="hover:text-steel transition-colors duration-200">How it Works</Link></li>
+              <li><Link href="/#features" className="hover:text-steel transition-colors duration-200">Features</Link></li>
+              <li><Link href="/#how-it-works" className="hover:text-steel transition-colors duration-200">How it Works</Link></li>
               <li><Link href="/tools/seo-score-checker" className="hover:text-steel transition-colors duration-200">SEO Score Checker</Link></li>
               <li><Link href="/pricing" className="hover:text-steel transition-colors duration-200">Pricing</Link></li>
               <li><Link href="/blogs" className="hover:text-steel transition-colors duration-200">Blog</Link></li>
@@ -45,11 +48,12 @@ export function Footer() {
           </div>
 
           <div>
-            <h4 className="text-offwhite font-semibold mb-4 text-sm uppercase tracking-wider">Legal</h4>
+            <h4 className="text-offwhite font-semibold mb-4 text-sm uppercase tracking-wider">Company</h4>
             <ul className="space-y-3 text-sm">
-              <li><Link href="#" className="hover:text-steel transition-colors duration-200">Privacy Policy</Link></li>
-              <li><Link href="#" className="hover:text-steel transition-colors duration-200">Terms of Service</Link></li>
-              <li><Link href="#" className="hover:text-steel transition-colors duration-200">Cookie Policy</Link></li>
+              <li><Link href="/about-us" className="hover:text-steel transition-colors duration-200">About Us</Link></li>
+              <li><Link href="/privacy-policy" className="hover:text-steel transition-colors duration-200">Privacy Policy</Link></li>
+              <li><Link href="/terms" className="hover:text-steel transition-colors duration-200">Terms of Service</Link></li>
+              <li><Link href="/refund-policy" className="hover:text-steel transition-colors duration-200">Refund Policy</Link></li>
             </ul>
           </div>
         </div>

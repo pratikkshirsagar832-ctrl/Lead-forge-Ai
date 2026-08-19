@@ -23,7 +23,7 @@ export default function BlogsIndexPage() {
       <BlogBackground />
       <Header />
       <div className="container relative z-10 mx-auto px-6 pt-28 pb-16 max-w-4xl">
-        <p className="text-xs font-semibold uppercase tracking-widest text-cyan-300 mb-2">Blog</p>
+        <p className="text-xs font-semibold uppercase tracking-widest text-brand-accent-light mb-2">Blog</p>
         <h1 className="text-4xl md:text-5xl font-bold text-offwhite font-heading mb-3">
           Lead Generation <span className="gradient-text-premium">Guides and Blogs</span>
         </h1>
@@ -46,7 +46,7 @@ export default function BlogsIndexPage() {
                     alt={post.title}
                     wrapperClassName="relative aspect-[16/7] overflow-hidden"
                     imgClassName="w-full h-full object-cover"
-                    overlayClassName="absolute inset-0 bg-gradient-to-t from-[#0C1024] via-transparent to-transparent"
+                    overlayClassName="absolute inset-0 bg-gradient-to-t from-[#06231F] via-transparent to-transparent"
                   />
                 )}
                 <div className="p-6 md:p-8">
@@ -67,7 +67,7 @@ export default function BlogsIndexPage() {
                     {post.title}
                   </h2>
                   <p className="text-ice/85 leading-relaxed">{post.excerpt}</p>
-                  <div className="mt-4 inline-flex items-center gap-1.5 text-sm font-semibold text-cyan-200 group-hover:gap-3 transition-all">
+                  <div className="mt-4 inline-flex items-center gap-1.5 text-sm font-semibold text-brand-accent group-hover:gap-3 transition-all">
                     Read article <ArrowRight className="w-4 h-4" />
                   </div>
                 </div>

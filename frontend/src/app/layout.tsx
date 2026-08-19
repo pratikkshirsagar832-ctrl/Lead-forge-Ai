@@ -4,7 +4,6 @@ import Script from 'next/script';
 import '../styles/globals.css';
 import { ThemeProvider } from '@/components/ThemeProvider';
 import { ToastContainer } from '@/components/shared/Toast';
-import { ThreeBackground } from '@/components/shared/ThreeBackground';
 
 const montserrat = Montserrat({ subsets: ['latin'], variable: '--font-sans', weight: ['400', '500', '700', '800'] });
 const spaceGrotesk = Space_Grotesk({ subsets: ['latin'], variable: '--font-heading', weight: ['400', '500', '600', '700'] });
@@ -15,8 +14,9 @@ export const metadata: Metadata = {
   description: 'Automated Lead Generation Engine',
   icons: {
     icon: [
-      { url: '/hyperclients-icon.svg', type: 'image/svg+xml' },
+      { url: '/hyperclients-icon.png', type: 'image/png' },
       { url: '/favicon.png', sizes: '32x32', type: 'image/png' },
+      { url: '/icon-192.png', sizes: '192x192', type: 'image/png' },
     ],
     apple: [
       { url: '/apple-touch-icon.png' },
@@ -58,7 +58,6 @@ export default function RootLayout({
           enableSystem
           disableTransitionOnChange
         >
-          <ThreeBackground />
           {children}
           <ToastContainer />
         </ThemeProvider>

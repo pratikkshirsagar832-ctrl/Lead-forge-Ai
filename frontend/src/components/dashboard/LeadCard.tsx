@@ -1,5 +1,6 @@
 import { GlassCard } from '@/components/shared/GlassCard';
 import { Badge } from '@/components/shared/Badge';
+import { PostTypeBadge } from '@/components/dashboard/PostTypeBadge';
 import { LEAD_CATEGORIES, USER_STATUSES } from '@/lib/constants';
 import { formatNumber, truncate } from '@/lib/utils';
 import { MapPin, Globe, Star, Phone, ChevronRight, Heart, Linkedin, Mail, Clock, ExternalLink, Users } from 'lucide-react';
@@ -56,6 +57,7 @@ export function LeadCard({ lead, onToggleFavorite, isUpdatingFav }: LeadCardProp
                 Maps
               </span>
             )}
+            {lead.source === 'linkedin' && <PostTypeBadge postType={lead.post_type} />}
           </div>
           <button
             onClick={(e) => {

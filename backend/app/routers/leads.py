@@ -40,6 +40,7 @@ router = APIRouter(prefix="/api/leads", tags=["Leads"])
 async def list_leads(
     search_id: Optional[str] = Query(None, description="Filter by search ID"),
     source: Optional[str] = Query(None, description="Filter by source (google_maps/linkedin)"),
+    post_type: Optional[str] = Query(None, description="Filter LinkedIn leads by post type (buyer/agency/hiring)"),
     lead_category: Optional[str] = Query(None, description="Filter by category (hot/warm)"),
     user_status: Optional[str] = Query(None, description="Filter by user status"),
     is_favorite: Optional[bool] = Query(None, description="Filter favorites only"),
@@ -62,6 +63,8 @@ async def list_leads(
             count_query = count_query.eq("search_id", search_id)
         if source:
             count_query = count_query.eq("source", source)
+        if post_type:
+            count_query = count_query.eq("post_type", post_type)
         if lead_category:
             count_query = count_query.eq("lead_category", lead_category)
         if user_status:
@@ -81,6 +84,8 @@ async def list_leads(
             data_query = data_query.eq("search_id", search_id)
         if source:
             data_query = data_query.eq("source", source)
+        if post_type:
+            data_query = data_query.eq("post_type", post_type)
         if lead_category:
             data_query = data_query.eq("lead_category", lead_category)
         if user_status:
@@ -121,6 +126,7 @@ EXPORT_MAX_ROWS = 10000
 async def export_leads_csv(
     search_id: Optional[str] = Query(None, description="Filter by search ID"),
     source: Optional[str] = Query(None, description="Filter by source (google_maps/linkedin)"),
+    post_type: Optional[str] = Query(None, description="Filter LinkedIn leads by post type (buyer/agency/hiring)"),
     lead_category: Optional[str] = Query(None),
     user_status: Optional[str] = Query(None),
     is_favorite: Optional[bool] = Query(None),
@@ -137,6 +143,8 @@ async def export_leads_csv(
             query = query.eq("search_id", search_id)
         if source:
             query = query.eq("source", source)
+        if post_type:
+            query = query.eq("post_type", post_type)
         if lead_category:
             query = query.eq("lead_category", lead_category)
         if user_status:
@@ -156,7 +164,7 @@ async def export_leads_csv(
             "email_found", "website_url", "rating", "total_reviews",
             "google_maps_link", "lead_category", "website_health_score",
             "headline", "linkedin_url", "post_url", "post_text",
-            "connections_count", "posted_at",
+            "connections_count", "posted_at", "post_type",
             "user_status", "user_notes", "is_favorite", "ai_pitch",
         ]
         writer = csv.DictWriter(output, fieldnames=fieldnames, extrasaction="ignore")

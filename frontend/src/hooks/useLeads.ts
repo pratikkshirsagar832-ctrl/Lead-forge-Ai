@@ -22,6 +22,7 @@ export function useLeads() {
       if (filters.status) params.append('user_status', filters.status);
       if (filters.category) params.append('lead_category', filters.category);
       if (filters.source) params.append('source', filters.source);
+      if (filters.postType) params.append('post_type', filters.postType);
       if (filters.isFavorite !== null) params.append('is_favorite', String(filters.isFavorite));
       params.append('page', String(filters.page));
       params.append('per_page', String(filters.limit));
@@ -93,6 +94,7 @@ export function useLeads() {
       if (filters.status) params.append('user_status', filters.status);
       if (filters.category) params.append('lead_category', filters.category);
       if (filters.source) params.append('source', filters.source);
+      if (filters.postType) params.append('post_type', filters.postType);
       if (filters.isFavorite !== null) params.append('is_favorite', String(filters.isFavorite));
 
       const response = await api.get(`${API_ROUTES.leads.export}?${params.toString()}`, {

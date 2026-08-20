@@ -65,6 +65,18 @@ function LiveResultCard({ lead, index }: { lead: any; index: number }) {
                     {catCfg.label}
                   </Badge>
                   <SourceBadge source={lead.source} />
+                  {lead.source === 'linkedin' && (
+                    <span className={`text-[9px] px-1.5 py-0.5 rounded font-semibold border ${
+                      lead.post_type === 'buyer' ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20'
+                      : lead.post_type === 'agency' ? 'bg-violet-500/10 text-violet-400 border-violet-500/20'
+                      : lead.post_type === 'hiring' ? 'bg-amber-500/10 text-amber-400 border-amber-500/20'
+                      : 'bg-white/5 text-ice/50 border-white/10'
+                    }`}>
+                      {lead.post_type === 'buyer' ? 'Needs Service'
+                        : lead.post_type === 'agency' ? 'Agency'
+                        : lead.post_type === 'hiring' ? 'Hiring' : 'Post'}
+                    </span>
+                  )}
                   {lead.headline && (
                     <span className="text-[9px] px-1.5 py-0.5 rounded bg-white/5 text-ice/50 font-medium border border-white/10 max-w-[140px] truncate">
                       {lead.headline}
@@ -272,7 +284,11 @@ export default function SearchPage() {
           <h1 className="text-3xl font-bold text-offwhite tracking-tight">
             <span className="gradient-text">Finding hot leads</span>
           </h1>
-          <p className="text-ice/50 mt-2 text-sm">Find and qualify leads from Google Maps or LinkedIn in seconds.</p>
+          <p className="text-ice/50 mt-2 text-sm">
+            {source === 'linkedin'
+              ? 'Find people on LinkedIn who are asking for your service.'
+              : 'Find and qualify leads from Google Maps in seconds.'}
+          </p>
         </div>
       </div>
 
@@ -289,7 +305,7 @@ export default function SearchPage() {
               <div className="grid grid-cols-2 gap-3 mb-6">
                 <button
                   type="button"
-                  onClick={() => setSource('google_maps')}
+                  onClick={() => changeSource('google_maps')}
                   className={`flex items-center justify-center gap-2 px-4 py-3 rounded-xl border transition-all ${
                     source === 'google_maps'
                       ? 'bg-emerald-500/10 border-emerald-500/40 text-emerald-400'
@@ -301,7 +317,7 @@ export default function SearchPage() {
                 </button>
                 <button
                   type="button"
-                  onClick={() => setSource('linkedin')}
+                  onClick={() => changeSource('linkedin')}
                   className={`flex items-center justify-center gap-2 px-4 py-3 rounded-xl border transition-all ${
                     source === 'linkedin'
                       ? 'bg-sky-500/10 border-sky-500/40 text-sky-400'
@@ -357,6 +373,7 @@ export default function SearchPage() {
                   </div>
                   )}
                   {source === 'linkedin' && (
+                  <>
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                     <div>
                       <label className="block text-sm font-medium text-ice/70 mb-2 flex items-center gap-2">
@@ -386,6 +403,11 @@ export default function SearchPage() {
                       </label>
                     </div>
                   </div>
+                  <p className="text-xs text-sky-400/70 flex items-center gap-1.5">
+                    <Sparkles className="w-3.5 h-3.5" />
+                    We search LinkedIn posts for people asking for this service (e.g. "I need a website") and tag each as Buyer, Agency, or Hiring.
+                  </p>
+                  </>
                   )}
                 </div>
                 <SearchInfoSection isAtLimit={isAtLimit} remaining={remaining} searchesPerDay={searchesPerDay} isStarting={isStarting} />

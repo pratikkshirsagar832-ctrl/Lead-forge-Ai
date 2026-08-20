@@ -30,6 +30,7 @@ class LeadListItem(BaseModel):
     profile_picture_url: Optional[str] = None
     connections_count: int = 0
     posted_at: Optional[datetime] = None
+    post_type: Optional[str] = None
     user_status: str = "new"
     is_favorite: bool = False
     has_pitch: bool = False
@@ -74,6 +75,7 @@ class LeadDetail(BaseModel):
     profile_picture_url: Optional[str] = None
     connections_count: int = 0
     posted_at: Optional[datetime] = None
+    post_type: Optional[str] = None
     lead_category: str = "warm"
     website_health_score: Optional[int] = None
     ai_pitch: Optional[str] = None

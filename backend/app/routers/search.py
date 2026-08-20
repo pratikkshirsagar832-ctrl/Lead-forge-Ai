@@ -265,7 +265,7 @@ async def get_search_results(
 
         response = (
             supabase.table("leads")
-            .select("id, source, business_name, category, full_address, phone, email_found, website_url, rating, total_reviews, lead_category, website_health_score, headline, linkedin_url, post_url, post_text, profile_picture_url, connections_count, posted_at, user_status, is_favorite")
+            .select("id, source, business_name, category, full_address, phone, email_found, website_url, rating, total_reviews, lead_category, website_health_score, headline, linkedin_url, post_url, post_text, profile_picture_url, connections_count, posted_at, post_type, user_status, is_favorite")
             .eq("search_id", search_id)
             .order("created_at", desc=False)
             .range(offset, offset + per_page - 1)

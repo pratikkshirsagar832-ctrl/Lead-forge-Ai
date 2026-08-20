@@ -8,6 +8,7 @@ import api from '@/lib/api';
 import { API_ROUTES, USER_STATUSES, LEAD_CATEGORIES } from '@/lib/constants';
 import { GlassCard } from '@/components/shared/GlassCard';
 import { Badge } from '@/components/shared/Badge';
+import { PostTypeBadge } from '@/components/dashboard/PostTypeBadge';
 import { LoadingButton } from '@/components/shared/LoadingButton';
 import { Skeleton } from '@/components/shared/Skeleton';
 import { ScoreBreakdown } from '@/components/dashboard/ScoreBreakdown';
@@ -198,6 +199,7 @@ export default function LeadDetailPage() {
                         : <><MapPin className="w-3 h-3 mr-1" />Google Maps</>}
                     </Badge>
                   )}
+                  {lead.source === 'linkedin' && <PostTypeBadge postType={lead.post_type} />}
                   {lead.is_favorite && (
                     <Badge variant="outline" className="border-rose-500/30 text-rose-400 bg-rose-500/10">
                       Favorited

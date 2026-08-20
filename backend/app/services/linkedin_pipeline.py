@@ -4,10 +4,10 @@ Hyperclients — LinkedIn Intent-Lead Pipeline
 Orchestrates a LinkedIn intent search that feeds the SAME searches/leads flow
 as the Google Maps pipeline:
 
-  1. Build Boolean search query from user input
+  1. Build intent Boolean query from user input (e.g. "ui-ux" → I need ui ux)
   2. Run Apify post-search actor
-  3. Filter out recruiter/hiring posts, dedupe by author
-  4. Save person leads into the shared `leads` table (source='linkedin')
+  3. Classify posts: buyer (needs the service) / agency (sells it) / hiring / job_seeker
+  4. Exclude job seekers, dedupe by author, save tagged leads (source='linkedin')
   5. Optional email enrichment via profile-scraper actor
 """
 
@@ -26,37 +26,90 @@ logger = logging.getLogger(__name__)
 
 MAX_RESULTS_CAP = 50
 FETCH_MULTIPLIER = 4
+FETCH_MIN = 50
+
+# ── Post classification signals ─────────────────────────────────────────
+
+JOB_SEEKER_SIGNALS = (
+    "open to work", "seeking a new role", "seeking employment", "seeking new opportunities",
+    "looking for a new role", "looking for new opportunities", "seeking a role",
+    "looking for a job", "looking for full-time", "looking for a position",
+    "available for interviews", "appreciate any leads", "hiring managers",
+    "recruiters to reach out", "dm me with opportunities", "seeking referrals",
+    "i am open to", "i'm open to", "i am looking for a job",
+)
+
 HIRING_SIGNALS = (
     "#hiring", "we are hiring", "we're hiring", "now hiring", "urgently hiring",
     "job opening", "job opportunity", "job vacancy", "open position", "positions available",
-    "vacancy", "recruiting", "recruitment", "recruiter", "candidate", "candidates",
+    "vacancy", "recruiting", "recruitment", "recruiter", "candidates",
     "to join our", "to join us", "to join my", "join our team", "join my team",
-    "join us at", "join our", "we are looking for", "we're looking for",
-    "looking for talented", "looking for skilled", "looking for an experienced",
-    "we need a", "we need an", "send your portfolio", "share your portfolio",
-    "submit your resume", "apply now", "apply here", "apply via", "internship",
-    "intern", "hiring a", "hiring an",
-    "seeking a new role", "seeking employment", "open to work", "seeking new opportunities",
-    "looking for a new role", "looking for new opportunities", "seeking a role",
+    "join us at", "join our", "internship", "intern", "hiring a", "hiring an",
+    "we need a", "we need an",
+)
+
+AGENCY_SIGNALS = (
+    "we offer", "we provide", "we specialize", "our agency", "my agency",
+    "our studio", "my studio", "we're an agency", "we are an agency",
+    "we're a studio", "we are a studio", "our services", "we help businesses",
+    "we have helped", "we deliver", "our team of", "free consultation",
+    "book a call", "schedule a call", "contact us", "dm us", "dm me",
+    "check out our work", "our portfolio", "starting at", "pricing",
+    "packages", "we build", "we design", "we develop", "we do seo",
+    "we do web", "we do design", "i offer", "i provide", "i specialize",
+    "freelancer", "freelance", "i'm available for", "i am available for",
+    "open for work", "looking for clients", "taking new clients",
+    "accepting new clients", "hire me", "let's work together",
+    "lets work together", "we can help you", "i can help you",
+    "need clients", "available for hire", "quality work", "affordable pricing",
+    "get a quote", "get free quote", "limited slots",
+)
+
+BUYER_SIGNALS = (
+    "i need", "i want", "i'm looking for", "i am looking for", "looking for a",
+    "looking for an", "need help with", "help with", "anyone recommend",
+    "recommend me", "recommend a", "recommend an", "recommendations for",
+    "suggestions for", "suggest me", "does anyone know", "anyone know a good",
+    "who can help", "who does", "i'm searching for", "i am searching for",
+    "looking to hire", "want to hire", "need to hire", "i need someone",
+    "i want someone", "can you recommend", "please recommend", "looking for someone",
+    "need a", "need an", "in need of",
 )
 
 
-def build_boolean_query(user_query: str) -> str:
-    """Turn a plain phrase into a LinkedIn Boolean query with quoted variants."""
+def build_boolean_query(user_query: str) -> list[str]:
+    """Turn a plain phrase/niche into a list of intent search phrases.
+
+    The Apify actor takes `searchQueries` as an ARRAY of simple phrases —
+    a single boolean OR string returns zero results. Returns up to 8 plain
+    intent phrases for the actor to search.
+    """
     q = user_query.strip().strip('"')
+    q = " ".join(q.split())
+    if not q:
+        return ["I need help"]
+
+    # Normalize common tokens
+    q_norm = q.replace("ui-ux", "ui ux").replace("ui/ux", "ui ux").replace("website development", "website development")
+
     low = q.lower()
-    if any(low.startswith(p) for p in ("i need", "i want", "i'm looking", "i am looking", "looking for", "need ")):
-        patterns = [q]
+    # If the user already typed an intent phrase, keep it as the base pattern
+    if any(low.startswith(p) for p in ("i need", "i want", "i'm looking", "i am looking", "looking for", "need ", "help with", "anyone", "recommend", "does anyone")):
+        base = q_norm
+        patterns = [base]
     else:
-        service = q
+        base = q_norm
         patterns = [
-            f"I need {service}",
-            f"I need a {service}",
-            f"I want {service}",
-            f"looking for {service}",
-            f"looking for a {service}",
-            f"I'm looking for {service}",
+            f"I need {base}",
+            f"I need a {base}",
+            f"I want {base}",
+            f"I'm looking for {base}",
+            f"looking for {base}",
+            f"looking for a {base}",
+            f"anyone recommend {base}",
+            f"need help with {base}",
         ]
+
     seen: set[str] = set()
     out: list[str] = []
     for p in patterns:
@@ -65,16 +118,42 @@ def build_boolean_query(user_query: str) -> str:
         if key not in seen:
             seen.add(key)
             out.append(p)
-    return " OR ".join(f'"{p}"' for p in out[:6])
+    return out[:8]
 
 
-def is_hiring_post(item: dict) -> bool:
-    """True if the post is a recruiter post (poster wants to hire, not buy)."""
+def classify_post_type(item: dict) -> str:
+    """Classify a post: buyer / agency / hiring / job_seeker."""
     author = item.get("author") or {}
     if author.get("hiring") is True:
-        return True
+        return "hiring"
+
     text = ((item.get("content") or "") + " " + (author.get("headline") or "")).lower()
-    return any(signal in text for signal in HIRING_SIGNALS)
+    headline = (author.get("headline") or "").lower()
+
+    # Job seeker: author headline/company usually shows current employer; "I'm a [role]" = seeker
+    if any(signal in text for signal in JOB_SEEKER_SIGNALS):
+        return "job_seeker"
+    if "looking for a" in text and "role" in text:
+        return "job_seeker"
+    if " i'm a " in f" {text} " and any(s in text for s in ("looking for", "seeking", "opportunities", "role")):
+        return "job_seeker"
+    if " i am a " in f" {text} " and any(s in text for s in ("looking for", "seeking", "opportunities", "role")):
+        return "job_seeker"
+
+    if any(signal in text for signal in HIRING_SIGNALS):
+        return "hiring"
+
+    if any(signal in text for signal in AGENCY_SIGNALS):
+        return "agency"
+
+    if any(signal in headline for signal in ("seo", "web design", "web developer", "ui/ux", "ui ux", "designer", "developer", "freelance", "agency")):
+        # Author's headline says they SELL the service → agency
+        return "agency"
+
+    if any(signal in text for signal in BUYER_SIGNALS):
+        return "buyer"
+
+    return "buyer"
 
 
 def _parse_posted_at(value) -> str | None:
@@ -152,18 +231,30 @@ def _get_location(author: dict) -> str:
     return ""
 
 
-def process_items(items: list[dict], max_results: int) -> list[dict]:
-    """Filter + dedupe raw actor items into lead records (max max_results)."""
+POST_TYPE_ORDER = {"buyer": 0, "agency": 1, "hiring": 2, "job_seeker": 3}
+
+
+def process_items(items: list[dict], max_results: int) -> tuple[list[dict], int]:
+    """Classify + dedupe raw actor items into lead records.
+
+    Returns (leads, skipped_count). Job seekers are always skipped.
+    Buyers are kept first, then agencies and hiring posts (all tagged).
+    """
     seen: set[str] = set()
     leads: list[dict] = []
+    skipped = 0
     for item in items:
         author = item.get("author") or {}
         public_id = author.get("publicIdentifier") or ""
         if not public_id or public_id in seen:
-            continue
-        if is_hiring_post(item):
+            skipped += 1
             continue
         seen.add(public_id)
+
+        post_type = classify_post_type(item)
+        if post_type == "job_seeker":
+            skipped += 1
+            continue
 
         likes, comments = _get_engagement(item)
         leads.append({
@@ -179,10 +270,13 @@ def process_items(items: list[dict], max_results: int) -> list[dict]:
             "engagement_comments": comments,
             "profile_picture_url": _get_avatar(author),
             "connections_count": author.get("connectionsCount") or 0,
+            "post_type": post_type,
         })
         if len(leads) >= max_results:
             break
-    return leads
+
+    leads.sort(key=lambda l: POST_TYPE_ORDER.get(l["post_type"], 9))
+    return leads, skipped
 
 
 async def run_linkedin_pipeline(
@@ -199,28 +293,30 @@ async def run_linkedin_pipeline(
         await _update_search(supabase, search_id, {
             "status": "scraping",
             "progress_percent": 5,
-            "message": "Building search queries...",
+            "message": "Building intent queries...",
         })
 
-        boolean_query = build_boolean_query(query)
-        fetch_target = min(max(max_results * FETCH_MULTIPLIER, max_results + 10), 100)
-        logger.info(f"[LinkedInPipeline:{search_id}] Query: {boolean_query} (fetch {fetch_target})")
+        phrases = build_boolean_query(query)[:4]
+        fetch_target = min(max(max_results * FETCH_MULTIPLIER, FETCH_MIN), 100)
+        logger.info(f"[LinkedInPipeline:{search_id}] Queries: {phrases} (fetch {fetch_target})")
 
         await _update_search(supabase, search_id, {
             "progress_percent": 15,
             "message": f"Searching LinkedIn posts for '{query}'...",
         })
 
-        items = await asyncio.to_thread(run_post_search, boolean_query, fetch_target)
+        items = await asyncio.to_thread(run_post_search, phrases, fetch_target)
         raw_count = len(items)
         logger.info(f"[LinkedInPipeline:{search_id}] Actor returned {raw_count} raw posts")
 
         await _update_search(supabase, search_id, {
             "progress_percent": 55,
-            "message": f"Found {raw_count} posts. Filtering for buyers...",
+            "message": f"Found {raw_count} posts. Classifying buyers vs agencies...",
         })
 
-        leads = process_items(items, max_results)
+        leads, skipped = process_items(items, max_results)
+        buyers = sum(1 for l in leads if l["post_type"] == "buyer")
+
         if not leads:
             await _update_search(supabase, search_id, {
                 "status": "completed",
@@ -233,12 +329,12 @@ async def run_linkedin_pipeline(
                 "emails_found": 0,
                 "completed_at": datetime.now(timezone.utc).isoformat(),
             })
-            logger.info(f"[LinkedInPipeline:{search_id}] No leads after filtering")
+            logger.info(f"[LinkedInPipeline:{search_id}] No leads after classification")
             return
 
         await _update_search(supabase, search_id, {
             "progress_percent": 65,
-            "message": f"Saving {len(leads)} leads...",
+            "message": f"Saving {len(leads)} leads ({buyers} buyers)...",
         })
 
         lead_ids = await _save_leads(supabase, search_id, user_id, leads)
@@ -252,6 +348,7 @@ async def run_linkedin_pipeline(
             emails_found = await _enrich_emails(supabase, search_id, user_id, leads, lead_ids)
 
         saved = len(lead_ids)
+        total_skipped = max(0, raw_count - saved)
         suffix = f", {emails_found} emails" if emails_found else ""
         await _update_search(supabase, search_id, {
             "status": "completed",
@@ -260,7 +357,7 @@ async def run_linkedin_pipeline(
             "total_results": saved,
             "hot_leads": saved,
             "warm_leads": 0,
-            "skipped": max(0, len(leads) - saved) + raw_count - len(leads),
+            "skipped": total_skipped,
             "emails_found": emails_found,
             "completed_at": datetime.now(timezone.utc).isoformat(),
         })
@@ -311,7 +408,7 @@ async def _save_leads(supabase, search_id: str, user_id: str, leads: list[dict])
             "user_id": user_id,
             "source": "linkedin",
             "business_name": lead.get("full_name") or "Unknown",
-            "category": "LinkedIn",
+            "category": lead.get("company") or "LinkedIn",
             "full_address": lead.get("location") or "",
             "phone": "",
             "email_found": "",
@@ -321,6 +418,7 @@ async def _save_leads(supabase, search_id: str, user_id: str, leads: list[dict])
             "google_maps_link": "",
             "description": lead.get("post_text") or "",
             "lead_category": "hot",
+            "post_type": lead.get("post_type") or "unknown",
             "linkedin_url": linkedin_url,
             "post_url": lead.get("post_url") or "",
             "post_text": lead.get("post_text") or "",
@@ -359,12 +457,10 @@ async def _enrich_emails(
     supabase, search_id: str, user_id: str, leads: list[dict], lead_ids: list[str]
 ) -> int:
     urls = []
-    url_to_index = {}
-    for idx, lead in enumerate(leads):
+    for lead in leads:
         url = (lead.get("linkedin_url") or "").strip()
         if url:
             urls.append(url)
-            url_to_index[url] = idx
     if not urls:
         return 0
 
@@ -424,7 +520,6 @@ async def _enrich_emails(
 
 
 def _public_id_from_url(url: str) -> str:
-    # https://www.linkedin.com/in/<public-id>  or  /in/<public-id>?miniProfileUrn=...
     try:
         part = url.split(".com/in/", 1)[1]
         return part.split("/")[0].split("?")[0]

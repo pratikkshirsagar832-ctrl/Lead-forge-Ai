@@ -77,6 +77,7 @@ export interface LeadListItem {
   profile_picture_url?: string | null;
   connections_count?: number;
   posted_at?: string | null;
+  post_type?: string | null;
   user_status: string;
   user_notes?: string;
   is_favorite: boolean;
@@ -105,6 +106,7 @@ export interface LeadDetail {
   profile_picture_url?: string | null;
   connections_count?: number;
   posted_at?: string | null;
+  post_type?: string | null;
   lead_category: string;
   website_health_score: number | null;
   ai_pitch?: string | null;

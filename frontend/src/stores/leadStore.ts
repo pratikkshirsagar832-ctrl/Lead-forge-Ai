@@ -11,6 +11,7 @@ interface LeadsState {
     search: string;
     searchId: string;
     source: string;
+    postType: string;
     page: number;
     limit: number;
   };
@@ -29,6 +30,7 @@ export const useLeadStore = create<LeadsState>((set) => ({
     search: '',
     searchId: '',
     source: '',
+    postType: '',
     page: 1,
     limit: 50,
   },

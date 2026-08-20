@@ -23,6 +23,7 @@ import {
 import { CSS } from '@dnd-kit/utilities';
 import { motion } from 'framer-motion';
 import { useToast } from '@/hooks/useToast';
+import { PostTypeBadge } from '@/components/dashboard/PostTypeBadge';
 import { API_ROUTES, USER_STATUSES } from '@/lib/constants';
 import type { LeadListItem } from '@/lib/types';
 import api from '@/lib/api';
@@ -120,6 +121,7 @@ function PipelineCard({ lead, isDragOverlay }: { lead: LeadListItem; isDragOverl
                 Maps
               </span>
             )}
+            {lead.source === 'linkedin' && <PostTypeBadge postType={lead.post_type} />}
           </div>
 
           {lead.category && (

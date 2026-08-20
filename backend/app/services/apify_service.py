@@ -90,14 +90,23 @@ def _run_with_key(actor_id: str, key: str, payload: dict) -> list[dict]:
 
 
 def run_post_search(
-    search_query: str,
+    search_queries: str | list[str],
     max_posts: int = 60,
     posted_limit: str = "month",
 ) -> list[dict]:
-    """Search LinkedIn posts matching a boolean query. Returns raw items."""
+    """Search LinkedIn posts matching intent phrases. Returns raw items.
+
+    `search_queries` is a list of plain phrases — the actor searches each
+    phrase independently and returns merged, deduplicated results.
+    """
+    if isinstance(search_queries, str):
+        search_queries = [search_queries]
+    # maxPosts is PER search query on the actor — cap it so the total
+    # workload stays bounded when multiple phrases are searched.
+    per_query = max(5, max_posts // max(len(search_queries), 1))
     payload = {
-        "searchQueries": [search_query],
-        "maxPosts": max_posts,
+        "searchQueries": search_queries,
+        "maxPosts": per_query,
         "postedLimit": posted_limit,
         "sortBy": "date",
         "profileScraperMode": "main",

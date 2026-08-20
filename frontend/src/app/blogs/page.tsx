@@ -1,6 +1,6 @@
 ﻿import type { Metadata } from 'next';
 import Link from 'next/link';
-import { CalendarDays, ArrowRight } from 'lucide-react';
+import { ArrowRight } from 'lucide-react';
 import { getBlogs } from '../../../lib/blog-store';
 import { BlogBackground } from '../../components/blog-background';
 import { BlogImage } from '../../components/blog-image';
@@ -50,23 +50,10 @@ export default function BlogsIndexPage() {
                   />
                 )}
                 <div className="p-6 md:p-8">
-                  <div className="flex items-center gap-3 text-xs font-semibold text-text-muted uppercase tracking-wide mb-3">
-                    <span className="px-2.5 py-1 rounded-full bg-primary/15 text-primary-light border border-primary/20">
-                      {post.category}
-                    </span>
-                    <span className="flex items-center gap-1.5">
-                      <CalendarDays className="w-3.5 h-3.5" />
-                      {new Date(post.date).toLocaleDateString('en-IN', {
-                        day: 'numeric',
-                        month: 'long',
-                        year: 'numeric',
-                      })}
-                    </span>
-                  </div>
-                  <h2 className="text-xl md:text-2xl font-bold text-offwhite font-heading mb-2 group-hover:text-secondary transition-colors">
+                  <h2 className="text-xl md:text-2xl font-bold text-offwhite font-heading mb-3 group-hover:text-secondary transition-colors">
                     {post.title}
                   </h2>
-                  <p className="text-ice/85 leading-relaxed">{post.excerpt}</p>
+                  <p className="text-ice/85 leading-relaxed line-clamp-6">{post.excerpt}</p>
                   <div className="mt-4 inline-flex items-center gap-1.5 text-sm font-semibold text-brand-accent group-hover:gap-3 transition-all">
                     Read article <ArrowRight className="w-4 h-4" />
                   </div>

@@ -115,11 +115,12 @@ function normalizeFaqs(input: unknown): { q: string; a: string }[] {
 }
 
 function cleanExcerpt(text: string): string {
-  return text
+  const clean = text
     .replace(/^[#>\-*\s]+/gm, '')
     .replace(/#/g, '')
     .replace(/\s+/g, ' ')
     .trim();
+  return clean.length > 160 ? `${clean.slice(0, 160).trimEnd()}...` : clean;
 }
 
 export function createBlog(input: Partial<BlogPost>): { post?: BlogPost; error?: string } {

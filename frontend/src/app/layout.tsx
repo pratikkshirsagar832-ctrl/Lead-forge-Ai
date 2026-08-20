@@ -14,6 +14,7 @@ export const metadata: Metadata = {
   description: 'Automated Lead Generation Engine',
   icons: {
     icon: [
+      { url: '/hyperclients-icon.svg', type: 'image/svg+xml' },
       { url: '/hyperclients-icon.png', type: 'image/png' },
       { url: '/favicon.png', sizes: '32x32', type: 'image/png' },
       { url: '/icon-192.png', sizes: '192x192', type: 'image/png' },

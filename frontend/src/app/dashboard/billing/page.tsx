@@ -276,7 +276,7 @@ function BillingContent() {
       {/* Need help */}
       <div className="text-center">
         <p className="text-xs text-ice/40">
-          Need a custom plan? <Link href="mailto:support@hyperclients.ai" className="text-steel hover:underline">Contact us</Link>
+          Need a custom plan? <Link href="mailto:contact@hyperclients.online" className="text-steel hover:underline">Contact us</Link>
         </p>
       </div>
     </div>

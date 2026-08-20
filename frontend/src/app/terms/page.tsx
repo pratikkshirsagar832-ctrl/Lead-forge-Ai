@@ -101,6 +101,7 @@ export default function TermsPage() {
         <ul className="list-disc pl-6 space-y-1.5">
           <li><strong className="text-offwhite">HyperClients</strong>, New Delhi, India</li>
           <li><strong className="text-offwhite">Contact:</strong> +91 9310642998</li>
+          <li><strong className="text-offwhite">Email:</strong> contact@hyperclients.online</li>
         </ul>
       </PolicySection>
     </ContentPage>

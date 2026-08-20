@@ -1,6 +1,6 @@
 import Link from 'next/link';
 import Image from 'next/image';
-import { Target, Zap, Shield } from 'lucide-react';
+import { Target, Zap, Shield, Mail } from 'lucide-react';
 
 export function Footer() {
   return (
@@ -33,6 +33,10 @@ export function Footer() {
                 Secure
               </span>
             </div>
+            <a href="mailto:contact@hyperclients.online" className="inline-flex items-center gap-2 text-sm text-ice/50 hover:text-steel transition-colors duration-200 mt-4">
+              <Mail className="w-4 h-4 text-steel/60" />
+              contact@hyperclients.online
+            </a>
           </div>
 
           <div>

@@ -1,6 +1,7 @@
 import type { Metadata } from 'next';
 import Link from 'next/link';
-import { Target, Search, Users, Rocket, ArrowRight } from 'lucide-react';
+import Image from 'next/image';
+import { Target, Search, Users, Rocket, ArrowRight, Mail } from 'lucide-react';
 import Header from '@/components/landing/Header';
 import { Footer } from '@/components/landing/Footer';
 
@@ -15,11 +16,13 @@ const founders = [
     name: 'Bhaskar Gupta',
     role: 'Founder, Radian Marketing',
     bio: 'A Delhi-based digital marketer with years of hands-on experience helping D2C, SaaS, and B2B brands grow. He brings the market experience.',
+    photo: '/publisher.png',
   },
   {
     name: 'Pratik Kshirsagar',
     role: 'Co-founder & AI/ML Engineer',
     bio: 'A Class 12 student and AI/ML enthusiast already building things most professionals have not attempted yet. He brings the machine intelligence.',
+    photo: '/pratik-kshirsagar.png',
   },
 ];
 
@@ -83,8 +86,8 @@ export default function AboutPage() {
           <div className="grid md:grid-cols-2 gap-5">
             {founders.map((f) => (
               <div key={f.name} className="glass-card-premium rounded-2xl p-6 md:p-8">
-                <div className="w-12 h-12 rounded-full bg-gradient-to-br from-primary to-brand-accent flex items-center justify-center font-heading font-bold text-offwhite mb-4">
-                  {f.name.split(' ').map((n) => n[0]).join('')}
+                <div className="w-20 h-20 rounded-2xl overflow-hidden ring-2 ring-brand-accent/30 mb-4 bg-ocean">
+                  <Image src={f.photo} alt={f.name} width={80} height={80} className="w-full h-full object-cover" />
                 </div>
                 <h3 className="text-lg font-bold text-offwhite font-heading">{f.name}</h3>
                 <p className="text-xs font-semibold uppercase tracking-wider text-brand-accent-light mb-3">{f.role}</p>
@@ -110,6 +113,24 @@ export default function AboutPage() {
             with the right intelligence can outpunch agencies ten times their size. That is the edge HyperClients
             gives you.
           </p>
+        </section>
+
+        <section className="glass-card-premium rounded-2xl p-6 md:p-8 mb-10">
+          <div className="flex items-center gap-3 mb-4">
+            <span className="inline-flex items-center justify-center w-10 h-10 rounded-xl bg-primary/20 border border-primary/30">
+              <Mail className="w-5 h-5 text-brand-accent-light" />
+            </span>
+            <h2 className="text-xl font-bold text-offwhite font-heading">Get in Touch</h2>
+          </div>
+          <p className="text-ice/80 leading-relaxed text-[15px] mb-4">
+            Have questions about HyperClients or want to partner with us? Write to us anytime.
+          </p>
+          <a
+            href="mailto:contact@hyperclients.online"
+            className="btn-gradient-cyan rounded-xl px-6 py-3 text-sm inline-flex items-center gap-2"
+          >
+            <Mail className="w-4 h-4" /> contact@hyperclients.online
+          </a>
         </section>
 
         <div className="flex flex-wrap gap-3">

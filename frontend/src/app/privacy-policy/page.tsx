@@ -89,6 +89,7 @@ export default function PrivacyPolicyPage() {
           <li><strong className="text-offwhite">Name:</strong> Bhaskar Gupta</li>
           <li><strong className="text-offwhite">Platform:</strong> HyperClients (hyperclient.online)</li>
           <li><strong className="text-offwhite">Contact:</strong> +91 9310642998</li>
+          <li><strong className="text-offwhite">Email:</strong> contact@hyperclients.online</li>
         </ul>
         <p>
           Any grievances or complaints regarding data processing must be submitted to the Grievance Officer. We will

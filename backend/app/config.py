@@ -18,6 +18,9 @@ class Settings(BaseSettings):
 
     openai_api_key: str = ""
 
+    apify_api_key: str = ""
+    apify_api_key_2: str = ""
+
     razorpay_key_id: str = ""
     razorpay_key_secret: str = ""
 

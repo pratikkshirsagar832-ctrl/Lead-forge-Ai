@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useRef } from 'react';
 import { useForm } from 'react-hook-form';
 import { z } from 'zod';
 import { zodResolver } from '@hookform/resolvers/zod';
@@ -14,7 +14,7 @@ import { SearchProgressCard } from '@/components/dashboard/SearchProgressCard';
 import { UpgradeModal } from '@/components/shared/UpgradeModal';
 import { API_ROUTES } from '@/lib/constants';
 import { useSearchStore } from '@/stores/searchStore';
-import { MapPin, Briefcase, SearchIcon, Sparkles, Globe, Star, Phone, ChevronRight, Users, AlertCircle, Search } from 'lucide-react';
+import { MapPin, Briefcase, SearchIcon, Sparkles, Globe, Star, Phone, ChevronRight, Users, AlertCircle, Search, Linkedin, Mail, Clock, ExternalLink } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import Link from 'next/link';
 import { LEAD_CATEGORIES } from '@/lib/constants';
@@ -23,6 +23,25 @@ const mapsSchema = z.object({
   niche: z.string().min(2, 'Niche must be at least 2 characters'),
   location: z.string().min(2, 'Location must be at least 2 characters'),
 });
+
+const linkedinSchema = z.object({
+  niche: z.string().min(2, 'Enter what people are asking for, e.g. I need SEO'),
+  location: z.string().optional(),
+});
+
+function SourceBadge({ source }: { source?: string }) {
+  const isLinkedIn = source === 'linkedin';
+  return (
+    <span className={`text-[9px] px-1.5 py-0.5 rounded font-semibold flex items-center gap-0.5 border ${
+      isLinkedIn
+        ? 'bg-sky-500/10 text-sky-400 border-sky-500/20'
+        : 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20'
+    }`}>
+      {isLinkedIn ? <Linkedin className="w-2.5 h-2.5" /> : <MapPin className="w-2.5 h-2.5" />}
+      {isLinkedIn ? 'LinkedIn' : 'Maps'}
+    </span>
+  );
+}
 
 function LiveResultCard({ lead, index }: { lead: any; index: number }) {
   const catKey = lead.lead_category || 'warm';
@@ -45,10 +64,12 @@ function LiveResultCard({ lead, index }: { lead: any; index: number }) {
                   >
                     {catCfg.label}
                   </Badge>
-                  <span className="text-[9px] px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-400 font-semibold flex items-center gap-0.5 border border-emerald-500/20">
-                    <MapPin className="w-2.5 h-2.5" />
-                    Maps
-                  </span>
+                  <SourceBadge source={lead.source} />
+                  {lead.headline && (
+                    <span className="text-[9px] px-1.5 py-0.5 rounded bg-white/5 text-ice/50 font-medium border border-white/10 max-w-[140px] truncate">
+                      {lead.headline}
+                    </span>
+                  )}
                 {lead.website_health_score != null && (
                   <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${
                     lead.website_health_score >= 70 ? 'text-emerald-400 bg-emerald-500/10' :
@@ -77,6 +98,36 @@ function LiveResultCard({ lead, index }: { lead: any; index: number }) {
               {lead.category && <span className="text-ice/40">{lead.category}</span>}
             </div>
             <div className="space-y-1 text-[11px] text-ice/60">
+              {lead.source === 'linkedin' ? (
+                <>
+                  {lead.email_found && (
+                    <div className="flex items-center gap-1.5">
+                      <Mail className="w-3 h-3 text-steel/60" />
+                      <span className="truncate text-emerald-400">{lead.email_found}</span>
+                    </div>
+                  )}
+                  {lead.post_text && (
+                    <p className="line-clamp-2 italic text-ice/50 border-l-2 border-steel/30 pl-2">
+                      {lead.post_text}
+                    </p>
+                  )}
+                  {lead.posted_at && (
+                    <div className="flex items-center gap-1.5 text-ice/40">
+                      <Clock className="w-3 h-3" />
+                      <span>posted {new Date(lead.posted_at).toLocaleDateString()}</span>
+                    </div>
+                  )}
+                  {lead.post_url && (
+                    <div className="flex items-center gap-1.5 text-sky-400">
+                      <ExternalLink className="w-3 h-3" />
+                      <a href={lead.post_url} target="_blank" rel="noopener noreferrer" onClick={(e) => e.stopPropagation()} className="truncate hover:underline">
+                        View post on LinkedIn
+                      </a>
+                    </div>
+                  )}
+                </>
+              ) : (
+                <>
               {lead.phone && (
                 <div className="flex items-center gap-1.5">
                   <Phone className="w-3 h-3 text-steel/60" />
@@ -91,6 +142,8 @@ function LiveResultCard({ lead, index }: { lead: any; index: number }) {
                   <span className="text-ice/30 italic">No website</span>
                 )}
               </div>
+                </>
+              )}
             </div>
           </div>
           <div className="px-4 py-2 border-t border-white/5 flex items-center justify-between text-[10px] font-semibold text-steel/60 group-hover:text-steel transition-colors">
@@ -121,6 +174,10 @@ export default function SearchPage() {
   const [showUpgradeModal, setShowUpgradeModal] = useState(false);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
   const [reviewFilter, setReviewFilter] = useState<'all' | { min: number; max: number | null }>('all');
+  const [source, setSource] = useState<'google_maps' | 'linkedin'>('google_maps');
+  const sourceRef = useRef<'google_maps' | 'linkedin'>('google_maps');
+  const [enrichEmails, setEnrichEmails] = useState(true);
+  const [maxResults, setMaxResults] = useState(20);
 
   const REVIEW_RANGES = [
     { key: 'all', label: 'All' },
@@ -137,21 +194,52 @@ export default function SearchPage() {
     );
   }, [results, reviewFilter]);
 
-  const mapsForm = useForm({ resolver: zodResolver(mapsSchema) });
+  const mapsForm = useForm<{ niche: string; location?: string }>({
+    resolver: ((values: { niche: string; location?: string }) => {
+      const schema = sourceRef.current === 'linkedin' ? linkedinSchema : mapsSchema;
+      const parsed = schema.safeParse(values);
+      if (parsed.success) {
+        return { values: parsed.data as { niche: string; location?: string }, errors: {} };
+      }
+      const errors: Record<string, { type: string; message: string }> = {};
+      for (const issue of parsed.error.issues) {
+        const field = String(issue.path[0] ?? '');
+        errors[field] = { type: issue.code, message: issue.message };
+      }
+      return { values: {} as { niche: string; location?: string }, errors };
+    }) as any,
+  });
+
+  const changeSource = (next: 'google_maps' | 'linkedin') => {
+    sourceRef.current = next;
+    setSource(next);
+    mapsForm.clearErrors();
+  };
 
   useEffect(() => {
     resumePollingIfActive();
     api.get('/api/auth/me').then(r => setSubscription(r.data?.subscription)).catch(() => {});
   }, [resumePollingIfActive]);
 
+  useEffect(() => {
+    if (typeof window !== 'undefined' && window.location.search.includes('source=linkedin')) {
+      sourceRef.current = 'linkedin';
+      setSource('linkedin');
+    }
+  }, []);
+
   const remaining = subscription?.remaining_searches ?? 1;
   const searchesPerDay = subscription?.searches_per_day ?? 1;
   const isAtLimit = remaining <= 0;
 
-  const onSubmitMaps = async (data: { niche: string; location: string }) => {
+  const onSubmitMaps = async (data: { niche: string; location?: string }) => {
     if (isAtLimit) { setShowUpgradeModal(true); return; }
     try {
-      await startSearch(data.niche, data.location);
+      if (source === 'linkedin') {
+        await startSearch(data.niche, '', { source: 'linkedin', enrichEmails, maxResults });
+      } else {
+        await startSearch(data.niche, data.location ?? '');
+      }
     } catch (e: any) {
       if (e.response?.status === 429) setShowUpgradeModal(true);
     }
@@ -184,7 +272,7 @@ export default function SearchPage() {
           <h1 className="text-3xl font-bold text-offwhite tracking-tight">
             <span className="gradient-text">Finding hot leads</span>
           </h1>
-          <p className="text-ice/50 mt-2 text-sm">Find and qualify leads from Google Maps in seconds.</p>
+          <p className="text-ice/50 mt-2 text-sm">Find and qualify leads from Google Maps or LinkedIn in seconds.</p>
         </div>
       </div>
 
@@ -198,12 +286,38 @@ export default function SearchPage() {
             transition={{ duration: 0.3 }}
           >
             <div className="glass-card-premium rounded-2xl p-8 max-w-3xl mx-auto border-ocean/20">
+              <div className="grid grid-cols-2 gap-3 mb-6">
+                <button
+                  type="button"
+                  onClick={() => setSource('google_maps')}
+                  className={`flex items-center justify-center gap-2 px-4 py-3 rounded-xl border transition-all ${
+                    source === 'google_maps'
+                      ? 'bg-emerald-500/10 border-emerald-500/40 text-emerald-400'
+                      : 'bg-navy/40 border-ocean/20 text-ice/50 hover:border-ocean/40'
+                  }`}
+                >
+                  <MapPin className="w-4 h-4" />
+                  <span className="font-semibold">Google Maps</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setSource('linkedin')}
+                  className={`flex items-center justify-center gap-2 px-4 py-3 rounded-xl border transition-all ${
+                    source === 'linkedin'
+                      ? 'bg-sky-500/10 border-sky-500/40 text-sky-400'
+                      : 'bg-navy/40 border-ocean/20 text-ice/50 hover:border-ocean/40'
+                  }`}
+                >
+                  <Linkedin className="w-4 h-4" />
+                  <span className="font-semibold">LinkedIn Posts</span>
+                </button>
+              </div>
               <form onSubmit={mapsForm.handleSubmit(onSubmitMaps)} className="space-y-6">
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                <div className={source === 'linkedin' ? '' : 'grid grid-cols-1 md:grid-cols-2 gap-6'}>
                   <div>
                     <label className="block text-sm font-medium text-ice/70 mb-2 flex items-center gap-2">
                       <TargetIcon className="w-4 h-4 text-steel" />
-                      Target Niche
+                      {source === 'linkedin' ? 'What are people asking for?' : 'Target Niche'}
                     </label>
                     <div className="relative group">
                       <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
@@ -212,7 +326,7 @@ export default function SearchPage() {
                       <input
                         {...mapsForm.register('niche')}
                         type="text"
-                        placeholder="e.g. Plumbers, Dentists"
+                        placeholder={source === 'linkedin' ? 'e.g. I need SEO help' : 'e.g. Plumbers, Dentists'}
                         className="w-full pl-10 pr-4 py-3 rounded-xl border border-ocean/30 bg-navy/60 focus:bg-navy/80 focus:ring-2 focus:ring-steel/40 focus:border-steel/50 transition-all text-offwhite text-lg placeholder-ice/30 outline-none"
                       />
                     </div>
@@ -220,6 +334,7 @@ export default function SearchPage() {
                       <p className="text-red-400 text-sm mt-1.5">{mapsForm.formState.errors.niche.message}</p>
                     )}
                   </div>
+                  {source === 'google_maps' && (
                   <div>
                     <label className="block text-sm font-medium text-ice/70 mb-2 flex items-center gap-2">
                       <MapPin className="w-4 h-4 text-steel" />
@@ -240,6 +355,38 @@ export default function SearchPage() {
                       <p className="text-red-400 text-sm mt-1.5">{mapsForm.formState.errors.location.message}</p>
                     )}
                   </div>
+                  )}
+                  {source === 'linkedin' && (
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-sm font-medium text-ice/70 mb-2 flex items-center gap-2">
+                        <Users className="w-4 h-4 text-steel" />
+                        Max Leads
+                      </label>
+                      <select
+                        value={maxResults}
+                        onChange={(e) => setMaxResults(Number(e.target.value))}
+                        className="w-full px-3 py-3 rounded-xl border border-ocean/30 bg-navy/60 text-offwhite outline-none focus:ring-2 focus:ring-steel/40"
+                      >
+                        {[5, 10, 20, 30, 50].map(n => (
+                          <option key={n} value={n}>{n} leads</option>
+                        ))}
+                      </select>
+                    </div>
+                    <div className="flex items-end pb-1">
+                      <label className="flex items-center gap-2 text-sm text-ice/70 cursor-pointer select-none">
+                        <input
+                          type="checkbox"
+                          checked={enrichEmails}
+                          onChange={(e) => setEnrichEmails(e.target.checked)}
+                          className="w-4 h-4 accent-[#4FD8C3]"
+                        />
+                        Find emails
+                        <Mail className="w-3.5 h-3.5 text-steel/60" />
+                      </label>
+                    </div>
+                  </div>
+                  )}
                 </div>
                 <SearchInfoSection isAtLimit={isAtLimit} remaining={remaining} searchesPerDay={searchesPerDay} isStarting={isStarting} />
               </form>
@@ -279,6 +426,7 @@ export default function SearchPage() {
                 </span>
               </div>
 
+              {progress?.source !== 'linkedin' && (
               <div className="flex items-center gap-2 mb-4 flex-wrap">
                 {REVIEW_RANGES.map((range) => {
                   const isActive = range.key === 'all'
@@ -302,6 +450,7 @@ export default function SearchPage() {
                   );
                 })}
               </div>
+              )}
 
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
                 {filteredResults.map((lead, idx) => (
@@ -315,7 +464,7 @@ export default function SearchPage() {
                   >
                     View All Leads in Dashboard
                   </Link>
-                  {results.length >= 10 && (
+                  {progress?.source !== 'linkedin' && results.length >= 10 && (
                     <LoadingButton
                       onClick={handleLoadMore}
                       isLoading={isLoadingMore}

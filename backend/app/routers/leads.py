@@ -39,6 +39,7 @@ router = APIRouter(prefix="/api/leads", tags=["Leads"])
 @router.get("", response_model=LeadPaginatedResponse)
 async def list_leads(
     search_id: Optional[str] = Query(None, description="Filter by search ID"),
+    source: Optional[str] = Query(None, description="Filter by source (google_maps/linkedin)"),
     lead_category: Optional[str] = Query(None, description="Filter by category (hot/warm)"),
     user_status: Optional[str] = Query(None, description="Filter by user status"),
     is_favorite: Optional[bool] = Query(None, description="Filter favorites only"),
@@ -59,6 +60,8 @@ async def list_leads(
         count_query = supabase.table("leads").select("id", count="exact").eq("user_id", user_id)
         if search_id:
             count_query = count_query.eq("search_id", search_id)
+        if source:
+            count_query = count_query.eq("source", source)
         if lead_category:
             count_query = count_query.eq("lead_category", lead_category)
         if user_status:
@@ -76,6 +79,8 @@ async def list_leads(
         data_query = supabase.table("leads").select("*").eq("user_id", user_id)
         if search_id:
             data_query = data_query.eq("search_id", search_id)
+        if source:
+            data_query = data_query.eq("source", source)
         if lead_category:
             data_query = data_query.eq("lead_category", lead_category)
         if user_status:
@@ -115,6 +120,7 @@ EXPORT_MAX_ROWS = 10000
 @router.get("/export")
 async def export_leads_csv(
     search_id: Optional[str] = Query(None, description="Filter by search ID"),
+    source: Optional[str] = Query(None, description="Filter by source (google_maps/linkedin)"),
     lead_category: Optional[str] = Query(None),
     user_status: Optional[str] = Query(None),
     is_favorite: Optional[bool] = Query(None),
@@ -129,6 +135,8 @@ async def export_leads_csv(
         query = supabase.table("leads").select("*").eq("user_id", user_id)
         if search_id:
             query = query.eq("search_id", search_id)
+        if source:
+            query = query.eq("source", source)
         if lead_category:
             query = query.eq("lead_category", lead_category)
         if user_status:
@@ -144,9 +152,11 @@ async def export_leads_csv(
 
         output = io.StringIO()
         fieldnames = [
-            "business_name", "category", "full_address", "phone",
+            "source", "business_name", "category", "full_address", "phone",
             "email_found", "website_url", "rating", "total_reviews",
             "google_maps_link", "lead_category", "website_health_score",
+            "headline", "linkedin_url", "post_url", "post_text",
+            "connections_count", "posted_at",
             "user_status", "user_notes", "is_favorite", "ai_pitch",
         ]
         writer = csv.DictWriter(output, fieldnames=fieldnames, extrasaction="ignore")

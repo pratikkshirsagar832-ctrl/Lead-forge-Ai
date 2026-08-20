@@ -10,6 +10,7 @@ interface LeadsState {
     isFavorite: boolean | null;
     search: string;
     searchId: string;
+    source: string;
     page: number;
     limit: number;
   };
@@ -27,6 +28,7 @@ export const useLeadStore = create<LeadsState>((set) => ({
     isFavorite: null,
     search: '',
     searchId: '',
+    source: '',
     page: 1,
     limit: 50,
   },

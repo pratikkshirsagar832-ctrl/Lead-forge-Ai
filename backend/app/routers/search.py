@@ -30,6 +30,7 @@ from app.schemas.search import (
     SearchStatusResponse,
 )
 from app.services.pipeline import cancel_search, run_search_pipeline, load_more_maps_search
+from app.services.linkedin_pipeline import run_linkedin_pipeline
 
 router = APIRouter(prefix="/api/searches", tags=["Searches"])
 
@@ -72,6 +73,42 @@ async def create_search(
                 }).execute()
         except Exception as fallback_err:
             raise HTTPException(status_code=500, detail=f"Failed to record usage: {str(fallback_err)}")
+
+    if request.source == "linkedin":
+        try:
+            response = (
+                supabase.table("searches")
+                .insert({
+                    "user_id": user_id,
+                    "niche": query_term,
+                    "location": location_term or "LinkedIn",
+                    "source": "linkedin",
+                    "status": "queued",
+                    "message": "Search queued",
+                    "enrich_emails": request.enrich_emails,
+                    "max_results": request.max_results,
+                })
+                .execute()
+            )
+            if not response.data or len(response.data) == 0:
+                raise HTTPException(status_code=500, detail="Failed to create search")
+            search = response.data[0]
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(f"Failed to create linkedin search: {e}")
+            raise HTTPException(status_code=500, detail="Failed to create search")
+
+        background_tasks.add_task(
+            run_linkedin_pipeline,
+            search_id=search["id"],
+            user_id=user_id,
+            query=query_term,
+            enrich_emails=request.enrich_emails,
+            max_results=request.max_results,
+        )
+
+        return search
 
     try:
         response = supabase.rpc("create_search", {
@@ -228,7 +265,7 @@ async def get_search_results(
 
         response = (
             supabase.table("leads")
-            .select("id, business_name, category, full_address, phone, website_url, rating, total_reviews, lead_category, website_health_score, user_status, is_favorite")
+            .select("id, source, business_name, category, full_address, phone, email_found, website_url, rating, total_reviews, lead_category, website_health_score, headline, linkedin_url, post_url, post_text, profile_picture_url, connections_count, posted_at, user_status, is_favorite")
             .eq("search_id", search_id)
             .order("created_at", desc=False)
             .range(offset, offset + per_page - 1)
@@ -257,7 +294,7 @@ async def get_search_status(
     try:
         response = (
             supabase.table("searches")
-            .select("id, user_id, status, progress_percent, message, total_results, hot_leads, warm_leads, skipped, error_message, created_at, completed_at")
+            .select("id, user_id, status, source, progress_percent, message, total_results, hot_leads, warm_leads, skipped, emails_found, error_message, created_at, completed_at")
             .eq("id", search_id)
             .limit(1)
             .execute()
@@ -294,12 +331,14 @@ async def get_search_status(
         return {
             "id": row["id"],
             "status": row.get("status", "queued"),
+            "source": row.get("source", "google_maps"),
             "progress_percent": row.get("progress_percent", 0) or 0,
             "message": row.get("message", ""),
             "total_results": row.get("total_results", 0) or 0,
             "hot_leads": hot,
             "warm_leads": warm,
             "skipped": skip,
+            "emails_found": row.get("emails_found", 0) or 0,
             "processed_count": processed,
             "elapsed_seconds": max(0, elapsed),
             "started_at": row.get("created_at"),

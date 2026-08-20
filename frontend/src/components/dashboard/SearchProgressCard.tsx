@@ -5,7 +5,7 @@ import { Badge } from '@/components/shared/Badge';
 import { LoadingButton } from '@/components/shared/LoadingButton';
 import { SEARCH_STATUSES } from '@/lib/constants';
 import { motion } from 'framer-motion';
-import { Loader2, CheckCircle, XCircle, Search, Sparkles } from 'lucide-react';
+import { Loader2, CheckCircle, XCircle, Search, Sparkles, MapPin, Linkedin } from 'lucide-react';
 import Link from 'next/link';
 
 interface SearchProgressCardProps {
@@ -51,6 +51,10 @@ export function SearchProgressCard({ onCancel, isCancelling }: SearchProgressCar
                   progress.status === 'cancelled' ? 'outline' : 'info'
                 } dot>
                   {statusConfig.label}
+                </Badge>
+                <Badge variant="outline" className="text-[10px] gap-1">
+                  {progress.source === 'linkedin' ? <Linkedin className="w-3 h-3 text-sky-400" /> : <MapPin className="w-3 h-3 text-emerald-400" />}
+                  {progress.source === 'linkedin' ? 'LinkedIn' : 'Maps'}
                 </Badge>
               </div>
               <p className="text-sm text-ice/60 font-medium">{progress.message || 'Initializing pipeline...'}</p>

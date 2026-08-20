@@ -1,11 +1,13 @@
 """
 Hyperclients — LinkedIn Intent-Lead Pipeline
 
-Orchestrates a LinkedIn intent search:
+Orchestrates a LinkedIn intent search that feeds the SAME searches/leads flow
+as the Google Maps pipeline:
+
   1. Build Boolean search query from user input
   2. Run Apify post-search actor
   3. Filter out recruiter/hiring posts, dedupe by author
-  4. Save person leads to linkedin_leads
+  4. Save person leads into the shared `leads` table (source='linkedin')
   5. Optional email enrichment via profile-scraper actor
 """
 
@@ -34,6 +36,8 @@ HIRING_SIGNALS = (
     "we need a", "we need an", "send your portfolio", "share your portfolio",
     "submit your resume", "apply now", "apply here", "apply via", "internship",
     "intern", "hiring a", "hiring an",
+    "seeking a new role", "seeking employment", "open to work", "seeking new opportunities",
+    "looking for a new role", "looking for new opportunities", "seeking a role",
 )
 
 
@@ -78,7 +82,8 @@ def _parse_posted_at(value) -> str | None:
         return None
     if isinstance(value, (int, float)):
         try:
-            return datetime.fromtimestamp(value, tz=timezone.utc).isoformat()
+            ts = value / 1000 if value > 10_000_000_000 else value
+            return datetime.fromtimestamp(ts, tz=timezone.utc).isoformat()
         except Exception:
             return None
     if isinstance(value, str):
@@ -174,7 +179,6 @@ def process_items(items: list[dict], max_results: int) -> list[dict]:
             "engagement_comments": comments,
             "profile_picture_url": _get_avatar(author),
             "connections_count": author.get("connectionsCount") or 0,
-            "raw_data": item,
         })
         if len(leads) >= max_results:
             break
@@ -193,7 +197,7 @@ async def run_linkedin_pipeline(
 
     try:
         await _update_search(supabase, search_id, {
-            "status": "running",
+            "status": "scraping",
             "progress_percent": 5,
             "message": "Building search queries...",
         })
@@ -223,6 +227,9 @@ async def run_linkedin_pipeline(
                 "progress_percent": 100,
                 "message": "No relevant leads found. Try different wording.",
                 "total_results": 0,
+                "hot_leads": 0,
+                "warm_leads": 0,
+                "skipped": raw_count,
                 "emails_found": 0,
                 "completed_at": datetime.now(timezone.utc).isoformat(),
             })
@@ -244,16 +251,20 @@ async def run_linkedin_pipeline(
             })
             emails_found = await _enrich_emails(supabase, search_id, user_id, leads, lead_ids)
 
+        saved = len(lead_ids)
         suffix = f", {emails_found} emails" if emails_found else ""
         await _update_search(supabase, search_id, {
             "status": "completed",
             "progress_percent": 100,
-            "message": f"Found {len(lead_ids)} leads{suffix}",
-            "total_results": len(lead_ids),
+            "message": f"Found {saved} leads{suffix}",
+            "total_results": saved,
+            "hot_leads": saved,
+            "warm_leads": 0,
+            "skipped": max(0, len(leads) - saved) + raw_count - len(leads),
             "emails_found": emails_found,
             "completed_at": datetime.now(timezone.utc).isoformat(),
         })
-        logger.info(f"[LinkedInPipeline:{search_id}] Completed — {len(lead_ids)} leads, {emails_found} emails")
+        logger.info(f"[LinkedInPipeline:{search_id}] Completed — {saved} leads, {emails_found} emails")
 
     except ApifyError as e:
         logger.error(f"[LinkedInPipeline:{search_id}] Apify error: {e}", exc_info=True)
@@ -272,22 +283,76 @@ async def run_linkedin_pipeline(
 
 
 async def _save_leads(supabase, search_id: str, user_id: str, leads: list[dict]) -> list[str]:
+    remaining_leads = await _get_remaining_leads(supabase, user_id)
+    if remaining_leads <= 0:
+        logger.warning(f"[LinkedInPipeline:{search_id}] Daily leads limit reached, skipping saves")
+        return []
+
+    existing = await asyncio.to_thread(
+        lambda: supabase.table("leads")
+        .select("linkedin_url")
+        .eq("user_id", user_id)
+        .neq("linkedin_url", "")
+        .execute()
+    )
+    existing_urls = set((row.get("linkedin_url") or "") for row in (existing.data or []))
+
     lead_ids: list[str] = []
     for lead in leads:
+        if remaining_leads <= 0:
+            logger.warning(f"[LinkedInPipeline:{search_id}] Daily leads limit reached. Stopping at {len(lead_ids)} saved.")
+            break
+        linkedin_url = (lead.get("linkedin_url") or "").strip()
+        if linkedin_url and linkedin_url in existing_urls:
+            continue
+
+        row = {
+            "search_id": search_id,
+            "user_id": user_id,
+            "source": "linkedin",
+            "business_name": lead.get("full_name") or "Unknown",
+            "category": "LinkedIn",
+            "full_address": lead.get("location") or "",
+            "phone": "",
+            "email_found": "",
+            "website_url": "",
+            "rating": None,
+            "total_reviews": 0,
+            "google_maps_link": "",
+            "description": lead.get("post_text") or "",
+            "lead_category": "hot",
+            "linkedin_url": linkedin_url,
+            "post_url": lead.get("post_url") or "",
+            "post_text": lead.get("post_text") or "",
+            "headline": lead.get("headline") or "",
+            "profile_picture_url": lead.get("profile_picture_url") or "",
+            "connections_count": lead.get("connections_count") or 0,
+            "posted_at": lead.get("posted_at"),
+        }
         try:
-            row = {
-                "search_id": search_id,
-                "user_id": user_id,
-                **lead,
-            }
             response = await asyncio.to_thread(
-                lambda: supabase.table("linkedin_leads").upsert(row, on_conflict="user_id,linkedin_url").execute()
+                lambda: supabase.table("leads").insert(row).execute()
             )
             if response.data and len(response.data) > 0:
                 lead_ids.append(response.data[0]["id"])
+                remaining_leads -= 1
+                if linkedin_url:
+                    existing_urls.add(linkedin_url)
         except Exception as e:
             logger.error(f"[LinkedInPipeline:{search_id}] Failed to save lead '{lead.get('full_name', '?')}': {e}")
     return lead_ids
+
+
+async def _get_remaining_leads(supabase, user_id: str) -> int:
+    try:
+        resp = await asyncio.to_thread(
+            lambda: supabase.rpc("get_remaining_leads", {"p_user_id": user_id}).execute()
+        )
+        if resp and resp.data is not None:
+            return int(resp.data)
+    except Exception:
+        pass
+    return 50
 
 
 async def _enrich_emails(
@@ -333,20 +398,20 @@ async def _enrich_emails(
     for idx, lead in enumerate(leads):
         if idx >= len(lead_ids):
             break
-        identifier = ((lead.get("raw_data") or {}).get("author") or {}).get("publicIdentifier") or ""
+        identifier = _public_id_from_url(lead.get("linkedin_url") or "")
         email = email_by_identifier.get(identifier)
         if not email:
             continue
         try:
-            update_data = {"email": email}
+            update_data = {"email_found": email}
             location = location_by_identifier.get(identifier)
             if location:
-                update_data["location"] = location
+                update_data["full_address"] = location
             company = company_by_identifier.get(identifier)
             if company:
-                update_data["company"] = company
+                update_data["category"] = company
             await asyncio.to_thread(
-                lambda: supabase.table("linkedin_leads")
+                lambda: supabase.table("leads")
                 .update(update_data)
                 .eq("id", lead_ids[idx])
                 .eq("user_id", user_id)
@@ -358,10 +423,19 @@ async def _enrich_emails(
     return emails_found
 
 
+def _public_id_from_url(url: str) -> str:
+    # https://www.linkedin.com/in/<public-id>  or  /in/<public-id>?miniProfileUrn=...
+    try:
+        part = url.split(".com/in/", 1)[1]
+        return part.split("/")[0].split("?")[0]
+    except Exception:
+        return ""
+
+
 async def _update_search(supabase, search_id: str, data: dict) -> None:
     try:
         await asyncio.to_thread(
-            lambda: supabase.table("linkedin_searches").update(data).eq("id", search_id).execute()
+            lambda: supabase.table("searches").update(data).eq("id", search_id).execute()
         )
     except Exception as e:
         logger.error(f"[LinkedInPipeline:{search_id}] Failed to update search: {e}")

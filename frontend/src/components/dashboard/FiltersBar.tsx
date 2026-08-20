@@ -40,6 +40,19 @@ export function FiltersBar() {
           </div>
 
           <div className="flex items-center gap-1.5 bg-navy/50 rounded-lg border border-ocean/25 px-2 py-1">
+            <Filter className="w-3.5 h-3.5 text-steel/60 shrink-0" />
+            <select
+              value={filters.source}
+              onChange={(e) => setFilters({ source: e.target.value })}
+              className="bg-transparent border-0 text-xs font-semibold text-offwhite focus:ring-0 py-1 pl-1 pr-5 cursor-pointer outline-none appearance-none"
+            >
+              <option value="" style={{ color: '#cbd5e1', background: '#1e293b' }}>All Sources</option>
+              <option value="google_maps" style={{ color: '#cbd5e1', background: '#1e293b' }}>Google Maps</option>
+              <option value="linkedin" style={{ color: '#cbd5e1', background: '#1e293b' }}>LinkedIn</option>
+            </select>
+          </div>
+
+          <div className="flex items-center gap-1.5 bg-navy/50 rounded-lg border border-ocean/25 px-2 py-1">
             <SlidersHorizontal className="w-3.5 h-3.5 text-steel/60 shrink-0" />
             <select
               value={filters.status}

@@ -37,6 +37,7 @@ import {
   Plus,
   Loader2,
   ArrowRight,
+  Linkedin,
 } from 'lucide-react';
 
 const PIPELINE_STAGES = [
@@ -106,6 +107,17 @@ function PipelineCard({ lead, isDragOverlay }: { lead: LeadListItem; isDragOverl
                 )}
               >
                 {lead.lead_category.toUpperCase()}
+              </span>
+            )}
+            {lead.source === 'linkedin' ? (
+              <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded-full shrink-0 bg-sky-500/15 text-sky-400 border border-sky-500/25 flex items-center gap-0.5">
+                <Linkedin className="w-2.5 h-2.5" />
+                LI
+              </span>
+            ) : (
+              <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded-full shrink-0 bg-emerald-500/15 text-emerald-400 border border-emerald-500/25 flex items-center gap-0.5">
+                <MapPin className="w-2.5 h-2.5" />
+                Maps
               </span>
             )}
           </div>

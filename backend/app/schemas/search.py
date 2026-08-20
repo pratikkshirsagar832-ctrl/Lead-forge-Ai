@@ -15,7 +15,9 @@ class SearchCreateRequest(BaseModel):
     """Request body for creating a new search."""
     niche: str = Field(..., min_length=1, max_length=200, description="Business niche or keyword to search")
     location: str = Field("", max_length=300, description="Geographic location (only for google_maps)")
-    source: Literal["google_maps"] = Field("google_maps", description="Source type")
+    source: Literal["google_maps", "linkedin"] = Field("google_maps", description="Source type")
+    enrich_emails: bool = Field(True, description="Try to find emails (linkedin only)")
+    max_results: int = Field(20, ge=1, le=50, description="Number of leads to return")
 
 
 class SearchResponse(BaseModel):
@@ -40,12 +42,14 @@ class SearchStatusResponse(BaseModel):
     """Lightweight status response for polling."""
     id: str
     status: str
+    source: str = "google_maps"
     progress_percent: int = 0
     message: str = ""
     total_results: int = 0
     hot_leads: int = 0
     warm_leads: int = 0
     skipped: int = 0
+    emails_found: int = 0
     processed_count: int = 0
     elapsed_seconds: int = 0
     started_at: Optional[datetime] = None
@@ -58,11 +62,13 @@ class SearchHistoryItem(BaseModel):
     id: str
     niche: str
     location: str
+    source: str = "google_maps"
     status: str
     total_results: int = 0
     hot_leads: int = 0
     warm_leads: int = 0
     skipped: int = 0
+    emails_found: int = 0
     created_at: Optional[datetime] = None
     completed_at: Optional[datetime] = None
 

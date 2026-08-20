@@ -5,7 +5,7 @@ import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import {
   Users, Mail, Search, Megaphone, TrendingUp, ArrowUpRight,
-  Plus, MessageSquare, Download, Eye
+  Plus, MessageSquare, Download, Eye, Linkedin, MapPin
 } from "lucide-react"
 import Link from "next/link"
 
@@ -147,7 +147,17 @@ export default function DashboardPage() {
           <CardTitle className="text-base">Quick Actions</CardTitle>
         </CardHeader>
         <CardContent>
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
+            <Link href="/dashboard/search?source=linkedin">
+              <Button variant="outline" className="w-full justify-start border-sky-500/30 hover:bg-sky-500/10 text-sky-400">
+                <Linkedin className="w-4 h-4 mr-2" /> LinkedIn Search
+              </Button>
+            </Link>
+            <Link href="/dashboard/search">
+              <Button variant="outline" className="w-full justify-start border-emerald-500/30 hover:bg-emerald-500/10 text-emerald-400">
+                <MapPin className="w-4 h-4 mr-2" /> Maps Search
+              </Button>
+            </Link>
             <Link href="/chat">
               <Button variant="outline" className="w-full justify-start border-ocean/20 hover:bg-steel/10">
                 <MessageSquare className="w-4 h-4 mr-2" /> AI Search

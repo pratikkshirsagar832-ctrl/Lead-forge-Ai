@@ -8,7 +8,7 @@ import { Badge } from '@/components/shared/Badge';
 import { Skeleton } from '@/components/shared/Skeleton';
 import { EmptyState } from '@/components/dashboard/EmptyState';
 import { formatDistanceToNow } from 'date-fns';
-import { Search, MapPin, ChevronRight } from 'lucide-react';
+import { Search, MapPin, ChevronRight, Linkedin } from 'lucide-react';
 import Link from 'next/link';
 import { motion } from 'framer-motion';
 
@@ -96,6 +96,10 @@ export default function HistoryPage() {
                         } className="capitalize text-xs">
                           {item.status}
                         </Badge>
+                        <Badge variant="outline" className="text-[10px] gap-1">
+                          {item.source === 'linkedin' ? <Linkedin className="w-3 h-3 text-sky-400" /> : <MapPin className="w-3 h-3 text-emerald-400" />}
+                          {item.source === 'linkedin' ? 'LinkedIn' : 'Maps'}
+                        </Badge>
                       </div>
                       <div className="flex items-center gap-4 text-sm text-ice/60">
                         <span className="flex items-center gap-1.5"><MapPin className="w-4 h-4" /> {item.location}</span>
@@ -109,6 +113,9 @@ export default function HistoryPage() {
                     <div className="text-center sm:text-right flex-1 sm:flex-none">
                       <p className="text-xs font-medium text-ice/60 uppercase tracking-wider mb-1">Found</p>
                       <p className="text-xl font-bold text-offwhite">{item.total_results}</p>
+                      {item.emails_found ? (
+                        <p className="text-[11px] text-emerald-400 mt-0.5">{item.emails_found} emails</p>
+                      ) : null}
                     </div>
                     <div className="text-center sm:text-right flex-1 sm:flex-none">
                       <p className="text-xs font-medium text-ice/60 uppercase tracking-wider mb-1">Processed</p>

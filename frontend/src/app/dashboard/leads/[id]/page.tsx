@@ -16,6 +16,7 @@ import {
   ArrowLeft, MapPin, Phone, Globe, Star,
   MessageSquare, FileText, ExternalLink,
   Loader2, CheckCircle2, Target, Send,
+  Linkedin, Mail, Users,
 } from 'lucide-react';
 import { formatNumber } from '@/lib/utils';
 import ReactMarkdown from 'react-markdown';
@@ -188,9 +189,13 @@ export default function LeadDetailPage() {
                   {lead.source && (
                     <Badge
                       variant="outline"
-                      className="border-emerald-500/30 text-emerald-400 bg-emerald-500/5"
+                      className={lead.source === 'linkedin'
+                        ? 'border-sky-500/30 text-sky-400 bg-sky-500/5'
+                        : 'border-emerald-500/30 text-emerald-400 bg-emerald-500/5'}
                     >
-                      <MapPin className="w-3 h-3 mr-1" />Google Maps
+                      {lead.source === 'linkedin'
+                        ? <><Linkedin className="w-3 h-3 mr-1" />LinkedIn</>
+                        : <><MapPin className="w-3 h-3 mr-1" />Google Maps</>}
                     </Badge>
                   )}
                   {lead.is_favorite && (
@@ -201,11 +206,19 @@ export default function LeadDetailPage() {
                 </div>
                 <h1 className="text-3xl font-bold text-offwhite mb-2">{lead.business_name}</h1>
                 <div className="flex items-center gap-4 text-ice/70">
+                  {lead.source === 'linkedin' ? (
+                    <div className="flex items-center gap-1.5">
+                      <Users className="w-5 h-5 text-steel" />
+                      <span className="font-semibold text-offwhite">{formatNumber(lead.connections_count || 0)}</span>
+                      <span className="text-sm">connections</span>
+                    </div>
+                  ) : (
                   <div className="flex items-center gap-1.5">
                     <Star className="w-5 h-5 fill-amber-400 text-amber-400" />
                     <span className="font-semibold text-offwhite">{lead.rating != null ? lead.rating : 'N/A'}</span>
                     <span className="text-sm">({formatNumber(lead.total_reviews || 0)} reviews)</span>
                   </div>
+                  )}
                   {lead.category && (
                     <span className="text-sm px-2 py-0.5 rounded-md bg-steel/20 italic text-ice/80">
                       {lead.category}
@@ -239,6 +252,66 @@ export default function LeadDetailPage() {
             </div>
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 py-6 border-y border-ocean/30">
+              {lead.source === 'linkedin' ? (
+                <>
+                  <div className="flex items-start gap-3">
+                    <div className="p-2.5 rounded-lg bg-steel/20 text-steel shrink-0">
+                      <Mail className="w-5 h-5" />
+                    </div>
+                    <div>
+                      <p className="text-sm font-medium text-ice/60 mb-0.5">Email</p>
+                      {lead.email_found ? (
+                        <a href={`mailto:${lead.email_found}`} className="text-emerald-400 hover:text-emerald-300 hover:underline">{lead.email_found}</a>
+                      ) : (
+                        <p className="text-offwhite">No email found</p>
+                      )}
+                    </div>
+                  </div>
+                  <div className="flex items-start gap-3">
+                    <div className="p-2.5 rounded-lg bg-steel/20 text-steel shrink-0">
+                      <Linkedin className="w-5 h-5" />
+                    </div>
+                    <div>
+                      <p className="text-sm font-medium text-ice/60 mb-0.5">Headline</p>
+                      <p className="text-offwhite">{lead.headline || 'No headline'}</p>
+                    </div>
+                  </div>
+                  <div className="flex items-start gap-3">
+                    <div className="p-2.5 rounded-lg bg-steel/20 text-steel shrink-0">
+                      <MapPin className="w-5 h-5" />
+                    </div>
+                    <div>
+                      <p className="text-sm font-medium text-ice/60 mb-0.5">Location</p>
+                      <p className="text-offwhite">{lead.full_address || 'No location provided'}</p>
+                    </div>
+                  </div>
+                  <div className="flex items-start gap-3">
+                    <div className="p-2.5 rounded-lg bg-steel/20 text-steel shrink-0">
+                      <ExternalLink className="w-5 h-5" />
+                    </div>
+                    <div>
+                      <p className="text-sm font-medium text-ice/60 mb-0.5">LinkedIn Post</p>
+                      {lead.post_url ? (
+                        <a href={lead.post_url} target="_blank" rel="noreferrer" className="text-steel hover:text-ice hover:underline">View post on LinkedIn</a>
+                      ) : (
+                        <p className="text-offwhite">No post available</p>
+                      )}
+                    </div>
+                  </div>
+                  {lead.post_text && (
+                    <div className="sm:col-span-2 flex items-start gap-3">
+                      <div className="p-2.5 rounded-lg bg-steel/20 text-steel shrink-0">
+                        <FileText className="w-5 h-5" />
+                      </div>
+                      <div>
+                        <p className="text-sm font-medium text-ice/60 mb-0.5">Post Content</p>
+                        <p className="text-offwhite text-sm leading-relaxed italic">{lead.post_text}</p>
+                      </div>
+                    </div>
+                  )}
+                </>
+              ) : (
+                <>
               <div className="flex items-start gap-3">
                 <div className="p-2.5 rounded-lg bg-steel/20 text-steel shrink-0">
                   <MapPin className="w-5 h-5" />
@@ -273,6 +346,8 @@ export default function LeadDetailPage() {
                   )}
                 </div>
               </div>
+                </>
+              )}
             </div>
 
             <div className="mt-8">

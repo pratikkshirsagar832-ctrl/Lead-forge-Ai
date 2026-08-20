@@ -2,7 +2,7 @@ import { GlassCard } from '@/components/shared/GlassCard';
 import { Badge } from '@/components/shared/Badge';
 import { LEAD_CATEGORIES, USER_STATUSES } from '@/lib/constants';
 import { formatNumber, truncate } from '@/lib/utils';
-import { MapPin, Globe, Star, Phone, ChevronRight, Heart } from 'lucide-react';
+import { MapPin, Globe, Star, Phone, ChevronRight, Heart, Linkedin, Mail, Clock, ExternalLink, Users } from 'lucide-react';
 import Link from 'next/link';
 
 import type { LeadListItem } from '@/lib/types';
@@ -45,10 +45,17 @@ export function LeadCard({ lead, onToggleFavorite, isUpdatingFav }: LeadCardProp
                 {lead.website_health_score}
               </span>
             )}
-            <span className="text-[10px] px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-400 font-semibold flex items-center gap-0.5 border border-emerald-500/20">
-              <MapPin className="w-2.5 h-2.5" />
-              Maps
-            </span>
+            {lead.source === 'linkedin' ? (
+              <span className="text-[10px] px-1.5 py-0.5 rounded bg-sky-500/10 text-sky-400 font-semibold flex items-center gap-0.5 border border-sky-500/20">
+                <Linkedin className="w-2.5 h-2.5" />
+                LinkedIn
+              </span>
+            ) : (
+              <span className="text-[10px] px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-400 font-semibold flex items-center gap-0.5 border border-emerald-500/20">
+                <MapPin className="w-2.5 h-2.5" />
+                Maps
+              </span>
+            )}
           </div>
           <button
             onClick={(e) => {
@@ -69,6 +76,12 @@ export function LeadCard({ lead, onToggleFavorite, isUpdatingFav }: LeadCardProp
         </h3>
 
         <div className="flex items-center gap-2 mb-4">
+          {lead.source === 'linkedin' ? (
+            <div className="flex items-center gap-2 bg-ocean/25 px-2 py-1 rounded-md border border-ocean/20">
+              <Users className="w-3 h-3 text-steel/70" />
+              <span className="font-semibold text-[11px] text-ice/80">{lead.connections_count != null ? `${formatNumber(lead.connections_count)} connections` : '—'}</span>
+            </div>
+          ) : (
           <div className="flex items-center gap-1 bg-ocean/25 px-2 py-1 rounded-md border border-ocean/20">
             <Star className="w-3 h-3 fill-amber-400 text-amber-400" />
             <span className="font-semibold text-[11px] text-ice/80">{lead.rating != null ? lead.rating : '—'}</span>
@@ -76,12 +89,52 @@ export function LeadCard({ lead, onToggleFavorite, isUpdatingFav }: LeadCardProp
               <span className="text-[10px] text-ice/50">({formatNumber(lead.total_reviews)})</span>
             )}
           </div>
+          )}
           <span className="text-[10px] px-2 py-1 bg-steel/10 text-ice/60 border border-steel/15 rounded-md font-medium truncate max-w-[130px]" title={lead.category || 'Unknown'}>
             {lead.category || 'Unknown'}
           </span>
         </div>
 
         <div className="space-y-2.5">
+          {lead.source === 'linkedin' ? (
+            <>
+              {lead.email_found && (
+                <div className="flex items-center gap-2.5 text-sm text-ice/70 group/item">
+                  <div className="p-1.5 shrink-0 rounded-lg bg-ocean/25 text-steel/70 group-hover/item:text-ice transition-colors">
+                    <Mail className="w-3.5 h-3.5" />
+                  </div>
+                  <span onClick={(e) => { e.stopPropagation(); window.open(`mailto:${lead.email_found}`); }} className="cursor-pointer font-medium tracking-wide text-[13px] text-emerald-400 hover:text-emerald-300 transition-colors truncate">{lead.email_found}</span>
+                </div>
+              )}
+              {lead.headline && (
+                <div className="flex items-start gap-2.5 text-sm text-ice/50 group/item">
+                  <div className="p-1.5 shrink-0 rounded-lg bg-ocean/25 text-steel/50 group-hover/item:text-ice transition-colors mt-0.5">
+                    <Linkedin className="w-3.5 h-3.5" />
+                  </div>
+                  <span className="line-clamp-2 leading-snug text-[13px]">{lead.headline}</span>
+                </div>
+              )}
+              {lead.post_url && (
+                <div className="flex items-center gap-2.5 text-sm group/item">
+                  <div className="p-1.5 shrink-0 rounded-lg bg-ocean/25 text-steel/70 group-hover/item:text-ice transition-colors">
+                    <ExternalLink className="w-3.5 h-3.5" />
+                  </div>
+                  <a href={lead.post_url} target="_blank" rel="noopener noreferrer" onClick={(e) => e.stopPropagation()} className="text-steel hover:text-ice hover:underline truncate font-medium text-[13px]">
+                    View post on LinkedIn
+                  </a>
+                </div>
+              )}
+              {lead.posted_at && (
+                <div className="flex items-center gap-2.5 text-sm text-ice/40">
+                  <div className="p-1.5 shrink-0 rounded-lg bg-ocean/25 text-steel/50 transition-colors">
+                    <Clock className="w-3.5 h-3.5" />
+                  </div>
+                  <span className="text-[13px]">Posted {new Date(lead.posted_at).toLocaleDateString()}</span>
+                </div>
+              )}
+            </>
+          ) : (
+            <>
           {lead.phone && (
             <div className="flex items-center gap-2.5 text-sm text-ice/70 group/item">
               <div className="p-1.5 shrink-0 rounded-lg bg-ocean/25 text-steel/70 group-hover/item:text-ice transition-colors">
@@ -111,6 +164,8 @@ export function LeadCard({ lead, onToggleFavorite, isUpdatingFav }: LeadCardProp
               </div>
               <span className="line-clamp-2 leading-snug text-[13px]">{lead.full_address}</span>
             </div>
+          )}
+            </>
           )}
         </div>
       </div>

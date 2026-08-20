@@ -26,12 +26,14 @@ export interface Plan {
 export interface SearchStatus {
   id: string;
   status: string;
+  source?: string;
   progress_percent: number;
   message: string;
   total_results: number;
   hot_leads: number;
   warm_leads: number;
   skipped: number;
+  emails_found?: number;
   processed_count: number;
   elapsed_seconds: number;
   started_at?: string;
@@ -43,11 +45,13 @@ export interface SearchHistoryItem {
   id: string;
   niche: string;
   location: string;
+  source?: string;
   status: string;
   total_results: number;
   hot_leads: number;
   warm_leads: number;
   skipped: number;
+  emails_found?: number;
   created_at?: string;
   completed_at?: string;
 }
@@ -60,11 +64,19 @@ export interface LeadListItem {
   category: string | null;
   full_address: string | null;
   phone: string | null;
+  email_found?: string | null;
   website_url: string | null;
   rating: number | null;
   total_reviews: number;
   lead_category: string;
   website_health_score: number | null;
+  headline?: string | null;
+  linkedin_url?: string | null;
+  post_url?: string | null;
+  post_text?: string | null;
+  profile_picture_url?: string | null;
+  connections_count?: number;
+  posted_at?: string | null;
   user_status: string;
   user_notes?: string;
   is_favorite: boolean;
@@ -86,6 +98,13 @@ export interface LeadDetail {
   rating: number | null;
   total_reviews: number;
   google_maps_link?: string | null;
+  headline?: string | null;
+  linkedin_url?: string | null;
+  post_url?: string | null;
+  post_text?: string | null;
+  profile_picture_url?: string | null;
+  connections_count?: number;
+  posted_at?: string | null;
   lead_category: string;
   website_health_score: number | null;
   ai_pitch?: string | null;

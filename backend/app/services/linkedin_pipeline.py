@@ -282,15 +282,15 @@ def process_items(items: list[dict], max_results: int) -> tuple[list[dict], int]
     return leads, skipped
 
 
-async def qualify_leads_with_ai(leads: list[dict], query: str) -> list[dict]:
+async def qualify_leads_with_ai(leads: list[dict], query: str, client=None, lead_types=None) -> list[dict]:
     """Use GPT-4o-mini to filter genuine leads from all classified types."""
-    settings = get_settings()
-    if not settings.openai_api_key:
-        logger.warning("OpenAI API key not configured, skipping AI qualification")
-        return leads
-
-    from openai import OpenAI
-    client = OpenAI(api_key=settings.openai_api_key)
+    if client is None:
+        settings = get_settings()
+        if not settings.openai_api_key:
+            logger.warning("OpenAI API key not configured, skipping AI qualification")
+            return leads
+        from openai import OpenAI
+        client = OpenAI(api_key=settings.openai_api_key)
 
     qualified = []
     for lead in leads:
@@ -392,6 +392,60 @@ Reply with JSON only:
     return qualified
 
 
+async def generate_search_queries(client, niche: str, lead_types: list[str], iteration: int, existing_leads: list[dict]) -> list[str]:
+    """Generate effective LinkedIn search queries using GPT-4o-mini based on niche and lead types."""
+    if not client:
+        # Fallback to static queries
+        return build_boolean_query(niche)[:4]
+
+    # Build context about what we already found
+    found_summary = ""
+    if existing_leads:
+        types_found = {}
+        for l in existing_leads:
+            t = l.get("post_type", "unknown")
+            types_found[t] = types_found.get(t, 0) + 1
+        found_summary = f"Already found: {types_found}. Need more of: {', '.join(lead_types)}. "
+
+    prompt = f"""Generate 6 HIGHLY EFFECTIVE LinkedIn search queries to find people posting about '{niche}'.
+
+Target lead types: {', '.join(lead_types)}
+{found_summary}
+
+Requirements:
+- Queries should be EXACT phrases people type when they NEED these services (buyer intent)
+- Include variations: "I need...", "Looking for...", "Anyone recommend...", "Need help with...", "Who can help...", "Hiring for..."
+- For agency type: "We offer...", "Our agency specializes...", "Freelance... available"
+- For hiring type: "We're hiring...", "Join our team...", "Open position..."
+- NO generic terms like just "seo" or "ui-ux" - must be intent-based
+- Each query should be 3-8 words max
+- Return as JSON array of strings only
+
+Reply with JSON only:
+{{
+  "queries": ["query1", "query2", "query3", "query4", "query5", "query6"]
+}}"""
+
+    try:
+        resp = await asyncio.to_thread(
+            lambda: client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[
+                    {"role": "system", "content": "You are a LinkedIn search query expert. Output only valid JSON."},
+                    {"role": "user", "content": prompt}
+                ],
+                temperature=0.3,
+                max_tokens=400,
+                response_format={"type": "json_object"}
+            )
+        )
+        result = json.loads(resp.choices[0].message.content)
+        return result.get("queries", [])[:6]
+    except Exception as e:
+        logger.error(f"[AI Query Gen] Error: {e}")
+        return build_boolean_query(niche)[:4]
+
+
 async def run_linkedin_pipeline(
     search_id: str,
     user_id: str,
@@ -400,80 +454,100 @@ async def run_linkedin_pipeline(
     max_results: int,
     lead_types: list[str] = None,
 ) -> None:
+    """
+    Run LinkedIn pipeline with AI-generated queries and iterative search.
+    Keeps searching with new AI-generated queries until target qualified leads found.
+    """
     supabase = get_supabase_admin()
     max_results = max(1, min(max_results, MAX_RESULTS_CAP))
     if lead_types is None:
         lead_types = ["buyer", "agency", "hiring"]
 
+    settings = get_settings()
+    openai_client = None
+    if settings.openai_api_key:
+        from openai import OpenAI
+        openai_client = OpenAI(api_key=settings.openai_api_key)
+
+    all_leads: list[dict] = []
+    all_skipped = 0
+    max_iterations = 5
+    iteration = 0
+
     try:
         await _update_search(supabase, search_id, {
             "status": "scraping",
             "progress_percent": 5,
-            "message": "Building intent queries...",
+            "message": "Generating AI search queries...",
         })
 
-        phrases = build_boolean_query(query)[:4]
-        # Increase fetch to ensure enough qualified leads of requested types
-        type_multiplier = max(2, len(lead_types))
-        fetch_target = min(max(max_results * FETCH_MULTIPLIER * type_multiplier, FETCH_MIN), 150)
-        logger.info(f"[LinkedInPipeline:{search_id}] Queries: {phrases} (fetch {fetch_target}, types: {lead_types})")
+        while len(all_leads) < max_results and iteration < max_iterations:
+            iteration += 1
+            remaining = max_results - len(all_leads)
+            await _update_search(supabase, search_id, {
+                "progress_percent": min(15 + iteration * 15, 80),
+                "message": f"Iteration {iteration}/{max_iterations}: Searching for {remaining} more leads...",
+            })
 
-        await _update_search(supabase, search_id, {
-            "progress_percent": 15,
-            "message": f"Searching LinkedIn posts for '{query}'...",
-        })
+            # Generate AI search queries for this iteration
+            search_queries = await generate_search_queries(openai_client, query, lead_types, iteration, all_leads)
+            logger.info(f"[LinkedInPipeline:{search_id}] Iteration {iteration}: Queries: {search_queries}")
 
-        items = await asyncio.to_thread(run_post_search, phrases, fetch_target)
-        raw_count = len(items)
-        logger.info(f"[LinkedInPipeline:{search_id}] Actor returned {raw_count} raw posts")
+            # Run Apify search with these queries
+            fetch_per_query = max(5, max(20, remaining * 3))
+            items = await asyncio.to_thread(run_post_search, search_queries, fetch_per_query)
+            raw_count = len(items)
+            logger.info(f"[LinkedInPipeline:{search_id}] Actor returned {raw_count} raw posts")
 
-        await _update_search(supabase, search_id, {
-            "progress_percent": 55,
-            "message": f"Found {raw_count} posts. Classifying buyers vs agencies...",
-        })
+            # Classify
+            leads, skipped = process_items(items, remaining * 2)
+            all_skipped += skipped
 
-        leads, skipped = process_items(items, max_results)
+            # AI qualify
+            leads = await qualify_leads_with_ai(leads, query, openai_client, lead_types)
 
-        await _update_search(supabase, search_id, {
-            "progress_percent": 58,
-            "message": "AI qualifying leads...",
-        })
-        leads = await qualify_leads_with_ai(leads, query)
+            # Filter by requested types
+            if lead_types and lead_types != ["buyer", "agency", "hiring"]:
+                leads = [l for l in leads if l.get("post_type") in lead_types]
 
-        # Filter by requested lead types
-        if lead_types and lead_types != ["buyer", "agency", "hiring"]:
-            leads = [l for l in leads if l.get("post_type") in lead_types]
-            logger.info(f"[LinkedInPipeline:{search_id}] Filtered to requested types {lead_types}: {len(leads)} leads")
+            # Dedupe against already collected
+            existing_urls = {l.get("linkedin_url") for l in all_leads if l.get("linkedin_url")}
+            new_leads = [l for l in leads if l.get("linkedin_url") not in existing_urls]
+            all_leads.extend(new_leads)
 
-        buyers = sum(1 for l in leads if l["post_type"] == "buyer")
-        agencies = sum(1 for l in leads if l["post_type"] == "agency")
-        hiring = sum(1 for l in leads if l["post_type"] == "hiring")
+            logger.info(f"[LinkedInPipeline:{search_id}] Iteration {iteration}: {len(new_leads)} new qualified leads (total: {len(all_leads)})")
 
-        # Limit to max_results after filtering
-        if len(leads) > max_results:
-            leads = leads[:max_results]
+            if len(all_leads) >= max_results:
+                break
 
-        if not leads:
+        # Trim to max_results
+        if len(all_leads) > max_results:
+            all_leads = all_leads[:max_results]
+
+        buyers = sum(1 for l in all_leads if l["post_type"] == "buyer")
+        agencies = sum(1 for l in all_leads if l["post_type"] == "agency")
+        hiring = sum(1 for l in all_leads if l["post_type"] == "hiring")
+
+        if not all_leads:
             await _update_search(supabase, search_id, {
                 "status": "completed",
                 "progress_percent": 100,
-                "message": "No relevant leads found. Try different wording.",
+                "message": "No relevant leads found after AI qualification.",
                 "total_results": 0,
                 "hot_leads": 0,
                 "warm_leads": 0,
-                "skipped": raw_count,
+                "skipped": all_skipped,
                 "emails_found": 0,
                 "completed_at": datetime.now(timezone.utc).isoformat(),
             })
-            logger.info(f"[LinkedInPipeline:{search_id}] No leads after classification")
             return
 
         await _update_search(supabase, search_id, {
-            "progress_percent": 65,
-            "message": f"Saving {len(leads)} leads ({buyers} buyers, {agencies} agencies, {hiring} hiring)...",
+            "progress_percent": 85,
+            "message": f"Saving {len(all_leads)} qualified leads ({buyers} buyers, {agencies} agencies, {hiring} hiring)...",
         })
 
-        lead_ids = await _save_leads(supabase, search_id, user_id, leads)
+        lead_ids = await _save_leads(supabase, search_id, user_id, all_leads)
 
         emails_found = 0
         if enrich_emails and lead_ids:

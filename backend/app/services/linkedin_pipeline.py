@@ -23,6 +23,8 @@ from app.services.apify_service import (
     ApifyError,
     enrich_profiles,
     run_post_search,
+    run_job_search,
+    filter_jobs_by_work_type,
 )
 
 logger = logging.getLogger(__name__)
@@ -500,6 +502,27 @@ Reply with JSON only:
         return build_boolean_query(niche)[:4]
 
 
+# Service-specific job search queries for hiring leads
+SERVICE_JOB_QUERIES = {
+    "marketing": ["Marketing Manager", "Digital Marketing Specialist", "Growth Marketing", "Performance Marketing"],
+    "seo": ["SEO Specialist", "SEO Manager", "Search Engine Optimization", "Technical SEO"],
+    "motion graphic": ["Motion Designer", "Motion Graphics Artist", "Video Editor", "After Effects"],
+    "smm": ["Social Media Manager", "Social Media Specialist", "Community Manager"],
+    "graphic design": ["Graphic Designer", "Visual Designer", "Brand Designer", "UI Designer"],
+    "shopify": ["Shopify Developer", "Shopify Expert", "Ecommerce Developer"],
+    "ecommerce": ["Ecommerce Manager", "Ecommerce Specialist", "Shopify Manager"],
+}
+
+def get_job_queries_for_niche(niche: str) -> list[str]:
+    """Get relevant job search queries for a niche."""
+    niche_lower = niche.lower()
+    for key, queries in SERVICE_JOB_QUERIES.items():
+        if key in niche_lower:
+            return queries
+    # Default: use the niche as-is plus common variations
+    return [niche, f"{niche} specialist", f"{niche} manager"]
+
+
 async def run_linkedin_pipeline(
     search_id: str,
     user_id: str,
@@ -578,16 +601,72 @@ async def run_linkedin_pipeline(
         new_leads = [l for l in leads if l.get("linkedin_url") not in existing_urls]
         all_leads.extend(new_leads)
 
-        logger.info(f"[LinkedInPipeline:{search_id}] Found {len(new_leads)} qualified leads (total: {len(all_leads)})")
+        logger.info(f"[LinkedInPipeline:{search_id}] Found {len(new_leads)} qualified leads from posts (total: {len(all_leads)})")
+
+        # ALSO search for hiring leads via LinkedIn Job Scraper if "hiring" in lead_types
+        if "hiring" in lead_types:
+            await _update_search(supabase, search_id, {
+                "progress_percent": 55,
+                "message": f"Searching LinkedIn jobs for '{query}' (remote/contract/part-time US/Europe)...",
+            })
+
+            job_queries = get_job_queries_for_niche(query)
+            logger.info(f"[LinkedInPipeline:{search_id}] Job queries: {job_queries}")
+
+            for job_query in job_queries:
+                try:
+                    jobs = await asyncio.to_thread(
+                        run_job_search,
+                        query=job_query,
+                        location="United States",
+                        time_range="7d",
+                        max_jobs=max_results * 2,
+                    )
+                    logger.info(f"[LinkedInPipeline:{search_id}] Job search '{job_query}' returned {len(jobs)} jobs")
+
+                    # Filter for remote/part-time/contract only
+                    filtered_jobs = filter_jobs_by_work_type(jobs, ["Remote", "Part-time", "Contract"])
+                    logger.info(f"[LinkedInPipeline:{search_id}] After work type filter: {len(filtered_jobs)} jobs")
+
+                    # Convert jobs to lead format
+                    for job in filtered_jobs:
+                        job_lead = {
+                            "full_name": job.get("company") or "Unknown Company",
+                            "headline": f"{job.get('title', '')} at {job.get('company', '')}",
+                            "company": job.get("company", ""),
+                            "location": job.get("location", ""),
+                            "linkedin_url": job.get("companyUrl", ""),
+                            "post_url": job.get("jobUrl", ""),
+                            "post_text": job.get("descriptionText", "")[:3000],
+                            "posted_at": job.get("postedAt"),
+                            "engagement_likes": 0,
+                            "engagement_comments": 0,
+                            "profile_picture_url": job.get("companyLogo", ""),
+                            "connections_count": 0,
+                            "lead_type": "hiring",
+                            "job_work_type": job.get("workType", ""),
+                            "job_salary": job.get("salary", ""),
+                            "job_seniority": job.get("seniority", ""),
+                            "job_function": job.get("jobFunction", ""),
+                            "job_industry": job.get("companyIndustry", ""),
+                        }
+                        all_leads.append(job_lead)
+
+                except Exception as e:
+                    logger.error(f"[LinkedInPipeline:{search_id}] Job search error for '{job_query}': {e}")
+                    continue
 
         # Trim to max_results
         if len(all_leads) > max_results:
             all_leads = all_leads[:max_results]
 
-        # Count by lead_category based on ai_score
+        # Count by lead_category based on ai_score (for posts) or default for jobs
         hot = sum(1 for l in all_leads if l.get("ai_score", 0) >= 85)
         warm = sum(1 for l in all_leads if 70 <= l.get("ai_score", 0) < 85)
         potential = sum(1 for l in all_leads if 40 <= l.get("ai_score", 0) < 70)
+        # Jobs without AI score get "potential" category
+        job_leads = [l for l in all_leads if l.get("lead_type") == "hiring" and l.get("ai_score", 0) == 0]
+        potential += len(job_leads)
 
         if not all_leads:
             await _update_search(supabase, search_id, {

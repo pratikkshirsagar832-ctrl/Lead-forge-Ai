@@ -1,9 +1,10 @@
 """
 Hyperclients — Apify LinkedIn Scraper Service
 
-Wraps two Apify actors:
-  - harvestapi~linkedin-post-search    : search LinkedIn posts by keyword (intent leads)
-  - harvestapi~linkedin-profile-scraper: enrich author profiles (+email)
+Wraps three Apify actors:
+  - harvestapi~linkedin-post-search       : search LinkedIn posts by keyword (intent leads)
+  - shahidirfan~linkedin-job-scraper      : search LinkedIn job postings (hiring leads)
+  - harvestapi~linkedin-profile-scraper   : enrich author profiles (+email)
 
 Supports multiple API keys with automatic failover: if a call fails with a
 retryable error (quota exhausted, auth, server error), the next configured key
@@ -20,6 +21,7 @@ from app.config import get_settings
 logger = logging.getLogger(__name__)
 
 POST_SEARCH_ACTOR = "harvestapi~linkedin-post-search"
+JOB_SCRAPER_ACTOR = "shahidirfan~linkedin-job-scraper"
 PROFILE_SCRAPER_ACTOR = "harvestapi~linkedin-profile-scraper"
 
 SYNC_TIMEOUT_SECONDS = 300
@@ -126,3 +128,46 @@ def enrich_profiles(profile_urls: list[str], max_items: int = 50) -> list[dict]:
         "maxItems": min(len(profile_urls), max_items),
     }
     return _run_sync_actor(PROFILE_SCRAPER_ACTOR, payload)
+
+
+def run_job_search(
+    query: str,
+    location: str = "United States",
+    time_range: str = "7d",
+    max_jobs: int = 50,
+    work_types: list[str] = None,
+) -> list[dict]:
+    """Search LinkedIn job postings using shahidirfan/linkedin-job-scraper.
+
+    Filters for remote/part-time/contract jobs in US/Europe by default.
+    """
+    if work_types is None:
+        work_types = ["Remote", "Part-time", "Contract"]
+
+    # Build location string for US/Europe remote
+    locations = ["United States", "United Kingdom", "Germany", "France", "Netherlands", "Spain", "Italy", "Remote"]
+
+    payload = {
+        "query": query,
+        "location": location,
+        "timeRange": time_range,
+        "maxJobs": min(max_jobs, 1000),
+        "collectOnly": False,
+        "maxConcurrency": 5,
+        "proxyConfiguration": {
+            "useApifyProxy": True,
+            "apifyProxyGroups": ["RESIDENTIAL"]
+        }
+    }
+    return _run_sync_actor(JOB_SCRAPER_ACTOR, payload)
+
+
+def filter_jobs_by_work_type(jobs: list[dict], allowed_types: list[str]) -> list[dict]:
+    """Filter jobs to only include allowed work types (Remote, Part-time, Contract)."""
+    allowed = set(t.lower() for t in allowed_types)
+    filtered = []
+    for job in jobs:
+        work_type = (job.get("workType") or "").lower()
+        if any(t in work_type for t in allowed):
+            filtered.append(job)
+    return filtered

@@ -283,7 +283,7 @@ def process_items(items: list[dict], max_results: int) -> tuple[list[dict], int]
 
 
 async def qualify_leads_with_ai(leads: list[dict], query: str, client=None, lead_types=None) -> list[dict]:
-    """Use GPT-4o-mini to filter genuine leads from all classified types."""
+    """Use GPT-5 to score commercial intent semantically (0-100). Catches implicit buying signals."""
     if client is None:
         settings = get_settings()
         if not settings.openai_api_key:
@@ -294,130 +294,135 @@ async def qualify_leads_with_ai(leads: list[dict], query: str, client=None, lead
 
     qualified = []
     for lead in leads:
-        post_type = lead.get("post_type", "buyer")
-        post_text = lead.get("post_text", "")[:1500]
-        headline = lead.get("headline", "")[:200]
-        company = lead.get("company", "")[:100]
+        post_text = lead.get("post_text", "")[:3000]
+        headline = lead.get("headline", "")[:500]
+        company = lead.get("company", "")[:200]
+        full_name = lead.get("full_name", "?")
 
-        if post_type == "buyer":
-            prompt = f"""You are a lead qualification expert. Identify people who NEED to BUY/HIRE '{query}' services.
+        prompt = f"""You are a senior B2B lead qualification specialist for a marketing agency offering '{query}' services.
 
-Post content: "{post_text}"
-Author headline: "{headline}"
-Author company: "{company}"
+Analyze this LinkedIn post for COMMERCIAL OPPORTUNITY — not just explicit "I need to buy" statements.
 
-ACCEPT (is_genuine: true) if the post shows:
-✅ Asking for recommendations: "Can anyone recommend...", "Who does...", "Anyone know a good..."
-✅ Expressing need: "I need...", "I'm looking for...", "We need...", "Looking for...", "Need help with..."
-✅ Looking to hire: "Looking to hire...", "Want to hire...", "Need to hire..."
-✅ Business context: "For my startup", "For my business", "For my company", "Budget..."
+POST:
+"{post_text}"
 
-REJECT (is_genuine: false) if:
-❌ Clearly selling/promoting: "We offer", "Our agency", "I provide", "Freelancer", "DM for quote", "Book a call", "Our services", "Starting at", "Packages", "Portfolio"
-❌ Clearly recruiting: "We're hiring", "Join our team", "Open position", "Hiring for", "Recruiting"
-❌ Job seeking: "Open to work", "Seeking role", "Looking for job"
-❌ Generic content: Tips, advice, "How to", "Why you need", thought leadership
+AUTHOR HEADLINE:
+"{headline}"
 
-If uncertain → ACCEPT (better to include than miss a real buyer).
+COMPANY:
+"{company}"
 
-Reply with JSON only:
+SCORING FRAMEWORK (0-100 each):
+
+1. SERVICE_MATCH (0-25): Does the post relate to problems '{query}' solves?
+   25 = Directly mentions the exact service or its core problem
+   20 = Mentions adjacent/related problem (e.g., "traffic dropped" for SEO)
+   15 = General business growth/marketing problem
+   10 = Vague business challenge
+   0 = Unrelated or pure thought leadership
+
+2. BUSINESS_PROBLEM (0-20): Is there a concrete, current business problem?
+   20 = Specific metrics declining (traffic -40%, conversions down, revenue drop)
+   15 = Clear pain point described ("struggling with...", "failing to...")
+   10 = General dissatisfaction or desire to improve
+   5 = Exploring options, researching
+   0 = No problem stated (tips, trends, opinions, success stories)
+
+3. BUYING_INTENT (0-20): How close to purchasing/hiring?
+   20 = Explicit: "Looking for agency", "Need to hire", "Budget $X", "ASAP"
+   15 = Strong implicit: "Recommendations?", "Who can help?", "Need expert"
+   10 = Problem awareness + commercial context: "For my business", "For our startup"
+   5 = Passive interest: "Anyone else experiencing...?"
+   0 = No commercial intent (learning, sharing, debating)
+
+4. DECISION_MAKER_LIKELIHOOD (0-15): Can this person authorize/approve spend?
+   15 = Founder/CEO/Owner/VP/Director/Head of Marketing/Growth
+   12 = Manager/Lead in relevant dept
+   10 = Unclear seniority but business context suggests authority
+   5 = Individual contributor / freelancer
+   0 = Student, job seeker, or clearly no budget authority
+
+5. URGENCY (0-10): Time pressure?
+   10 = "Urgent", "ASAP", "This week", "Immediately", "Deadline"
+   7 = "Soon", "This month", "Q3", "Before launch"
+   5 = No timeline but active problem
+   0 = No urgency signals
+
+6. OUTREACH_WORTHINESS (0-10): Would a personalized outreach likely get a reply?
+   10 = Explicit vendor search + specific problem + decision maker
+   8 = Strong problem + commercial context + reachable role
+   6 = Clear problem but unclear authority/timeline
+   4 = Vague interest, would need nurturing
+   0 = Wrong audience (job seeker, student, competitor, pure content)
+
+NEGATIVE SIGNALS (apply deductions):
+- Job seeker: "open to work", "seeking role", "looking for job", "available for opportunities" → MINUS 50
+- Agency/freelancer selling: "we offer", "our agency", "I provide", "book a call", "dm for quote", "freelancer available", "taking clients" → MINUS 50
+- Recruiter hiring for clients: "hiring for client", "staffing", "executive search" → MINUS 50
+- Generic content: "tips", "how to", "trends", "why you need", "5 ways to", thought leadership → MINUS 30
+- Engagement bait: "agree?", "comment yes", "thoughts?", polls → MINUS 30
+- Student/learning: "learning", "course", "certification", "internship" → MINUS 40
+
+LEAD TYPE (choose ONE):
+- explicit_need: "Looking for SEO agency", "Need to hire Shopify expert"
+- problem_awareness: "Traffic dropped 40%", "Conversions plummeted", "Struggling with rankings"
+- research: "Anyone else seeing traffic drops?", "Best tools for SEO?", "Comparing agencies"
+- hiring: "We're hiring SEO manager", "Join our team as growth lead"
+- agency: "We offer SEO", "Our agency specializes", "Freelancer available"
+- irrelevant: None of the above
+
+Reply with JSON ONLY:
 {{
-  "is_genuine": true/false,
-  "confidence": 0.0-1.0,
-  "reason": "specific reason"
+  "is_lead": true/false,
+  "lead_score": 0-100,
+  "service_match": 0-25,
+  "business_problem": 0-20,
+  "buying_intent": 0-20,
+  "decision_maker_likelihood": 0-15,
+  "urgency": 0-10,
+  "outreach_worthiness": 0-10,
+  "lead_type": "explicit_need|problem_awareness|research|hiring|agency|irrelevant",
+  "reason": "Specific evidence from post/headline for the score",
+  "outreach_angle": "One-sentence personalized opener for sales outreach"
 }}"""
-            threshold = 0.2
-
-        elif post_type == "agency":
-            prompt = f"""You are a lead qualification expert. Identify agencies/freelancers ACTUALLY SELLING '{query}' services.
-
-Post content: "{post_text}"
-Author headline: "{headline}"
-Author company: "{company}"
-
-ACCEPT (is_genuine: true) if the post shows:
-✅ Offering services: "We offer...", "Our agency provides...", "I provide...", "We specialize in..."
-✅ Taking clients: "Taking new clients", "Available for projects", "Book a call", "DM for quote"
-✅ Showcasing work: "Check out our work", "Portfolio", "Case study", "We built..."
-✅ Pricing/packages: "Starting at", "Packages from", "Free consultation"
-✅ Freelancer available: "Freelance... available", "Hire me for..."
-
-REJECT (is_genuine: false) if:
-❌ Job seeking: "Open to work", "Seeking role", "Looking for job", "Available for opportunities"
-❌ Buying: "I need", "I'm looking for", "Need help with", "Can anyone recommend", "Looking to hire"
-❌ Hiring: "We're hiring", "Join our team", "Open position", "Looking for [role]"
-❌ Generic content: Tips, advice, "How to", "Why you need", thought leadership
-
-If uncertain → ACCEPT.
-
-Reply with JSON only:
-{{
-  "is_genuine": true/false,
-  "confidence": 0.0-1.0,
-  "reason": "specific reason"
-}}"""
-            threshold = 0.2
-
-        elif post_type == "hiring":
-            prompt = f"""You are a lead qualification expert. Identify companies GENUINELY HIRING for '{query}' roles.
-
-Post content: "{post_text}"
-Author headline: "{headline}"
-Author company: "{company}"
-
-ACCEPT (is_genuine: true) if the post shows:
-✅ Direct hiring: "We're hiring...", "Join our team...", "Open position:...", "We are hiring..."
-✅ Company posting: "Our company is hiring", "[Company] is looking for..."
-✅ Direct apply: "Apply at...", "Careers page", "Send resume to..."
-
-REJECT (is_genuine: false) if:
-❌ Recruiter/headhunter: "Recruiter", "Headhunter", "Talent Acquisition", "Staffing", "Executive Search", "Hiring for client"
-❌ Job seeker: "Open to work", "Seeking role", "Looking for job"
-❌ Agency selling: "We offer recruiting", "We find candidates"
-❌ Generic: "Hiring trends", "How to hire", tips/advice
-
-If uncertain → ACCEPT.
-
-Reply with JSON only:
-{{
-  "is_genuine": true/false,
-  "confidence": 0.0-1.0,
-  "reason": "specific reason"
-}}"""
-            threshold = 0.2
-
-        else:
-            qualified.append(lead)
-            continue
 
         try:
             resp = await asyncio.to_thread(
                 lambda: client.chat.completions.create(
                     model="gpt-4o-mini",
                     messages=[
-                        {"role": "system", "content": "You are a lead qualification expert. Accept genuine buyers, agencies selling, and companies hiring. Reject only clear spam/sellers in wrong category. Output only valid JSON."},
+                        {"role": "system", "content": "You are a senior B2B lead qualification specialist. Score commercial intent semantically. Return only valid JSON."},
                         {"role": "user", "content": prompt}
                     ],
                     temperature=0.0,
-                    max_tokens=250,
+                    max_tokens=500,
                     response_format={"type": "json_object"}
                 )
             )
             result = json.loads(resp.choices[0].message.content)
-            logger.info(f"[AI Qualify DEBUG] {post_type}: {lead.get('full_name')} -> is_genuine={result.get('is_genuine')}, confidence={result.get('confidence')}, threshold={threshold}, reason={result.get('reason')}")
-            if result.get("is_genuine") and result.get("confidence", 0) >= threshold:
+            logger.info(f"[AI Qualify DEBUG] {full_name} -> is_lead={result.get('is_lead')}, score={result.get('lead_score')}, type={result.get('lead_type')}, reason={result.get('reason')[:100]}")
+
+            if result.get("is_lead") and result.get("lead_score", 0) >= 40:
                 lead["ai_qualified"] = True
-                lead["ai_confidence"] = result.get("confidence")
-                lead["ai_reason"] = result.get("reason")
+                lead["ai_score"] = result.get("lead_score")
+                lead["lead_type"] = result.get("lead_type", "potential")
+                lead["business_problem"] = result.get("business_problem", False)
+                lead["service_match"] = result.get("service_match", False)
+                lead["buying_intent"] = result.get("buying_intent", 0)
+                lead["urgency"] = result.get("urgency", 0)
+                lead["decision_maker_likelihood"] = result.get("decision_maker_likelihood", 0)
+                lead["outreach_worthiness"] = result.get("outreach_worthiness", 0)
+                lead["ai_reason"] = result.get("reason", "")
+                lead["outreach_angle"] = result.get("outreach_angle", "")
                 qualified.append(lead)
-                logger.info(f"[AI Qualify] KEPT {post_type}: {lead.get('full_name')} (confidence: {result.get('confidence')})")
+                logger.info(f"[AI Qualify] KEPT {full_name} (score: {result.get('lead_score')}, type: {result.get('lead_type')})")
             else:
-                logger.info(f"[AI Qualify] FILTERED OUT {post_type}: {lead.get('full_name')} - {result.get('reason')}")
+                logger.info(f"[AI Qualify] FILTERED OUT {full_name} - score: {result.get('lead_score')}, type: {result.get('lead_type')}, reason: {result.get('reason')}")
         except Exception as e:
-            logger.error(f"[AI Qualify] Error for {lead.get('full_name')}: {e}")
-            # On error, be LENIENT - accept the lead rather than reject
+            logger.error(f"[AI Qualify] Error for {full_name}: {e}")
+            # On error, be LENIENT - accept the lead
             qualified.append(lead)
-            logger.info(f"[AI Qualify] ACCEPTED on error: {lead.get('full_name')}")
+            logger.info(f"[AI Qualify] ACCEPTED on error: {full_name}")
 
     return qualified
 
@@ -546,14 +551,29 @@ async def run_linkedin_pipeline(
         leads, skipped = process_items(items, max_results * 3)
         all_skipped += skipped
 
-        # AI qualify
+        # AI qualify with semantic scoring
         leads = await qualify_leads_with_ai(leads, query, openai_client, lead_types)
 
-        # Filter by requested types
-        if lead_types and lead_types != ["buyer", "agency", "hiring"]:
-            leads = [l for l in leads if l.get("post_type") in lead_types]
+        # Rank by AI score (highest first)
+        leads.sort(key=lambda x: x.get("ai_score", 0), reverse=True)
 
-        # Dedupe
+        # Dedupe by author (keep highest scoring post per author)
+        best_by_author = {}
+        for lead in leads:
+            author_url = lead.get("linkedin_url")
+            if not author_url:
+                continue
+            score = lead.get("ai_score", 0)
+            if author_url not in best_by_author or score > best_by_author[author_url].get("ai_score", 0):
+                best_by_author[author_url] = lead
+        leads = list(best_by_author.values())
+        leads.sort(key=lambda x: x.get("ai_score", 0), reverse=True)
+
+        # Filter by requested types using lead_type
+        if lead_types and lead_types != ["buyer", "agency", "hiring"]:
+            leads = [l for l in leads if l.get("lead_type") in lead_types]
+
+        # Add to all_leads and dedupe again
         existing_urls = {l.get("linkedin_url") for l in all_leads if l.get("linkedin_url")}
         new_leads = [l for l in leads if l.get("linkedin_url") not in existing_urls]
         all_leads.extend(new_leads)
@@ -564,9 +584,10 @@ async def run_linkedin_pipeline(
         if len(all_leads) > max_results:
             all_leads = all_leads[:max_results]
 
-        buyers = sum(1 for l in all_leads if l["post_type"] == "buyer")
-        agencies = sum(1 for l in all_leads if l["post_type"] == "agency")
-        hiring = sum(1 for l in all_leads if l["post_type"] == "hiring")
+        # Count by lead_category based on ai_score
+        hot = sum(1 for l in all_leads if l.get("ai_score", 0) >= 85)
+        warm = sum(1 for l in all_leads if 70 <= l.get("ai_score", 0) < 85)
+        potential = sum(1 for l in all_leads if 40 <= l.get("ai_score", 0) < 70)
 
         if not all_leads:
             await _update_search(supabase, search_id, {
@@ -584,7 +605,7 @@ async def run_linkedin_pipeline(
 
         await _update_search(supabase, search_id, {
             "progress_percent": 85,
-            "message": f"Saving {len(all_leads)} qualified leads ({buyers} buyers, {agencies} agencies, {hiring} hiring)...",
+            "message": f"Saving {len(all_leads)} qualified leads ({hot} hot, {warm} warm, {potential} potential)...",
         })
 
         lead_ids = await _save_leads(supabase, search_id, user_id, all_leads)
@@ -595,7 +616,7 @@ async def run_linkedin_pipeline(
                 "progress_percent": 80,
                 "message": "Finding emails for your leads...",
             })
-            emails_found = await _enrich_emails(supabase, search_id, user_id, leads, lead_ids)
+            emails_found = await _enrich_emails(supabase, search_id, user_id, all_leads, lead_ids)
 
         saved = len(lead_ids)
         total_skipped = max(0, raw_count - saved)
@@ -605,13 +626,13 @@ async def run_linkedin_pipeline(
             "progress_percent": 100,
             "message": f"Found {saved} leads{suffix}",
             "total_results": saved,
-            "hot_leads": saved,
-            "warm_leads": 0,
+            "hot_leads": hot,
+            "warm_leads": warm,
             "skipped": total_skipped,
             "emails_found": emails_found,
             "completed_at": datetime.now(timezone.utc).isoformat(),
         })
-        logger.info(f"[LinkedInPipeline:{search_id}] Completed — {saved} leads, {emails_found} emails")
+        logger.info(f"[LinkedInPipeline:{search_id}] Completed — {saved} leads ({hot} hot, {warm} warm, {potential} potential), {emails_found} emails")
 
     except ApifyError as e:
         logger.error(f"[LinkedInPipeline:{search_id}] Apify error: {e}", exc_info=True)
@@ -653,6 +674,14 @@ async def _save_leads(supabase, search_id: str, user_id: str, leads: list[dict])
         if linkedin_url and linkedin_url in existing_urls:
             continue
 
+        ai_score = lead.get("ai_score", 0)
+        if ai_score >= 85:
+            lead_category = "hot"
+        elif ai_score >= 70:
+            lead_category = "warm"
+        else:
+            lead_category = "potential"
+
         row = {
             "search_id": search_id,
             "user_id": user_id,
@@ -667,8 +696,8 @@ async def _save_leads(supabase, search_id: str, user_id: str, leads: list[dict])
             "total_reviews": 0,
             "google_maps_link": "",
             "description": lead.get("post_text") or "",
-            "lead_category": "hot",
-            "post_type": lead.get("post_type") or "unknown",
+            "lead_category": lead_category,
+            "lead_type": lead.get("lead_type") or "unknown",
             "linkedin_url": linkedin_url,
             "post_url": lead.get("post_url") or "",
             "post_text": lead.get("post_text") or "",
@@ -677,8 +706,9 @@ async def _save_leads(supabase, search_id: str, user_id: str, leads: list[dict])
             "connections_count": lead.get("connections_count") or 0,
             "posted_at": lead.get("posted_at"),
             "ai_qualified": lead.get("ai_qualified", False),
-            "ai_confidence": lead.get("ai_confidence"),
+            "ai_score": lead.get("ai_score"),
             "ai_reason": lead.get("ai_reason"),
+            "outreach_angle": lead.get("outreach_angle"),
         }
         try:
             response = await asyncio.to_thread(

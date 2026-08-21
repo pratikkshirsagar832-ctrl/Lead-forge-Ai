@@ -593,8 +593,17 @@ async def run_linkedin_pipeline(
         leads.sort(key=lambda x: x.get("ai_score", 0), reverse=True)
 
         # Filter by requested types using lead_type
+        # Map old lead_types to new AI lead_type values
+        lead_type_mapping = {
+            "buyer": ["explicit_need", "problem_awareness", "research"],
+            "agency": ["agency"],
+            "hiring": ["hiring"],
+        }
         if lead_types and lead_types != ["buyer", "agency", "hiring"]:
-            leads = [l for l in leads if l.get("lead_type") in lead_types]
+            allowed_types = set()
+            for lt in lead_types:
+                allowed_types.update(lead_type_mapping.get(lt, [lt]))
+            leads = [l for l in leads if l.get("lead_type") in allowed_types]
 
         # Add to all_leads and dedupe again
         existing_urls = {l.get("linkedin_url") for l in all_leads if l.get("linkedin_url")}

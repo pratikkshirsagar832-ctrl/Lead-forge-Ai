@@ -300,95 +300,91 @@ async def qualify_leads_with_ai(leads: list[dict], query: str, client=None, lead
         company = lead.get("company", "")[:100]
 
         if post_type == "buyer":
-            prompt = f"""You are a STRICT lead qualification expert. Your ONLY job: identify people who GENUINELY NEED to BUY/HIRE '{query}' services.
-
-CRITICAL: REJECT anyone who is SELLING, offering, promoting, or marketing services — even if they mention "need" or "looking for" in a marketing context.
+            prompt = f"""You are a lead qualification expert. Identify people who NEED to BUY/HIRE '{query}' services.
 
 Post content: "{post_text}"
 Author headline: "{headline}"
 Author company: "{company}"
 
-AUTOMATIC REJECTION (output is_genuine: false) if ANY of these apply:
-❌ Headline/bio says: "CEO", "Founder", "Agency", "Freelancer", "Consultant", "Expert", "We offer", "We provide", "We specialize", "Services", "Hire me", "Available for", "DM for", "Book a call", "Portfolio", "Pricing", "Packages", "Starting at", "Free consultation"
-❌ Post promotes: "We offer X", "Our agency does X", "I provide X", "My services include X", "Contact us for X", "DM me for X", "Check out our work", "Hire us", "We build X", "We design X"
-❌ Post is recruiting: "We're hiring", "Join our team", "Open position", "Looking for X developer/designer" (this is HIRING, not buying)
-❌ Post is job seeking: "Open to work", "Seeking role", "Looking for job", "Available for opportunities"
-❌ Content is generic advice, tips, thought leadership, case studies, "How to...", "Why you need...", "Benefits of..."
-❌ Author works at a marketing/design/dev agency, consultancy, or service company
+ACCEPT (is_genuine: true) if the post shows:
+✅ Asking for recommendations: "Can anyone recommend...", "Who does...", "Anyone know a good..."
+✅ Expressing need: "I need...", "I'm looking for...", "We need...", "Looking for...", "Need help with..."
+✅ Looking to hire: "Looking to hire...", "Want to hire...", "Need to hire..."
+✅ Business context: "For my startup", "For my business", "For my company", "Budget..."
 
-ONLY ACCEPT (is_genuine: true) if CLEAR BUYER INTENT:
-✅ "I need a [service]", "I'm looking for a [service]", "We need [service] for our business"
-✅ "Can anyone recommend a good [provider]?", "Who does [service]?", "Looking to hire [role]"
-✅ "Need help with [service]", "Struggling with [service]", "Our [service] is broken/bad"
-✅ Budget mention: "Budget \$X", "Willing to pay", "Looking to spend"
-✅ Urgency: "ASAP", "Urgent", "Immediately", "This week"
-✅ Specific business context: "For my startup", "For my ecommerce store", "For my SaaS", "For my restaurant"
+REJECT (is_genuine: false) if:
+❌ Clearly selling/promoting: "We offer", "Our agency", "I provide", "Freelancer", "DM for quote", "Book a call", "Our services", "Starting at", "Packages", "Portfolio"
+❌ Clearly recruiting: "We're hiring", "Join our team", "Open position", "Hiring for", "Recruiting"
+❌ Job seeking: "Open to work", "Seeking role", "Looking for job"
+❌ Generic content: Tips, advice, "How to", "Why you need", thought leadership
 
-If uncertain → REJECT. Better to miss a lead than accept a seller.
+If uncertain → ACCEPT (better to include than miss a real buyer).
 
 Reply with JSON only:
 {{
   "is_genuine": true/false,
   "confidence": 0.0-1.0,
-  "reason": "specific reason citing evidence from post/headline"
+  "reason": "specific reason"
 }}"""
-            threshold = 0.35
+            threshold = 0.2
 
         elif post_type == "agency":
-            prompt = f"""You are a STRICT lead qualification expert. Identify ONLY genuine agencies/freelancers ACTIVELY SELLING '{query}' services.
+            prompt = f"""You are a lead qualification expert. Identify agencies/freelancers ACTUALLY SELLING '{query}' services.
 
 Post content: "{post_text}"
 Author headline: "{headline}"
 Author company: "{company}"
 
-AUTOMATIC REJECTION if:
+ACCEPT (is_genuine: true) if the post shows:
+✅ Offering services: "We offer...", "Our agency provides...", "I provide...", "We specialize in..."
+✅ Taking clients: "Taking new clients", "Available for projects", "Book a call", "DM for quote"
+✅ Showcasing work: "Check out our work", "Portfolio", "Case study", "We built..."
+✅ Pricing/packages: "Starting at", "Packages from", "Free consultation"
+✅ Freelancer available: "Freelance... available", "Hire me for..."
+
+REJECT (is_genuine: false) if:
 ❌ Job seeking: "Open to work", "Seeking role", "Looking for job", "Available for opportunities"
 ❌ Buying: "I need", "I'm looking for", "Need help with", "Can anyone recommend", "Looking to hire"
 ❌ Hiring: "We're hiring", "Join our team", "Open position", "Looking for [role]"
 ❌ Generic content: Tips, advice, "How to", "Why you need", thought leadership
-❌ Employee at company (not owner/founder): "Senior Designer at X", "Developer at Y"
 
-ONLY ACCEPT if CLEAR SELLING INTENT:
-✅ "We offer [service]", "Our agency provides [service]", "I provide [service]"
-✅ "Freelance [service] available", "Taking new clients", "Book a call for [service]"
-✅ Portfolio/case study with CTA: "DM for quote", "Contact us for [service]"
-✅ Pricing/packages: "Starting at $X", "Packages from $X"
-✅ Owner/Founder headline: "Founder at", "CEO at", "Owner of [Agency Name]"
+If uncertain → ACCEPT.
 
 Reply with JSON only:
 {{
   "is_genuine": true/false,
   "confidence": 0.0-1.0,
-  "reason": "specific reason citing evidence"
+  "reason": "specific reason"
 }}"""
-            threshold = 0.35
+            threshold = 0.2
 
         elif post_type == "hiring":
-            prompt = f"""Identify ONLY genuine companies HIRING for '{query}' roles (not recruiters, not job seekers).
+            prompt = f"""You are a lead qualification expert. Identify companies GENUINELY HIRING for '{query}' roles.
 
 Post content: "{post_text}"
 Author headline: "{headline}"
 Author company: "{company}"
 
-AUTOMATIC REJECTION if:
-❌ Recruiter/Headhunter: "Recruiter", "Headhunter", "Talent Acquisition", "Staffing", "Executive Search", "Hiring for client"
+ACCEPT (is_genuine: true) if the post shows:
+✅ Direct hiring: "We're hiring...", "Join our team...", "Open position:...", "We are hiring..."
+✅ Company posting: "Our company is hiring", "[Company] is looking for..."
+✅ Direct apply: "Apply at...", "Careers page", "Send resume to..."
+
+REJECT (is_genuine: false) if:
+❌ Recruiter/headhunter: "Recruiter", "Headhunter", "Talent Acquisition", "Staffing", "Executive Search", "Hiring for client"
 ❌ Job seeker: "Open to work", "Seeking role", "Looking for job"
-❌ Agency selling: "We offer recruiting", "We find candidates", "Staffing agency"
+❌ Agency selling: "We offer recruiting", "We find candidates"
 ❌ Generic: "Hiring trends", "How to hire", tips/advice
 
-ONLY ACCEPT if DIRECT HIRING by company:
-✅ "We're hiring [role]", "Join our team as [role]", "Open position: [role]"
-✅ "Our company is looking for [role]", "[Company Name] is hiring"
-✅ Direct application link/CTA: "Apply at", "Careers page", "Send resume to"
-✅ Author is Founder/CTO/VP/Engineering Manager at the hiring company
+If uncertain → ACCEPT.
 
 Reply with JSON only:
 {{
   "is_genuine": true/false,
   "confidence": 0.0-1.0,
-  "reason": "specific reason citing evidence"
+  "reason": "specific reason"
 }}"""
-            threshold = 0.7
+            threshold = 0.2
 
         else:
             qualified.append(lead)
@@ -399,7 +395,7 @@ Reply with JSON only:
                 lambda: client.chat.completions.create(
                     model="gpt-4o-mini",
                     messages=[
-                        {"role": "system", "content": "You are a STRICT lead qualification expert. REJECT sellers, recruiters, job seekers. Only accept genuine buyers/hiring companies/agencies selling. Output only valid JSON."},
+                        {"role": "system", "content": "You are a lead qualification expert. Accept genuine buyers, agencies selling, and companies hiring. Reject only clear spam/sellers in wrong category. Output only valid JSON."},
                         {"role": "user", "content": prompt}
                     ],
                     temperature=0.0,
@@ -408,6 +404,7 @@ Reply with JSON only:
                 )
             )
             result = json.loads(resp.choices[0].message.content)
+            logger.info(f"[AI Qualify DEBUG] {post_type}: {lead.get('full_name')} -> is_genuine={result.get('is_genuine')}, confidence={result.get('confidence')}, threshold={threshold}, reason={result.get('reason')}")
             if result.get("is_genuine") and result.get("confidence", 0) >= threshold:
                 lead["ai_qualified"] = True
                 lead["ai_confidence"] = result.get("confidence")
@@ -418,8 +415,9 @@ Reply with JSON only:
                 logger.info(f"[AI Qualify] FILTERED OUT {post_type}: {lead.get('full_name')} - {result.get('reason')}")
         except Exception as e:
             logger.error(f"[AI Qualify] Error for {lead.get('full_name')}: {e}")
-            # On error, be STRICT - reject
-            pass
+            # On error, be LENIENT - accept the lead rather than reject
+            qualified.append(lead)
+            logger.info(f"[AI Qualify] ACCEPTED on error: {lead.get('full_name')}")
 
     return qualified
 

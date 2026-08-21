@@ -133,7 +133,7 @@ export function useSearch() {
     };
   }, [pollStatus, pollResults, clearPolling]);
 
-  const startSearch = async (niche: string, location: string, options?: { source?: 'google_maps' | 'linkedin'; enrichEmails?: boolean; maxResults?: number }) => {
+  const startSearch = async (niche: string, location: string, options?: { source?: 'google_maps' | 'linkedin'; enrichEmails?: boolean; maxResults?: number; leadTypes?: ('buyer' | 'agency' | 'hiring')[] }) => {
     if (isStartingRef.current) return;
     try {
       isStartingRef.current = true;
@@ -152,6 +152,9 @@ export function useSearch() {
       if (options?.source === 'linkedin') {
         payload.enrich_emails = options.enrichEmails ?? true;
         payload.max_results = options.maxResults ?? 20;
+        if (options.leadTypes) {
+          payload.lead_types = options.leadTypes;
+        }
       }
 
       const { data } = await api.post(API_ROUTES.searches.create, payload);

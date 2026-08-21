@@ -7,14 +7,17 @@ as the Google Maps pipeline:
   1. Build intent Boolean query from user input (e.g. "ui-ux" → I need ui ux)
   2. Run Apify post-search actor
   3. Classify posts: buyer (needs the service) / agency (sells it) / hiring / job_seeker
-  4. Exclude job seekers, dedupe by author, save tagged leads (source='linkedin')
-  5. Optional email enrichment via profile-scraper actor
+  4. AI qualification: GPT-4o-mini validates genuine buyer intent
+  5. Exclude job seekers, dedupe by author, save tagged leads (source='linkedin')
+  6. Optional email enrichment via profile-scraper actor
 """
 
 import asyncio
+import json
 import logging
 from datetime import datetime, timezone
 
+from app.config import get_settings
 from app.database import get_supabase_admin
 from app.services.apify_service import (
     ApifyError,
@@ -279,15 +282,128 @@ def process_items(items: list[dict], max_results: int) -> tuple[list[dict], int]
     return leads, skipped
 
 
+async def qualify_leads_with_ai(leads: list[dict], query: str) -> list[dict]:
+    """Use GPT-4o-mini to filter genuine leads from all classified types."""
+    settings = get_settings()
+    if not settings.openai_api_key:
+        logger.warning("OpenAI API key not configured, skipping AI qualification")
+        return leads
+
+    from openai import OpenAI
+    client = OpenAI(api_key=settings.openai_api_key)
+
+    qualified = []
+    for lead in leads:
+        post_type = lead.get("post_type", "buyer")
+        post_text = lead.get("post_text", "")[:1500]
+        headline = lead.get("headline", "")[:200]
+        company = lead.get("company", "")[:100]
+
+        if post_type == "buyer":
+            prompt = f"""Analyze this LinkedIn post to determine if the person GENUINELY NEEDS to hire/purchase '{query}' services.
+
+Post content: "{post_text}"
+Author headline: "{headline}"
+Author company: "{company}"
+
+Consider:
+- Are they asking for recommendations, looking to hire, or expressing a business need?
+- Are they selling services, recruiting, job seeking, or just commenting?
+- Is this a genuine business need or casual mention?
+
+Reply with JSON only:
+{{
+  "is_genuine": true/false,
+  "confidence": 0.0-1.0,
+  "reason": "brief explanation"
+}}"""
+            threshold = 0.6
+
+        elif post_type == "agency":
+            prompt = f"""Analyze this LinkedIn post to determine if the person/agency GENUINELY OFFERS '{query}' services for clients.
+
+Post content: "{post_text}"
+Author headline: "{headline}"
+Author company: "{company}"
+
+Consider:
+- Are they promoting their services, offering consultations, showcasing portfolio?
+- Are they job seeking, asking for help, or just commenting?
+- Is this a genuine service offering?
+
+Reply with JSON only:
+{{
+  "is_genuine": true/false,
+  "confidence": 0.0-1.0,
+  "reason": "brief explanation"
+}}"""
+            threshold = 0.6
+
+        elif post_type == "hiring":
+            prompt = f"""Analyze this LinkedIn post to determine if the company GENUINELY IS HIRING for '{query}' roles.
+
+Post content: "{post_text}"
+Author headline: "{headline}"
+Author company: "{company}"
+
+Consider:
+- Are they posting job openings, recruiting, looking for candidates?
+- Are they job seeking themselves, or just commenting on hiring trends?
+- Is this a genuine hiring post?
+
+Reply with JSON only:
+{{
+  "is_genuine": true/false,
+  "confidence": 0.0-1.0,
+  "reason": "brief explanation
+}}"""
+            threshold = 0.6
+
+        else:
+            qualified.append(lead)
+            continue
+
+        try:
+            resp = await asyncio.to_thread(
+                lambda: client.chat.completions.create(
+                    model="gpt-4o-mini",
+                    messages=[
+                        {"role": "system", "content": "You are a lead qualification expert. Output only valid JSON."},
+                        {"role": "user", "content": prompt}
+                    ],
+                    temperature=0.1,
+                    max_tokens=200,
+                    response_format={"type": "json_object"}
+                )
+            )
+            result = json.loads(resp.choices[0].message.content)
+            if result.get("is_genuine") and result.get("confidence", 0) >= threshold:
+                lead["ai_qualified"] = True
+                lead["ai_confidence"] = result.get("confidence")
+                lead["ai_reason"] = result.get("reason")
+                qualified.append(lead)
+                logger.info(f"[AI Qualify] KEPT {post_type}: {lead.get('full_name')} (confidence: {result.get('confidence')})")
+            else:
+                logger.info(f"[AI Qualify] FILTERED OUT {post_type}: {lead.get('full_name')} - {result.get('reason')}")
+        except Exception as e:
+            logger.error(f"[AI Qualify] Error for {lead.get('full_name')}: {e}")
+            qualified.append(lead)
+
+    return qualified
+
+
 async def run_linkedin_pipeline(
     search_id: str,
     user_id: str,
     query: str,
     enrich_emails: bool,
     max_results: int,
+    lead_types: list[str] = None,
 ) -> None:
     supabase = get_supabase_admin()
     max_results = max(1, min(max_results, MAX_RESULTS_CAP))
+    if lead_types is None:
+        lead_types = ["buyer", "agency", "hiring"]
 
     try:
         await _update_search(supabase, search_id, {
@@ -297,8 +413,10 @@ async def run_linkedin_pipeline(
         })
 
         phrases = build_boolean_query(query)[:4]
-        fetch_target = min(max(max_results * FETCH_MULTIPLIER, FETCH_MIN), 100)
-        logger.info(f"[LinkedInPipeline:{search_id}] Queries: {phrases} (fetch {fetch_target})")
+        # Increase fetch to ensure enough qualified leads of requested types
+        type_multiplier = max(2, len(lead_types))
+        fetch_target = min(max(max_results * FETCH_MULTIPLIER * type_multiplier, FETCH_MIN), 150)
+        logger.info(f"[LinkedInPipeline:{search_id}] Queries: {phrases} (fetch {fetch_target}, types: {lead_types})")
 
         await _update_search(supabase, search_id, {
             "progress_percent": 15,
@@ -315,7 +433,25 @@ async def run_linkedin_pipeline(
         })
 
         leads, skipped = process_items(items, max_results)
+
+        await _update_search(supabase, search_id, {
+            "progress_percent": 58,
+            "message": "AI qualifying leads...",
+        })
+        leads = await qualify_leads_with_ai(leads, query)
+
+        # Filter by requested lead types
+        if lead_types and lead_types != ["buyer", "agency", "hiring"]:
+            leads = [l for l in leads if l.get("post_type") in lead_types]
+            logger.info(f"[LinkedInPipeline:{search_id}] Filtered to requested types {lead_types}: {len(leads)} leads")
+
         buyers = sum(1 for l in leads if l["post_type"] == "buyer")
+        agencies = sum(1 for l in leads if l["post_type"] == "agency")
+        hiring = sum(1 for l in leads if l["post_type"] == "hiring")
+
+        # Limit to max_results after filtering
+        if len(leads) > max_results:
+            leads = leads[:max_results]
 
         if not leads:
             await _update_search(supabase, search_id, {
@@ -334,7 +470,7 @@ async def run_linkedin_pipeline(
 
         await _update_search(supabase, search_id, {
             "progress_percent": 65,
-            "message": f"Saving {len(leads)} leads ({buyers} buyers)...",
+            "message": f"Saving {len(leads)} leads ({buyers} buyers, {agencies} agencies, {hiring} hiring)...",
         })
 
         lead_ids = await _save_leads(supabase, search_id, user_id, leads)
@@ -426,6 +562,9 @@ async def _save_leads(supabase, search_id: str, user_id: str, leads: list[dict])
             "profile_picture_url": lead.get("profile_picture_url") or "",
             "connections_count": lead.get("connections_count") or 0,
             "posted_at": lead.get("posted_at"),
+            "ai_qualified": lead.get("ai_qualified", False),
+            "ai_confidence": lead.get("ai_confidence"),
+            "ai_reason": lead.get("ai_reason"),
         }
         try:
             response = await asyncio.to_thread(

@@ -87,6 +87,7 @@ async def create_search(
                     "message": "Search queued",
                     "enrich_emails": request.enrich_emails,
                     "max_results": request.max_results,
+                    "lead_types": request.lead_types,
                 })
                 .execute()
             )
@@ -106,6 +107,7 @@ async def create_search(
             query=query_term,
             enrich_emails=request.enrich_emails,
             max_results=request.max_results,
+            lead_types=request.lead_types,
         )
 
         return search

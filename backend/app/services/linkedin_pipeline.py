@@ -300,64 +300,95 @@ async def qualify_leads_with_ai(leads: list[dict], query: str, client=None, lead
         company = lead.get("company", "")[:100]
 
         if post_type == "buyer":
-            prompt = f"""Analyze this LinkedIn post to determine if the person GENUINELY NEEDS to hire/purchase '{query}' services.
+            prompt = f"""You are a STRICT lead qualification expert. Your ONLY job: identify people who GENUINELY NEED to BUY/HIRE '{query}' services.
+
+CRITICAL: REJECT anyone who is SELLING, offering, promoting, or marketing services — even if they mention "need" or "looking for" in a marketing context.
 
 Post content: "{post_text}"
 Author headline: "{headline}"
 Author company: "{company}"
 
-Consider:
-- Are they asking for recommendations, looking to hire, or expressing a business need?
-- Are they selling services, recruiting, job seeking, or just commenting?
-- Is this a genuine business need or casual mention?
+AUTOMATIC REJECTION (output is_genuine: false) if ANY of these apply:
+❌ Headline/bio says: "CEO", "Founder", "Agency", "Freelancer", "Consultant", "Expert", "We offer", "We provide", "We specialize", "Services", "Hire me", "Available for", "DM for", "Book a call", "Portfolio", "Pricing", "Packages", "Starting at", "Free consultation"
+❌ Post promotes: "We offer X", "Our agency does X", "I provide X", "My services include X", "Contact us for X", "DM me for X", "Check out our work", "Hire us", "We build X", "We design X"
+❌ Post is recruiting: "We're hiring", "Join our team", "Open position", "Looking for X developer/designer" (this is HIRING, not buying)
+❌ Post is job seeking: "Open to work", "Seeking role", "Looking for job", "Available for opportunities"
+❌ Content is generic advice, tips, thought leadership, case studies, "How to...", "Why you need...", "Benefits of..."
+❌ Author works at a marketing/design/dev agency, consultancy, or service company
+
+ONLY ACCEPT (is_genuine: true) if CLEAR BUYER INTENT:
+✅ "I need a [service]", "I'm looking for a [service]", "We need [service] for our business"
+✅ "Can anyone recommend a good [provider]?", "Who does [service]?", "Looking to hire [role]"
+✅ "Need help with [service]", "Struggling with [service]", "Our [service] is broken/bad"
+✅ Budget mention: "Budget $X", "Willing to pay", "Looking to spend"
+✅ Urgency: "ASAP", "Urgent", "Immediately", "This week"
+✅ Specific business context: "For my startup", "For my ecommerce store", "For my SaaS", "For my restaurant"
+
+If uncertain → REJECT. Better to miss a lead than accept a seller.
 
 Reply with JSON only:
 {{
   "is_genuine": true/false,
   "confidence": 0.0-1.0,
-  "reason": "brief explanation"
+  "reason": "specific reason citing evidence from post/headline"
 }}"""
-            threshold = 0.6
+            threshold = 0.7
 
         elif post_type == "agency":
-            prompt = f"""Analyze this LinkedIn post to determine if the person/agency GENUINELY OFFERS '{query}' services for clients.
+            prompt = f"""You are a STRICT lead qualification expert. Identify ONLY genuine agencies/freelancers ACTIVELY SELLING '{query}' services.
 
 Post content: "{post_text}"
 Author headline: "{headline}"
 Author company: "{company}"
 
-Consider:
-- Are they promoting their services, offering consultations, showcasing portfolio?
-- Are they job seeking, asking for help, or just commenting?
-- Is this a genuine service offering?
+AUTOMATIC REJECTION if:
+❌ Job seeking: "Open to work", "Seeking role", "Looking for job", "Available for opportunities"
+❌ Buying: "I need", "I'm looking for", "Need help with", "Can anyone recommend", "Looking to hire"
+❌ Hiring: "We're hiring", "Join our team", "Open position", "Looking for [role]"
+❌ Generic content: Tips, advice, "How to", "Why you need", thought leadership
+❌ Employee at company (not owner/founder): "Senior Designer at X", "Developer at Y"
+
+ONLY ACCEPT if CLEAR SELLING INTENT:
+✅ "We offer [service]", "Our agency provides [service]", "I provide [service]"
+✅ "Freelance [service] available", "Taking new clients", "Book a call for [service]"
+✅ Portfolio/case study with CTA: "DM for quote", "Contact us for [service]"
+✅ Pricing/packages: "Starting at $X", "Packages from $X"
+✅ Owner/Founder headline: "Founder at", "CEO at", "Owner of [Agency Name]"
 
 Reply with JSON only:
 {{
   "is_genuine": true/false,
   "confidence": 0.0-1.0,
-  "reason": "brief explanation"
+  "reason": "specific reason citing evidence"
 }}"""
-            threshold = 0.6
+            threshold = 0.7
 
         elif post_type == "hiring":
-            prompt = f"""Analyze this LinkedIn post to determine if the company GENUINELY IS HIRING for '{query}' roles.
+            prompt = f"""Identify ONLY genuine companies HIRING for '{query}' roles (not recruiters, not job seekers).
 
 Post content: "{post_text}"
 Author headline: "{headline}"
 Author company: "{company}"
 
-Consider:
-- Are they posting job openings, recruiting, looking for candidates?
-- Are they job seeking themselves, or just commenting on hiring trends?
-- Is this a genuine hiring post?
+AUTOMATIC REJECTION if:
+❌ Recruiter/Headhunter: "Recruiter", "Headhunter", "Talent Acquisition", "Staffing", "Executive Search", "Hiring for client"
+❌ Job seeker: "Open to work", "Seeking role", "Looking for job"
+❌ Agency selling: "We offer recruiting", "We find candidates", "Staffing agency"
+❌ Generic: "Hiring trends", "How to hire", tips/advice
+
+ONLY ACCEPT if DIRECT HIRING by company:
+✅ "We're hiring [role]", "Join our team as [role]", "Open position: [role]"
+✅ "Our company is looking for [role]", "[Company Name] is hiring"
+✅ Direct application link/CTA: "Apply at", "Careers page", "Send resume to"
+✅ Author is Founder/CTO/VP/Engineering Manager at the hiring company
 
 Reply with JSON only:
 {{
   "is_genuine": true/false,
   "confidence": 0.0-1.0,
-  "reason": "brief explanation
+  "reason": "specific reason citing evidence"
 }}"""
-            threshold = 0.6
+            threshold = 0.7
 
         else:
             qualified.append(lead)
@@ -368,11 +399,11 @@ Reply with JSON only:
                 lambda: client.chat.completions.create(
                     model="gpt-4o-mini",
                     messages=[
-                        {"role": "system", "content": "You are a lead qualification expert. Output only valid JSON."},
+                        {"role": "system", "content": "You are a STRICT lead qualification expert. REJECT sellers, recruiters, job seekers. Only accept genuine buyers/hiring companies/agencies selling. Output only valid JSON."},
                         {"role": "user", "content": prompt}
                     ],
-                    temperature=0.1,
-                    max_tokens=200,
+                    temperature=0.0,
+                    max_tokens=250,
                     response_format={"type": "json_object"}
                 )
             )
@@ -387,15 +418,15 @@ Reply with JSON only:
                 logger.info(f"[AI Qualify] FILTERED OUT {post_type}: {lead.get('full_name')} - {result.get('reason')}")
         except Exception as e:
             logger.error(f"[AI Qualify] Error for {lead.get('full_name')}: {e}")
-            qualified.append(lead)
+            # On error, be STRICT - reject
+            pass
 
     return qualified
 
 
 async def generate_search_queries(client, niche: str, lead_types: list[str], iteration: int, existing_leads: list[dict]) -> list[str]:
-    """Generate effective LinkedIn search queries using GPT-4o-mini based on niche and lead types."""
+    """Generate HIGHLY EFFECTIVE LinkedIn search queries using GPT-4o-mini."""
     if not client:
-        # Fallback to static queries
         return build_boolean_query(niche)[:4]
 
     # Build context about what we already found
@@ -407,23 +438,43 @@ async def generate_search_queries(client, niche: str, lead_types: list[str], ite
             types_found[t] = types_found.get(t, 0) + 1
         found_summary = f"Already found: {types_found}. Need more of: {', '.join(lead_types)}. "
 
-    prompt = f"""Generate 6 HIGHLY EFFECTIVE LinkedIn search queries to find people posting about '{niche}'.
+    wants_buyer = "buyer" in lead_types
+    wants_agency = "agency" in lead_types
+    wants_hiring = "hiring" in lead_types
+
+    prompt = f"""Generate 8 HIGHLY EFFECTIVE LinkedIn search queries to find '{niche}' posts.
 
 Target lead types: {', '.join(lead_types)}
 {found_summary}
+Iteration: {iteration}
 
-Requirements:
-- Queries should be EXACT phrases people type when they NEED these services (buyer intent)
-- Include variations: "I need...", "Looking for...", "Anyone recommend...", "Need help with...", "Who can help...", "Hiring for..."
-- For agency type: "We offer...", "Our agency specializes...", "Freelance... available"
-- For hiring type: "We're hiring...", "Join our team...", "Open position..."
-- NO generic terms like just "seo" or "ui-ux" - must be intent-based
-- Each query should be 3-8 words max
-- Return as JSON array of strings only
+CRITICAL: Generate queries that match EXACT phrases real people type on LinkedIn.
+
+{"BUYER INTENT (people NEEDING services):" if wants_buyer else ""}
+{"- \"I need a " + niche + "\" | \"I'm looking for a " + niche + "\" | \"We need " + niche + " for our business\"" if wants_buyer else ""}
+{"- \"Can anyone recommend a good " + niche + "?\" | \"Who does " + niche + "?\" | \"Looking to hire " + niche + "\"" if wants_buyer else ""}
+{"- \"Need help with " + niche + "\" | \"Struggling with " + niche + "\" | \"Budget for " + niche + "\"" if wants_buyer else ""}
+{"- \"Urgent: need " + niche + "\" | \"ASAP " + niche + "\" | \"Hiring a " + niche + " expert\"" if wants_buyer else ""}
+
+{"AGENCY/SELLER INTENT (people OFFERING services):" if wants_agency else ""}
+{"- \"We offer " + niche + "\" | \"Our agency provides " + niche + "\" | \"I provide " + niche + " services\"" if wants_agency else ""}
+{"- \"Freelance " + niche + " available\" | \"Taking new " + niche + " clients\" | \"Book a call for " + niche + "\"" if wants_agency else ""}
+{"- \"We specialize in " + niche + "\" | \"Starting at $ for " + niche + "\" | \"DM for " + niche + " quote\"" if wants_agency else ""}
+
+{"HIRING INTENT (companies HIRING):" if wants_hiring else ""}
+{"- \"We're hiring a " + niche + "\" | \"Join our team as " + niche + "\" | \"Open position: " + niche + "\"" if wants_hiring else ""}
+{"- \"Our company is hiring " + niche + "\" | \"Looking for a " + niche + " to join\"" if wants_hiring else ""}
+
+STRICT RULES:
+- Each query 3-8 words MAX
+- NO generic terms like just "seo", "ui-ux", "website" - MUST include intent words
+- Queries must be EXACT phrases people actually type on LinkedIn
+- Prioritize BUYER intent queries (highest conversion)
+- Return 8 queries MAX
 
 Reply with JSON only:
 {{
-  "queries": ["query1", "query2", "query3", "query4", "query5", "query6"]
+  "queries": ["query1", "query2", "query3", "query4", "query5", "query6", "query7", "query8"]
 }}"""
 
     try:
@@ -431,10 +482,10 @@ Reply with JSON only:
             lambda: client.chat.completions.create(
                 model="gpt-4o-mini",
                 messages=[
-                    {"role": "system", "content": "You are a LinkedIn search query expert. Output only valid JSON."},
+                    {"role": "system", "content": "You are a LinkedIn search query expert generating buyer-intent queries. Output only valid JSON."},
                     {"role": "user", "content": prompt}
                 ],
-                temperature=0.3,
+                temperature=0.2,
                 max_tokens=400,
                 response_format={"type": "json_object"}
             )

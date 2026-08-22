@@ -577,7 +577,8 @@ async def run_linkedin_pipeline(
                 "message": f"Searching LinkedIn jobs for '{query}' (remote/contract/part-time US/Europe)...",
             })
 
-            job_queries = get_job_queries_for_niche(query)
+            # Cap to 2 queries — each job-actor run can take minutes
+            job_queries = get_job_queries_for_niche(query)[:2]
             logger.info(f"[LinkedInPipeline:{search_id}] Job queries: {job_queries}")
 
             for job_query in job_queries:
@@ -587,7 +588,7 @@ async def run_linkedin_pipeline(
                         query=job_query,
                         location="United States",
                         time_range="7d",
-                        max_jobs=max_results * 2,
+                        max_jobs=min(max_results * 2, 40),
                     )
                     logger.info(f"[LinkedInPipeline:{search_id}] Job search '{job_query}' returned {len(jobs)} jobs")
 
@@ -743,7 +744,9 @@ async def _save_leads(supabase, search_id: str, user_id: str, leads: list[dict])
             "google_maps_link": "",
             "description": lead.get("post_text") or "",
             "lead_category": lead_category,
-            "lead_type": lead.get("lead_type") or "unknown",
+            # post_type column stores the AI semantic type
+            # (explicit_need / problem_awareness / research / hiring / agency)
+            "post_type": lead.get("lead_type") or "unknown",
             "linkedin_url": linkedin_url,
             "post_url": lead.get("post_url") or "",
             "post_text": lead.get("post_text") or "",
@@ -751,10 +754,10 @@ async def _save_leads(supabase, search_id: str, user_id: str, leads: list[dict])
             "profile_picture_url": lead.get("profile_picture_url") or "",
             "connections_count": lead.get("connections_count") or 0,
             "posted_at": lead.get("posted_at"),
-            "ai_qualified": lead.get("ai_qualified", False),
-            "ai_score": lead.get("ai_score"),
+            "ai_qualified": True,
+            "ai_confidence_score": ai_score,
             "ai_reason": lead.get("ai_reason"),
-            "outreach_angle": lead.get("outreach_angle"),
+            "ai_pitch": lead.get("outreach_angle"),
         }
         try:
             response = await asyncio.to_thread(

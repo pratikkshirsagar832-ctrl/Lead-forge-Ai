@@ -1,10 +1,13 @@
 """
 Hyperclients — Apify LinkedIn Scraper Service
 
-Wraps three Apify actors:
-  - harvestapi~linkedin-post-search       : search LinkedIn posts by keyword (intent leads)
-  - shahidirfan~linkedin-job-scraper      : search LinkedIn job postings (hiring leads)
-  - harvestapi~linkedin-profile-scraper   : enrich author profiles (+email)
+Primary actor: scrapeforge~linkedin-all-in-one
+  - post-search mode   : broad LinkedIn post discovery by keywords (boolean OR supported)
+  - profile-detail mode: enrich authors (headline, company, location, connections)
+
+Legacy actors kept for optional extras:
+  - harvestapi~linkedin-profile-scraper : email enrichment (all-in-one has no emails)
+  - shahidirfan~linkedin-job-scraper    : job postings (hiring leads)
 
 Supports multiple API keys with automatic failover: if a call fails with a
 retryable error (quota exhausted, auth, server error), the next configured key
@@ -12,7 +15,6 @@ is tried.
 """
 
 import logging
-import time
 
 import httpx
 
@@ -20,9 +22,9 @@ from app.config import get_settings
 
 logger = logging.getLogger(__name__)
 
-POST_SEARCH_ACTOR = "harvestapi~linkedin-post-search"
-JOB_SCRAPER_ACTOR = "shahidirfan~linkedin-job-scraper"
+ALL_IN_ONE_ACTOR = "scrapeforge~linkedin-all-in-one"
 PROFILE_SCRAPER_ACTOR = "harvestapi~linkedin-profile-scraper"
+JOB_SCRAPER_ACTOR = "shahidirfan~linkedin-job-scraper"
 
 SYNC_TIMEOUT_SECONDS = 300
 
@@ -93,33 +95,61 @@ def _run_with_key(actor_id: str, key: str, payload: dict) -> list[dict]:
 
 def run_post_search(
     search_queries: str | list[str],
-    max_posts: int = 60,
-    posted_limit: str = "month",
+    max_posts: int = 100,
+    posted_limit: str = "week",
 ) -> list[dict]:
-    """Search LinkedIn posts matching intent phrases. Returns raw items.
+    """Broad LinkedIn post discovery via scrapeforge/linkedin-all-in-one.
 
-    `search_queries` is a list of plain phrases — the actor searches each
-    phrase independently and returns merged, deduplicated results.
+    The actor takes ONE search string; multiple phrases are merged into a
+    single boolean OR query so one actor run covers all discovery phrases.
+    Returns raw post items:
+      { postId, url, content, postedAt, postedTimestamp,
+        author: {id, name, url, avatar},
+        engagement: {likes, comments, shares, reactions}, ... }
     """
     if isinstance(search_queries, str):
         search_queries = [search_queries]
-    # maxPosts is PER search query on the actor — cap it so the total
-    # workload stays bounded when multiple phrases are searched.
-    per_query = max(5, max_posts // max(len(search_queries), 1))
+    clean = [q.strip() for q in search_queries if q and q.strip()]
+    if not clean:
+        clean = ["marketing"]
+    # Boolean OR across discovery phrases — LinkedIn matches any of them.
+    combined = " OR ".join(clean[:8])
+
     payload = {
-        "searchQueries": search_queries,
-        "maxPosts": per_query,
-        "postedLimit": posted_limit,
+        "mode": "post-search",
+        "search": combined,
+        "postedLimit": posted_limit if posted_limit in ("24h", "week", "month") else "month",
         "sortBy": "date",
-        "profileScraperMode": "main",
-        "emails": False,
-        "includeRelevantLinks": False,
+        "maxPosts": max(10, min(max_posts, 500)),
     }
-    return _run_sync_actor(POST_SEARCH_ACTOR, payload)
+    return _run_sync_actor(ALL_IN_ONE_ACTOR, payload)
+
+
+def fetch_profile_details(
+    profile_urls: list[str],
+    depth: str = "basic",
+) -> list[dict]:
+    """Enrich authors via profile-detail mode: headline, current company,
+    location, follower/connection counts. One batched call per run.
+
+    Returns profile items:
+      { publicIdentifier, url, name, headline, about, location:{linkedinText},
+        currentPosition:[{companyName}], followerCount, connectionsCount, ... }
+    """
+    urls = [u.strip() for u in (profile_urls or []) if u and u.strip()]
+    if not urls:
+        return []
+    payload = {
+        "mode": "profile-detail",
+        "profileUrls": urls[:100],
+        "profileDepth": depth if depth in ("basic", "full") else "basic",
+        "maxPosts": len(urls[:100]),
+    }
+    return _run_sync_actor(ALL_IN_ONE_ACTOR, payload)
 
 
 def enrich_profiles(profile_urls: list[str], max_items: int = 50) -> list[dict]:
-    """Scrape author profiles (with email search) for the given LinkedIn URLs."""
+    """Email enrichment via legacy harvestapi actor (all-in-one exposes no emails)."""
     if not profile_urls:
         return []
     payload = {
@@ -137,16 +167,7 @@ def run_job_search(
     max_jobs: int = 50,
     work_types: list[str] = None,
 ) -> list[dict]:
-    """Search LinkedIn job postings using shahidirfan/linkedin-job-scraper.
-
-    Filters for remote/part-time/contract jobs in US/Europe by default.
-    """
-    if work_types is None:
-        work_types = ["Remote", "Part-time", "Contract"]
-
-    # Build location string for US/Europe remote
-    locations = ["United States", "United Kingdom", "Germany", "France", "Netherlands", "Spain", "Italy", "Remote"]
-
+    """Search LinkedIn job postings using shahidirfan/linkedin-job-scraper."""
     payload = {
         "query": query,
         "location": location,
@@ -154,10 +175,6 @@ def run_job_search(
         "maxJobs": min(max_jobs, 1000),
         "collectOnly": False,
         "maxConcurrency": 5,
-        "proxyConfiguration": {
-            "useApifyProxy": True,
-            "apifyProxyGroups": ["RESIDENTIAL"]
-        }
     }
     return _run_sync_actor(JOB_SCRAPER_ACTOR, payload)
 

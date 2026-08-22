@@ -15,6 +15,7 @@ is tried.
 """
 
 import logging
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import httpx
 
@@ -100,8 +101,9 @@ def run_post_search(
 ) -> list[dict]:
     """Broad LinkedIn post discovery via scrapeforge/linkedin-all-in-one.
 
-    The actor takes ONE search string; multiple phrases are merged into a
-    single boolean OR query so one actor run covers all discovery phrases.
+    LinkedIn's post-search rejects long boolean queries (~>70 chars), so
+    phrases are packed into small OR-chunks (≤60 chars) and each chunk runs
+    as its own actor call in parallel. Results are merged and deduped.
     Returns raw post items:
       { postId, url, content, postedAt, postedTimestamp,
         author: {id, name, url, avatar},
@@ -109,20 +111,70 @@ def run_post_search(
     """
     if isinstance(search_queries, str):
         search_queries = [search_queries]
-    clean = [q.strip() for q in search_queries if q and q.strip()]
+    clean = [q.strip() for q in search_queries if q and q.strip()][:8]
     if not clean:
         clean = ["marketing"]
-    # Boolean OR across discovery phrases — LinkedIn matches any of them.
-    combined = " OR ".join(clean[:8])
 
+    chunks = _chunk_search_phrases(clean)
+    per_chunk = max(20, max_posts // len(chunks))
+    logger.info(f"[Apify] post-search chunks ({len(chunks)}): {chunks}")
+
+    items: list[dict] = []
+    errors: list[Exception] = []
+    with ThreadPoolExecutor(max_workers=min(len(chunks), 3)) as pool:
+        futures = {
+            pool.submit(_run_post_search_chunk, c, per_chunk, posted_limit): c
+            for c in chunks
+        }
+        for fut in as_completed(futures):
+            try:
+                items.extend(fut.result())
+            except Exception as e:
+                logger.warning(f"[Apify] post-search chunk failed ({futures[fut]!r}): {e}")
+                errors.append(e)
+
+    # Partial results beat none — only raise if EVERYTHING failed.
+    if not items and errors:
+        raise errors[0]
+
+    seen_ids: set[str] = set()
+    unique: list[dict] = []
+    for item in items:
+        pid = item.get("postId") or item.get("url")
+        if not pid or pid in seen_ids:
+            continue
+        seen_ids.add(pid)
+        unique.append(item)
+    return unique
+
+
+def _run_post_search_chunk(search: str, max_posts: int, posted_limit: str) -> list[dict]:
     payload = {
         "mode": "post-search",
-        "search": combined,
+        "search": search,
         "postedLimit": posted_limit if posted_limit in ("24h", "week", "month") else "month",
         "sortBy": "date",
         "maxPosts": max(10, min(max_posts, 500)),
     }
     return _run_sync_actor(ALL_IN_ONE_ACTOR, payload)
+
+
+def _chunk_search_phrases(phrases: list[str], max_chars: int = 60) -> list[str]:
+    """Greedily pack phrases into boolean-OR chunks within LinkedIn's query limit."""
+    chunks: list[str] = []
+    current = ""
+    for p in phrases:
+        p = p[:max_chars] if len(p) > max_chars else p
+        candidate = f"{current} OR {p}" if current else p
+        if len(candidate) <= max_chars:
+            current = candidate
+        else:
+            if current:
+                chunks.append(current)
+            current = p
+    if current:
+        chunks.append(current)
+    return chunks
 
 
 def fetch_profile_details(
@@ -149,11 +201,15 @@ def fetch_profile_details(
 
 
 def enrich_profiles(profile_urls: list[str], max_items: int = 50) -> list[dict]:
-    """Email enrichment via legacy harvestapi actor (all-in-one exposes no emails)."""
+    """Email enrichment via legacy harvestapi actor (all-in-one exposes no emails).
+
+    Note: rows may be error stubs ({status: 404, error: ...}) when the
+    upstream provider fails — callers must ignore rows without emails.
+    """
     if not profile_urls:
         return []
     payload = {
-        "profileScraperMode": "Profile details + email search",
+        "profileScraperMode": "Profile details + email search ($10 per 1k)",
         "urls": profile_urls[:max_items],
         "maxItems": min(len(profile_urls), max_items),
     }

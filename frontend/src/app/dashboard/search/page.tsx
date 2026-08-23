@@ -188,9 +188,7 @@ export default function SearchPage() {
   const [reviewFilter, setReviewFilter] = useState<'all' | { min: number; max: number | null }>('all');
   const [source, setSource] = useState<'google_maps' | 'linkedin'>('google_maps');
   const sourceRef = useRef<'google_maps' | 'linkedin'>('google_maps');
-  const [enrichEmails, setEnrichEmails] = useState(true);
   const [maxResults, setMaxResults] = useState(20);
-  const [leadTypes, setLeadTypes] = useState<('buyer' | 'agency' | 'hiring')[]>(['buyer', 'agency', 'hiring']);
 
   const REVIEW_RANGES = [
     { key: 'all', label: 'All' },
@@ -249,7 +247,7 @@ export default function SearchPage() {
     if (isAtLimit) { setShowUpgradeModal(true); return; }
     try {
       if (source === 'linkedin') {
-        await startSearch(data.niche, '', { source: 'linkedin', enrichEmails, maxResults, leadTypes });
+        await startSearch(data.niche, '', { source: 'linkedin', enrichEmails: false, maxResults, leadTypes: ['buyer', 'agency', 'hiring'] });
       } else {
         await startSearch(data.niche, data.location ?? '');
       }
@@ -375,71 +373,30 @@ export default function SearchPage() {
                   )}
                   {source === 'linkedin' && (
                   <>
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                    <div>
-                      <label className="block text-sm font-medium text-ice/70 mb-2 flex items-center gap-2">
-                        <Users className="w-4 h-4 text-steel" />
-                        Max Leads
-                      </label>
-                      <select
-                        value={maxResults}
-                        onChange={(e) => setMaxResults(Number(e.target.value))}
-                        className="w-full px-3 py-3 rounded-xl border border-ocean/30 bg-navy/60 text-offwhite outline-none focus:ring-2 focus:ring-steel/40"
-                      >
-                        {[5, 10, 20, 30, 50].map(n => (
-                          <option key={n} value={n}>{n} leads</option>
-                        ))}
-                      </select>
-                    </div>
-                    <div className="flex items-end pb-1">
-                      <label className="flex items-center gap-2 text-sm text-ice/70 cursor-pointer select-none">
-                        <input
-                          type="checkbox"
-                          checked={enrichEmails}
-                          onChange={(e) => setEnrichEmails(e.target.checked)}
-                          className="w-4 h-4 accent-[#4FD8C3]"
-                        />
-                        Find emails
-                        <Mail className="w-3.5 h-3.5 text-steel/60" />
-                      </label>
-                    </div>
+                  <div>
+                    <label className="block text-sm font-medium text-ice/70 mb-2 flex items-center gap-2">
+                      <Users className="w-4 h-4 text-steel" />
+                      Max Leads
+                    </label>
+                    <select
+                      value={maxResults}
+                      onChange={(e) => setMaxResults(Number(e.target.value))}
+                      className="w-full px-3 py-3 rounded-xl border border-ocean/30 bg-navy/60 text-offwhite outline-none focus:ring-2 focus:ring-steel/40"
+                    >
+                      {[5, 10, 20, 30, 50].map(n => (
+                        <option key={n} value={n}>{n} leads</option>
+                      ))}
+                    </select>
                   </div>
                   <div>
                     <label className="block text-sm font-medium text-ice/70 mb-2 flex items-center gap-2">
-                      <Briefcase className="w-4 h-4 text-steel" />
-                      Lead Types
+                      <Sparkles className="w-4 h-4 text-steel" />
+                      What we find
                     </label>
-                    <div className="flex flex-wrap gap-2">
-                      {(['buyer', 'agency', 'hiring'] as const).map(t => {
-                        const checked = leadTypes.includes(t);
-                        const color = t === 'buyer' ? 'emerald' : t === 'agency' ? 'violet' : 'amber';
-                        const label = t === 'buyer' ? 'Needs Service' : t === 'agency' ? 'Agency' : 'Hiring';
-                        return (
-                          <label key={t} className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium border transition-all cursor-pointer select-none ${
-                            checked
-                              ? `bg-${color}-500/20 border-${color}-500/40 text-${color}-400`
-                              : 'bg-navy/60 border-ocean/25 text-ice/60 hover:border-' + color + '-500/40'
-                          }`}>
-                            <input
-                              type="checkbox"
-                              checked={checked}
-                              onChange={(e) => {
-                                if (e.target.checked) setLeadTypes([...leadTypes, t]);
-                                else setLeadTypes(leadTypes.filter(x => x !== t));
-                              }}
-                              className="w-3.5 h-3.5 accent-cyan"
-                            />
-                            {label}
-                          </label>
-                        );
-                      })}
-                    </div>
-                    <p className="text-xs text-ice/40 mt-1">At least one type must be selected</p>
+                    <p className="text-xs text-ice/60 leading-relaxed">
+                      We search LinkedIn posts for people looking to hire this service — remote, contract-basis and part-time opportunities, plus businesses with an active need.
+                    </p>
                   </div>
-                  <p className="text-xs text-sky-400/70 flex items-center gap-1.5">
-                    <Sparkles className="w-3.5 h-3.5" />
-                    We search LinkedIn posts for people asking for this service (e.g. "I need a website") and tag each as Buyer, Agency, or Hiring.
-                  </p>
                   </>
                   )}
                 </div>

@@ -38,12 +38,13 @@ PROFILE_ENRICHMENT_CAP = 60
 
 
 def build_boolean_query(user_query: str) -> list[str]:
-    """Broad discovery phrases around a niche.
+    """Broad discovery phrases around a niche, INCLUDING role-based
+    hiring/freelance phrases.
 
     Real buying intent is rarely written as "I need X" — it looks like
-    "our traffic dropped", "looking for an agency", "anyone recommend?".
-    So discovery searches broad topical phrases and the AI scores intent
-    afterwards.
+    "looking for a freelance web developer", "hiring a designer for our
+    project", "website developer required". So discovery searches broad
+    topical + role + hiring phrases and the AI scores intent afterwards.
     """
     q = user_query.strip().strip('"')
     q = " ".join(q.split())
@@ -57,18 +58,59 @@ def build_boolean_query(user_query: str) -> list[str]:
     if any(low.startswith(p) for p in (
         "i need", "i want", "i'm looking", "i am looking", "looking for",
         "need ", "help with", "anyone", "recommend", "does anyone",
+        "hiring", "we are hiring", "we're hiring",
     )):
         return [base]
 
-    phrases = [
-        base,
+    # Derive role variants from the service term.
+    # "website development" -> "web developer", "website developer", "web designer"
+    # "seo"                -> "seo expert", "seo specialist"
+    # "graphic design"     -> "graphic designer"
+    roles = {base}
+    lowb = " " + low + " "
+    if "development" in low:
+        roles.add(base.replace("development", "developer").strip())
+    if "design" in low:
+        roles.add(base.replace("design", "designer").strip())
+    if "marketing" in low:
+        roles.add(f"{base} expert")
+        roles.add(f"{base} specialist")
+    if "seo" in low or "search engine" in low:
+        roles.add("seo expert")
+        roles.add("seo specialist")
+    if "shopify" in low or "ecommerce" in low or "e-commerce" in low:
+        roles.add("shopify expert")
+    if "motion" in low:
+        roles.add("motion designer")
+        roles.add("video editor")
+    if "social media" in low or "smm" in low:
+        roles.add("social media manager")
+
+    phrases: list[str] = [base]
+    for role in sorted(roles, key=len):
+        role = " ".join(role.split())
+        if not role or role == base:
+            continue
+        phrases.extend([
+            f"looking for a freelance {role}",
+            f"looking for freelance {role}",
+            f"hiring {role}",
+            f"need a {role} for our",
+            f"{role} required for",
+            f"freelance {role} for",
+            f"need {role} for project",
+            f"contract {role}",
+            f"{role} needed",
+        ])
+    # general intent phrases too
+    phrases.extend([
         f"{base} agency",
-        f"{base} help",
-        f"{base} expert",
         f"looking for {base}",
         f"need {base}",
-        f"{base} recommendations",
-    ]
+        f"{base} help",
+        f"{base} project",
+    ])
+
     seen: set[str] = set()
     out: list[str] = []
     for p in phrases:
@@ -77,7 +119,7 @@ def build_boolean_query(user_query: str) -> list[str]:
         if key not in seen:
             seen.add(key)
             out.append(p)
-    return out[:7]
+    return out[:12]
 
 
 def _public_id_from_author_url(url: str) -> str:
@@ -254,15 +296,17 @@ SCORING FRAMEWORK (0-100 each):
    10 = Vague business challenge
    0 = Unrelated or pure thought leadership
 
-2. BUSINESS_PROBLEM (0-20): Is there a concrete, current business problem?
+2. BUSINESS_PROBLEM (0-20): Is there a concrete, current business need?
    20 = Specific metrics declining (traffic -40%, conversions down, revenue drop)
    15 = Clear pain point described ("struggling with...", "failing to...")
+   12 = NEED TO BUILD/IMPROVE something now: "we need a website", "looking to redesign", "new project"
    10 = General dissatisfaction or desire to improve
    5 = Exploring options, researching
    0 = No problem stated (tips, trends, opinions, success stories)
 
 3. BUYING_INTENT (0-20): How close to purchasing/hiring?
    20 = Explicit: "Looking for agency", "Need to hire", "Budget $X", "ASAP"
+   18 = HIRING A FREELANCER/CONTRACTOR: "looking for a freelance developer", "hiring a designer for our project", "need a website developer on contract" → they are BUYING this service
    15 = Strong implicit: "Recommendations?", "Who can help?", "Need expert"
    10 = Problem awareness + commercial context: "For my business", "For our startup"
    5 = Passive interest: "Anyone else experiencing...?"
@@ -277,6 +321,7 @@ SCORING FRAMEWORK (0-100 each):
 
 5. URGENCY (0-10): Time pressure?
    10 = "Urgent", "ASAP", "This week", "Immediately", "Deadline"
+   8 = "Looking for someone now", "Need this done", "Project starting"
    7 = "Soon", "This month", "Q3", "Before launch"
    5 = No timeline but active problem
    0 = No urgency signals
@@ -289,7 +334,8 @@ SCORING FRAMEWORK (0-100 each):
    0 = Wrong audience (job seeker, student, competitor, pure content)
 
 NEGATIVE SIGNALS (apply deductions):
-- Job seeker: "open to work", "seeking role", "looking for job", "available for opportunities" → MINUS 50
+- Job seeker (LOOKING FOR A JOB/ROLE for themselves): "open to work", "seeking role", "looking for a job", "available for opportunities" → MINUS 50
+  ⚠️ BUT if the post is a company/owner HIRING a freelancer/contractor/agency for work → this is a BUYER, NOT a job seeker
 - Agency/freelancer selling: "we offer", "our agency", "I provide", "book a call", "dm for quote", "freelancer available", "taking clients" → MINUS 50
 - Recruiter hiring for clients: "hiring for client", "staffing", "executive search" → MINUS 50
 - Generic content: "tips", "how to", "trends", "why you need", "5 ways to", thought leadership → MINUS 30
@@ -300,9 +346,18 @@ LEAD TYPE (choose ONE):
 - explicit_need: "Looking for SEO agency", "Need to hire Shopify expert"
 - problem_awareness: "Traffic dropped 40%", "Conversions plummeted", "Struggling with rankings"
 - research: "Anyone else seeing traffic drops?", "Best tools for SEO?", "Comparing agencies"
-- hiring: "We're hiring SEO manager", "Join our team as growth lead"
+- hiring: "Looking for a freelance web developer", "Hiring a designer for our project", "Need a website developer on contract basis", "We're hiring a web developer" — company hiring someone to DO the work
 - agency: "We offer SEO", "Our agency specializes", "Freelancer available"
 - irrelevant: None of the above
+
+WORK TYPE (choose ONE — only relevant for hiring/lead posts):
+- remote: "remote", "work from home", "wfh", "anywhere", "virtual"
+- contract: "contract", "contractor", "freelance", "freelancer", "project basis", "project-based", "consultant", "short-term"
+- part_time: "part-time", "part time", "parttime", "hourly", "flexible hours"
+- full_time_onsite: "full-time", "full time", "onsite", "on-site", "in office", "office-based", "no remote" — ⛔ NOT a valid lead
+- unknown: no work type mentioned
+
+⛔ HARD RULE: If the post is hiring/freelance work and the work type is FULL_TIME_ONSITE (on-site, office, full-time only), set is_lead = FALSE. We ONLY want REMOTE, CONTRACT, or PART-TIME opportunities.
 
 Reply with JSON ONLY:
 {{
@@ -315,6 +370,7 @@ Reply with JSON ONLY:
   "urgency": 0-10,
   "outreach_worthiness": 0-10,
   "lead_type": "explicit_need|problem_awareness|research|hiring|agency|irrelevant",
+  "work_type": "remote|contract|part_time|full_time_onsite|unknown",
   "reason": "Specific evidence from post/headline for the score",
   "outreach_angle": "One-sentence personalized opener for sales outreach"
 }}"""
@@ -333,12 +389,19 @@ Reply with JSON ONLY:
                 )
             )
             result = json.loads(resp.choices[0].message.content)
-            logger.info(f"[AI Qualify DEBUG] {full_name} -> is_lead={result.get('is_lead')}, score={result.get('lead_score')}, type={result.get('lead_type')}, reason={result.get('reason')[:100]}")
+            work_type = (result.get("work_type") or "unknown").lower()
+            is_hiring = result.get("lead_type") == "hiring"
+            # HARD RULE: only remote / contract / part-time hiring leads
+            if is_hiring and work_type == "full_time_onsite":
+                logger.info(f"[AI Qualify] FILTERED OUT {full_name} - on-site/full-time job, not remote/contract/part-time")
+                continue
+            logger.info(f"[AI Qualify DEBUG] {full_name} -> is_lead={result.get('is_lead')}, score={result.get('lead_score')}, type={result.get('lead_type')}, work={work_type}, reason={result.get('reason')[:100]}")
 
             if result.get("is_lead") and result.get("lead_score", 0) >= 40:
                 lead["ai_qualified"] = True
                 lead["ai_score"] = result.get("lead_score")
                 lead["lead_type"] = result.get("lead_type", "potential")
+                lead["work_type"] = work_type
                 lead["business_problem"] = result.get("business_problem", False)
                 lead["service_match"] = result.get("service_match", False)
                 lead["buying_intent"] = result.get("buying_intent", 0)
@@ -348,7 +411,7 @@ Reply with JSON ONLY:
                 lead["ai_reason"] = result.get("reason", "")
                 lead["outreach_angle"] = result.get("outreach_angle", "")
                 qualified.append(lead)
-                logger.info(f"[AI Qualify] KEPT {full_name} (score: {result.get('lead_score')}, type: {result.get('lead_type')})")
+                logger.info(f"[AI Qualify] KEPT {full_name} (score: {result.get('lead_score')}, type: {result.get('lead_type')}, work: {work_type})")
             else:
                 logger.info(f"[AI Qualify] FILTERED OUT {full_name} - score: {result.get('lead_score')}, type: {result.get('lead_type')}, reason: {result.get('reason')}")
         except Exception as e:
@@ -737,6 +800,19 @@ async def _save_leads(supabase, search_id: str, user_id: str, leads: list[dict])
         else:
             post_type = "buyer"
 
+        # Prepend work-type tag to headline so the UI shows Remote/Contract/Part-time
+        work_label = {
+            "remote": "🌍 Remote",
+            "contract": "📄 Contract",
+            "part_time": "⏱️ Part-time",
+            "full_time_onsite": "🏢 On-site",
+        }.get((lead.get("work_type") or "").lower())
+        headline = lead.get("headline") or ""
+        if work_label and headline:
+            headline = f"{work_label} — {headline}"
+        elif work_label:
+            headline = work_label
+
         row = {
             "search_id": search_id,
             "user_id": user_id,
@@ -756,7 +832,7 @@ async def _save_leads(supabase, search_id: str, user_id: str, leads: list[dict])
             "linkedin_url": linkedin_url,
             "post_url": lead.get("post_url") or "",
             "post_text": lead.get("post_text") or "",
-            "headline": lead.get("headline") or "",
+            "headline": headline,
             "profile_picture_url": lead.get("profile_picture_url") or "",
             "connections_count": lead.get("connections_count") or 0,
             "posted_at": lead.get("posted_at"),

@@ -238,7 +238,8 @@ def process_items(items: list[dict], max_results: int) -> tuple[list[dict], int]
             "connections_count": 0,
         }
 
-        key = author_url.rstrip("/").lower()
+        # Dedupe by clean profile URL (strip ?miniProfileUrn=... query params)
+        key = author_url.split("?")[0].rstrip("/").lower()
         existing = best_by_author.get(key)
         if existing is None:
             best_by_author[key] = lead
@@ -277,7 +278,24 @@ async def qualify_leads_with_ai(leads: list[dict], query: str, client=None, lead
         SYSTEM_PROMPT = """You are a senior B2B lead qualification specialist for an AI-powered lead-generation platform.
 
 YOUR MISSION
-Analyze LinkedIn posts and identify people/companies with COMMERCIAL INTENT to buy a service — including implicit intent (a business problem, pain point, or hiring need that a service provider could solve). You are NOT a content reviewer; you are a sales intelligence analyst.
+Analyze LinkedIn posts and identify people/companies with COMMERCIAL INTENT to BUY a service — including implicit intent (a business problem, pain point, or hiring need that a service provider could solve). You are NOT a content reviewer; you are a sales intelligence analyst.
+
+THE SINGLE MOST IMPORTANT DISTINCTION: WHO IS THE SUBJECT?
+Ask yourself: "Is the author BUYING this service, or SELLING their own labor/services?"
+
+🚫 REJECT — the author is SELLING themselves (freelancer/service provider looking for work):
+- "I'm available for X", "I'm open to remote work", "I'm seeking projects", "Looking to collaborate"
+- "I offer X", "DM me for X", "I provide X", "My services include", "I build X"
+- "I'm a freelance X looking for clients", "Open to contract work", "Taking new clients"
+- Headline says "Freelance X", "X Developer", "X Designer", "Founder at [their own studio/agency]" AND the post is about their services/availability/portfolio
+- These are NOT buyers. They are COMPETITORS or job-seekers. → is_lead = false
+
+✅ ACCEPT — the author is BUYING/hiring:
+- "We're looking for a developer", "I need a website", "Looking for someone to build our X"
+- "We are hiring a freelance X for a project", "Need a designer on contract"
+- "Anyone know a good agency?", "Recommendations for X services?"
+- A business describing a problem it needs solved (traffic drop, no website, bad conversions)
+- These are the leads we want.
 
 THE ONE HARD RULE
 We ONLY want leads tied to REMOTE, CONTRACT-BASIS, or PART-TIME work.
@@ -292,7 +310,7 @@ WHAT IS A LEAD
 
 WHAT IS NOT A LEAD
 - People LOOKING FOR A JOB for themselves ("open to work", "seeking a role", "available for opportunities")
-- Agencies/freelancers SELLING their services ("we offer", "our agency does", "DM for quote", "I provide")
+- Agencies/freelancers SELLING their services ("we offer", "our agency does", "DM for quote", "I provide", "I'm available for", "open to projects", "seeking projects", "looking to collaborate on projects")
 - Recruiters hiring on behalf of clients (staffing agencies)
 - Pure content/thought leadership ("5 tips", "why you need", trends, opinions, success stories)
 - Students/learners ("learning", "course", "internship", "portfolio feedback")
@@ -361,9 +379,10 @@ Evaluate the post and produce a JSON object with EXACTLY these fields:
    - "explicit_need" (explicit vendor search)
    - "problem_awareness" (implicit business problem)
    - "research" (exploring/comparing)
-   - "hiring" (hiring freelancer/contractor/employee to do the work)
+   - "hiring" (the AUTHOR/COMPANY is hiring someone else to do the work — "we're looking for a developer", "need a designer for our project")
    - "agency" (someone selling this service)
    - "irrelevant" (content, job seeking, student, etc.)
+   ⚠️ IMPORTANT: If the author is a freelancer/developer/designer saying "I'm available", "I'm open to projects", "seeking contract work", "looking to collaborate", "open to remote work" → that is the author SELLING their own services → lead_type = "agency" or "irrelevant", is_lead = false. NOT "hiring".
 10. work_type: exactly one of
    - "remote" (remote, WFH, anywhere, virtual)
    - "contract" (contract, freelance, project basis, consultant)
@@ -377,6 +396,7 @@ CRITICAL:
 - If lead_type is "hiring" and work_type is "full_time_onsite" → is_lead MUST be false.
 - Remote/contract/part-time hiring posts are HIGH-VALUE leads — score them accordingly (80+ if the service matches and the person is a decision-maker).
 - If a post says "looking for a freelance X", "contract X", "project basis", "remote X" → work_type = "contract" or "remote", lead_type = "hiring", is_lead = true.
+- ⛔ NEVER classify a freelancer marketing their own availability ("I'm available", "open to projects", "seeking contract work") as a lead — they are sellers, not buyers.
 
 Return ONLY valid JSON, nothing else."""
 
@@ -606,15 +626,20 @@ async def run_linkedin_pipeline(
         # Rank by AI score (highest first)
         leads.sort(key=lambda x: x.get("ai_score", 0), reverse=True)
 
-        # Dedupe by author (keep highest scoring post per author)
+        # Dedupe by author (keep highest scoring post per author).
+        # Use clean URL (strip query params) so ?miniProfileUrn= variants merge.
+        def _clean_url(u: str) -> str:
+            return (u or "").split("?")[0].rstrip("/").lower()
+
         best_by_author = {}
         for lead in leads:
             author_url = lead.get("linkedin_url")
             if not author_url:
                 continue
             score = lead.get("ai_score", 0)
-            if author_url not in best_by_author or score > best_by_author[author_url].get("ai_score", 0):
-                best_by_author[author_url] = lead
+            key = _clean_url(author_url)
+            if key not in best_by_author or score > best_by_author[key].get("ai_score", 0):
+                best_by_author[key] = lead
         leads = list(best_by_author.values())
         leads.sort(key=lambda x: x.get("ai_score", 0), reverse=True)
 
@@ -632,8 +657,8 @@ async def run_linkedin_pipeline(
             leads = [l for l in leads if l.get("lead_type") in allowed_types]
 
         # Add to all_leads and dedupe again
-        existing_urls = {l.get("linkedin_url") for l in all_leads if l.get("linkedin_url")}
-        new_leads = [l for l in leads if l.get("linkedin_url") not in existing_urls]
+        existing_urls = {_clean_url(l.get("linkedin_url")) for l in all_leads if l.get("linkedin_url")}
+        new_leads = [l for l in leads if _clean_url(l.get("linkedin_url")) not in existing_urls]
         all_leads.extend(new_leads)
 
         logger.info(f"[LinkedInPipeline:{search_id}] Found {len(new_leads)} qualified leads from posts (total: {len(all_leads)})")

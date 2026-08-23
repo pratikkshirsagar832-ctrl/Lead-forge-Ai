@@ -78,6 +78,8 @@ export interface LeadListItem {
   connections_count?: number;
   posted_at?: string | null;
   post_type?: string | null;
+  ai_confidence_score?: number | null;
+  ai_pitch?: string | null;
   user_status: string;
   user_notes?: string;
   is_favorite: boolean;

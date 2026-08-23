@@ -200,6 +200,20 @@ export default function LeadDetailPage() {
                     </Badge>
                   )}
                   {lead.source === 'linkedin' && <PostTypeBadge postType={lead.post_type} />}
+                  {lead.ai_confidence_score != null && (
+                    <Badge
+                      variant="outline"
+                      className={
+                        lead.ai_confidence_score >= 0.8
+                          ? 'border-emerald-500/30 text-emerald-400 bg-emerald-500/5'
+                          : lead.ai_confidence_score >= 0.6
+                            ? 'border-amber-500/30 text-amber-400 bg-amber-500/5'
+                            : 'border-sky-500/30 text-sky-400 bg-sky-500/5'
+                      }
+                    >
+                      {Math.round(lead.ai_confidence_score * 100)}% AI Match
+                    </Badge>
+                  )}
                   {lead.is_favorite && (
                     <Badge variant="outline" className="border-rose-500/30 text-rose-400 bg-rose-500/10">
                       Favorited

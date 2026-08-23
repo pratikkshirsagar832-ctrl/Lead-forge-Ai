@@ -1,6 +1,6 @@
 import { GlassCard } from '@/components/shared/GlassCard';
 import { Badge } from '@/components/shared/Badge';
-import { PostTypeBadge } from '@/components/dashboard/PostTypeBadge';
+import { PostTypeBadge, WorkTypeBadge } from '@/components/dashboard/PostTypeBadge';
 import { LEAD_CATEGORIES, USER_STATUSES } from '@/lib/constants';
 import { formatNumber, truncate } from '@/lib/utils';
 import { MapPin, Globe, Star, Phone, ChevronRight, Heart, Linkedin, Mail, Clock, ExternalLink, Users } from 'lucide-react';
@@ -14,6 +14,19 @@ interface LeadCardProps {
   isUpdatingFav: boolean;
 }
 
+function extractWorkType(headline?: string | null): { workType?: string; cleanHeadline?: string } {
+  if (!headline) return {};
+  const match = headline.match(/^(🌍 Remote|📄 Contract|⏱️ Part-time|🏢 On-site)\s*—?\s*(.*)$/);
+  if (!match) return {};
+  const map: Record<string, string> = {
+    '🌍 Remote': 'remote',
+    '📄 Contract': 'contract',
+    '⏱️ Part-time': 'part_time',
+    '🏢 On-site': 'full_time_onsite',
+  };
+  return { workType: map[match[1]], cleanHeadline: match[2] };
+}
+
 export function LeadCard({ lead, onToggleFavorite, isUpdatingFav }: LeadCardProps) {
   const leadCatKey = lead.lead_category || 'warm';
   const categoryConfig = LEAD_CATEGORIES[leadCatKey as keyof typeof LEAD_CATEGORIES]
@@ -22,6 +35,8 @@ export function LeadCard({ lead, onToggleFavorite, isUpdatingFav }: LeadCardProp
   const statusConfig = lead.user_status
     ? USER_STATUSES[lead.user_status as keyof typeof USER_STATUSES]
     : USER_STATUSES.new;
+
+  const { workType, cleanHeadline } = extractWorkType(lead.headline);
 
   const scoreColor = lead.website_health_score != null
     ? lead.website_health_score >= 70 ? 'text-emerald-400'
@@ -58,6 +73,19 @@ export function LeadCard({ lead, onToggleFavorite, isUpdatingFav }: LeadCardProp
               </span>
             )}
             {lead.source === 'linkedin' && <PostTypeBadge postType={lead.post_type} />}
+            {lead.source === 'linkedin' && <WorkTypeBadge workType={workType} />}
+            {lead.ai_confidence_score != null && (
+              <span
+                className={`text-[11px] font-bold px-2 py-1 rounded-md border ${
+                  lead.ai_confidence_score >= 0.8 ? 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30'
+                  : lead.ai_confidence_score >= 0.6 ? 'bg-amber-500/15 text-amber-400 border-amber-500/30'
+                  : 'bg-sky-500/15 text-sky-400 border-sky-500/30'
+                }`}
+                title="AI lead score (0-1)"
+              >
+                {Math.round(lead.ai_confidence_score * 100)}% match
+              </span>
+            )}
           </div>
           <button
             onClick={(e) => {
@@ -113,7 +141,7 @@ export function LeadCard({ lead, onToggleFavorite, isUpdatingFav }: LeadCardProp
                   <div className="p-1.5 shrink-0 rounded-lg bg-ocean/25 text-steel/50 group-hover/item:text-ice transition-colors mt-0.5">
                     <Linkedin className="w-3.5 h-3.5" />
                   </div>
-                  <span className="line-clamp-2 leading-snug text-[13px]">{lead.headline}</span>
+                  <span className="line-clamp-2 leading-snug text-[13px]">{cleanHeadline || lead.headline}</span>
                 </div>
               )}
               {lead.post_url && (
@@ -124,6 +152,14 @@ export function LeadCard({ lead, onToggleFavorite, isUpdatingFav }: LeadCardProp
                   <a href={lead.post_url} target="_blank" rel="noopener noreferrer" onClick={(e) => e.stopPropagation()} className="text-steel hover:text-ice hover:underline truncate font-medium text-[13px]">
                     View post on LinkedIn
                   </a>
+                </div>
+              )}
+              {lead.ai_pitch && (
+                <div className="flex items-start gap-2.5 text-sm text-ice/70 group/item">
+                  <div className="p-1.5 shrink-0 rounded-lg bg-amber-500/15 text-amber-400 group-hover/item:text-amber-300 transition-colors mt-0.5">
+                    <span className="text-[10px] font-bold">⚡</span>
+                  </div>
+                  <span className="line-clamp-2 leading-snug text-[13px] text-amber-100/80">{lead.ai_pitch}</span>
                 </div>
               )}
               {lead.posted_at && (

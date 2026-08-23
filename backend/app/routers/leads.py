@@ -166,6 +166,7 @@ async def export_leads_csv(
             "headline", "linkedin_url", "post_url", "post_text",
             "connections_count", "posted_at", "post_type",
             "user_status", "user_notes", "is_favorite", "ai_pitch",
+            "ai_confidence_score", "ai_qualified", "ai_reason",
         ]
         writer = csv.DictWriter(output, fieldnames=fieldnames, extrasaction="ignore")
         writer.writeheader()

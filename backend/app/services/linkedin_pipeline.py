@@ -755,7 +755,8 @@ async def _save_leads(supabase, search_id: str, user_id: str, leads: list[dict])
             "connections_count": lead.get("connections_count") or 0,
             "posted_at": lead.get("posted_at"),
             "ai_qualified": True,
-            "ai_confidence_score": ai_score,
+            # column is constrained to 0..1 — store normalized score
+            "ai_confidence_score": ai_score / 100.0,
             "ai_reason": lead.get("ai_reason"),
             "ai_pitch": lead.get("outreach_angle"),
         }

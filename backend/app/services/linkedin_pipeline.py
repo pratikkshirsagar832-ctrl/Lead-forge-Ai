@@ -628,13 +628,9 @@ async def run_linkedin_pipeline(
         if len(all_leads) > max_results:
             all_leads = all_leads[:max_results]
 
-        # Count by lead_category based on ai_score (for posts) or default for jobs
+        # Count by lead_category based on ai_score
         hot = sum(1 for l in all_leads if l.get("ai_score", 0) >= 85)
-        warm = sum(1 for l in all_leads if 70 <= l.get("ai_score", 0) < 85)
-        potential = sum(1 for l in all_leads if 40 <= l.get("ai_score", 0) < 70)
-        # Jobs without AI score get "potential" category
-        job_leads = [l for l in all_leads if l.get("lead_type") == "hiring" and l.get("ai_score", 0) == 0]
-        potential += len(job_leads)
+        warm = len(all_leads) - hot
 
         if not all_leads:
             await _update_search(supabase, search_id, {
@@ -652,7 +648,7 @@ async def run_linkedin_pipeline(
 
         await _update_search(supabase, search_id, {
             "progress_percent": 85,
-            "message": f"Saving {len(all_leads)} qualified leads ({hot} hot, {warm} warm, {potential} potential)...",
+            "message": f"Saving {len(all_leads)} qualified leads ({hot} hot, {warm} warm)...",
         })
 
         lead_ids = await _save_leads(supabase, search_id, user_id, all_leads)
@@ -679,7 +675,7 @@ async def run_linkedin_pipeline(
             "emails_found": emails_found,
             "completed_at": datetime.now(timezone.utc).isoformat(),
         })
-        logger.info(f"[LinkedInPipeline:{search_id}] Completed — {saved} leads ({hot} hot, {warm} warm, {potential} potential), {emails_found} emails")
+        logger.info(f"[LinkedInPipeline:{search_id}] Completed — {saved} leads ({hot} hot, {warm} warm), {emails_found} emails")
 
     except ApifyError as e:
         logger.error(f"[LinkedInPipeline:{search_id}] Apify error: {e}", exc_info=True)
@@ -724,10 +720,22 @@ async def _save_leads(supabase, search_id: str, user_id: str, leads: list[dict])
         ai_score = lead.get("ai_score", 0)
         if ai_score >= 85:
             lead_category = "hot"
-        elif ai_score >= 70:
-            lead_category = "warm"
         else:
-            lead_category = "potential"
+            lead_category = "warm"
+
+        # Map AI semantic type to the post_type CHECK values the DB allows
+        # (buyer / agency / hiring / job_seeker)
+        ai_type = lead.get("lead_type") or ""
+        if ai_type in ("explicit_need", "problem_awareness", "research"):
+            post_type = "buyer"
+        elif ai_type in ("agency",):
+            post_type = "agency"
+        elif ai_type in ("hiring",):
+            post_type = "hiring"
+        elif ai_type in ("job_seeker",):
+            post_type = "job_seeker"
+        else:
+            post_type = "buyer"
 
         row = {
             "search_id": search_id,
@@ -744,9 +752,7 @@ async def _save_leads(supabase, search_id: str, user_id: str, leads: list[dict])
             "google_maps_link": "",
             "description": lead.get("post_text") or "",
             "lead_category": lead_category,
-            # post_type column stores the AI semantic type
-            # (explicit_need / problem_awareness / research / hiring / agency)
-            "post_type": lead.get("lead_type") or "unknown",
+            "post_type": post_type,
             "linkedin_url": linkedin_url,
             "post_url": lead.get("post_url") or "",
             "post_text": lead.get("post_text") or "",

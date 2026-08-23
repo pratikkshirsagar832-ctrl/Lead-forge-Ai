@@ -91,11 +91,17 @@ def build_boolean_query(user_query: str) -> list[str]:
         role = " ".join(role.split())
         if not role or role == base:
             continue
+        # BUYER-INTENT phrases FIRST (highest priority - attract companies hiring)
         phrases.extend([
             f"looking for a freelance {role}",
             f"looking for freelance {role}",
             f"hiring {role}",
             f"need a {role} for our",
+            f"looking for {role} for our",
+            f"need {role} for our",
+        ])
+        # SELLER-ATTRACTING phrases LAST (lower priority - may attract freelancers selling)
+        phrases.extend([
             f"{role} required for",
             f"freelance {role} for",
             f"need {role} for project",
@@ -422,7 +428,7 @@ Return ONLY valid JSON, nothing else."""
                 continue
             logger.info(f"[AI Qualify DEBUG] {full_name} -> is_lead={result.get('is_lead')}, score={result.get('lead_score')}, type={result.get('lead_type')}, work={work_type}, reason={result.get('reason')[:100]}")
 
-            if result.get("is_lead") and result.get("lead_score", 0) >= 40:
+            if result.get("is_lead") and result.get("lead_score", 0) >= 35:
                 lead["ai_qualified"] = True
                 lead["ai_score"] = result.get("lead_score")
                 lead["lead_type"] = result.get("lead_type", "potential")
@@ -691,12 +697,15 @@ async def run_linkedin_pipeline(
 
                     # Convert jobs to lead format
                     for job in filtered_jobs:
+                        company_url = (job.get("companyUrl") or "").strip()
+                        job_url = (job.get("jobUrl") or "").strip()
+                        linkedin_url = company_url or job_url
                         job_lead = {
                             "full_name": job.get("company") or "Unknown Company",
                             "headline": f"{job.get('title', '')} at {job.get('company', '')}",
                             "company": job.get("company", ""),
                             "location": job.get("location", ""),
-                            "linkedin_url": job.get("companyUrl", ""),
+                            "linkedin_url": linkedin_url,
                             "post_url": job.get("jobUrl", ""),
                             "post_text": job.get("descriptionText", "")[:3000],
                             "posted_at": job.get("postedAt"),
@@ -842,6 +851,11 @@ async def _save_leads(supabase, search_id: str, user_id: str, leads: list[dict])
             headline = f"{work_label} — {headline}"
         elif work_label:
             headline = work_label
+
+        # Skip leads with empty linkedin_url (cannot dedupe or reference)
+        if not linkedin_url:
+            logger.warning(f"[LinkedInPipeline:{search_id}] Skipping lead '{lead.get('full_name')}' - empty linkedin_url")
+            continue
 
         row = {
             "search_id": search_id,

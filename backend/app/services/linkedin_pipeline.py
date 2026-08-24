@@ -1026,7 +1026,7 @@ async def run_linkedin_pipeline(
             job_queries = get_job_queries_for_niche(query)[: min(4, max(2, remaining_need))]
             logger.info(f"[LinkedInPipeline:{search_id}] Job queries: {job_queries} (need {remaining_need} more)")
 
-            for job_query in job_queries:
+            async def _fetch_jobs(job_query: str) -> list[dict]:
                 try:
                     jobs = await asyncio.to_thread(
                         run_job_search,
@@ -1036,41 +1036,41 @@ async def run_linkedin_pipeline(
                         max_jobs=min(max_results * 2, 40),
                     )
                     logger.info(f"[LinkedInPipeline:{search_id}] Job search '{job_query}' returned {len(jobs)} jobs")
-
-                    # Filter for remote/part-time/contract only
-                    filtered_jobs = filter_jobs_by_work_type(jobs, ["Remote", "Part-time", "Contract"])
-                    logger.info(f"[LinkedInPipeline:{search_id}] After work type filter: {len(filtered_jobs)} jobs")
-
-                    # Convert jobs to lead format
-                    for job in filtered_jobs:
-                        company_url = (job.get("companyUrl") or "").strip()
-                        job_url = (job.get("jobUrl") or "").strip()
-                        linkedin_url = company_url or job_url
-                        job_lead = {
-                            "full_name": job.get("company") or "Unknown Company",
-                            "headline": f"{job.get('title', '')} at {job.get('company', '')}",
-                            "company": job.get("company", ""),
-                            "location": job.get("location", ""),
-                            "linkedin_url": linkedin_url,
-                            "post_url": job.get("jobUrl", ""),
-                            "post_text": job.get("descriptionText", "")[:3000],
-                            "posted_at": _parse_posted_at(job.get("postedAt")),
-                            "engagement_likes": 0,
-                            "engagement_comments": 0,
-                            "profile_picture_url": job.get("companyLogo", ""),
-                            "connections_count": 0,
-                            "lead_type": "hiring",
-                            "job_work_type": job.get("workType", ""),
-                            "job_salary": job.get("salary", ""),
-                            "job_seniority": job.get("seniority", ""),
-                            "job_function": job.get("jobFunction", ""),
-                            "job_industry": job.get("companyIndustry", ""),
-                        }
-                        all_leads.append(job_lead)
-
+                    return filter_jobs_by_work_type(jobs, ["Remote", "Part-time", "Contract"])
                 except Exception as e:
                     logger.error(f"[LinkedInPipeline:{search_id}] Job search error for '{job_query}': {e}")
-                    continue
+                    return []
+
+            # Run all job queries IN PARALLEL — big speedup over sequential.
+            job_results = await asyncio.gather(*[_fetch_jobs(q) for q in job_queries])
+            for filtered_jobs in job_results:
+                logger.info(f"[LinkedInPipeline:{search_id}] After work type filter: {len(filtered_jobs)} jobs")
+                # Convert jobs to lead format
+                for job in filtered_jobs:
+                    company_url = (job.get("companyUrl") or "").strip()
+                    job_url = (job.get("jobUrl") or "").strip()
+                    linkedin_url = company_url or job_url
+                    job_lead = {
+                        "full_name": job.get("company") or "Unknown Company",
+                        "headline": f"{job.get('title', '')} at {job.get('company', '')}",
+                        "company": job.get("company", ""),
+                        "location": job.get("location", ""),
+                        "linkedin_url": linkedin_url,
+                        "post_url": job.get("jobUrl", ""),
+                        "post_text": job.get("descriptionText", "")[:3000],
+                        "posted_at": _parse_posted_at(job.get("postedAt")),
+                        "engagement_likes": 0,
+                        "engagement_comments": 0,
+                        "profile_picture_url": job.get("companyLogo", ""),
+                        "connections_count": 0,
+                        "lead_type": "hiring",
+                        "job_work_type": job.get("workType", ""),
+                        "job_salary": job.get("salary", ""),
+                        "job_seniority": job.get("seniority", ""),
+                        "job_function": job.get("jobFunction", ""),
+                        "job_industry": job.get("companyIndustry", ""),
+                    }
+                    all_leads.append(job_lead)
 
         # Trim to max_results
         if len(all_leads) > max_results:

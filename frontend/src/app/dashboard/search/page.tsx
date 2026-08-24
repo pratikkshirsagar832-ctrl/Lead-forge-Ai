@@ -383,7 +383,7 @@ export default function SearchPage() {
                       onChange={(e) => setMaxResults(Number(e.target.value))}
                       className="w-full px-3 py-3 rounded-xl border border-ocean/30 bg-navy/60 text-offwhite outline-none focus:ring-2 focus:ring-steel/40"
                     >
-                      {[5, 10, 20, 30, 50].map(n => (
+                      {[3, 5, 8, 10, 15, 20, 30, 50].map(n => (
                         <option key={n} value={n}>{n} leads</option>
                       ))}
                     </select>

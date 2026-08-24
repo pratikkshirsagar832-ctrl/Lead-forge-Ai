@@ -56,6 +56,27 @@ ALLOWED_COUNTRY_CODES = {
 # If no country code is available, fall back to rejecting known low-value markets.
 BLOCKED_COUNTRY_CODES = {"IN", "PK", "BD", "PH", "NG", "LK", "NP", "EG", "MA", "DZ", "VN", "ID", "TH", "MY", "KE", "GH", "ZA"}
 
+# Common Indian/Pakistani/Bangladeshi surname & name markers — used only when
+# countryCode is missing, to keep individual leads to English-speaking markets.
+SOUTH_ASIA_NAME_MARKERS = (
+    "kumar", "sharma", "singh", "patel", "gupta", "reddy", "rao", "iya",
+    "meskat", "khurana", "malhotra", "kapoor", "mehta", "shah", "jain",
+    "agarwal", "bhatt", "desai", "joshi", "kulkarni", "nair", "menon",
+    "pillai", "iyer", "chowdhury", "rahman", "khan", "ahmed", "hussain",
+    "ali", "hasan", "rana", "akram", "iftikhar", "naseem", "abbas",
+    "zahra", "hassan", "hussain", "mirza", "sheikh", "syed", "zaidi",
+    "imran", "adnan", "bilal", "tahir", "saifi", "rafiq", "waqas",
+    "baig", "chaudhry", "aslam", "anjum", "farooq", "iqbal", "jamal",
+)
+
+
+def _looks_south_asian(name: str) -> bool:
+    """Heuristic: is this likely an Indian/Pakistani/Bangladeshi name?"""
+    if not name:
+        return False
+    low = name.lower()
+    return any(marker in low for marker in SOUTH_ASIA_NAME_MARKERS)
+
 
 def _get_author_location(author: dict) -> tuple[str, str]:
     """Extract (country_code, location_text) from harvestapi author data."""
@@ -291,8 +312,15 @@ def process_items(items: list[dict], max_results: int) -> tuple[list[dict], int]
             # No country data: if scrapeforge fallback, keep (unknown); we can't filter.
             # If headline hints a blocked market, skip it.
             hint = (author.get("info") or author.get("headline") or "").lower()
+            name_hint = (author.get("name") or "")
             if any(k in hint for k in ("bengaluru", "mumbai", "new delhi", "hyderabad", "pune", "india", "pakistan", "bangladesh", "manila", "lagos", "nairobi")):
                 logger.info(f"[CountryFilter] skipped {author.get('name')} (region hint in headline)")
+                skipped += 1
+                continue
+            # Company pages are fine (prime targets). Individuals with South-Asian
+            # names and no country data are most likely from blocked markets.
+            if "/company/" not in author_url and _looks_south_asian(name_hint):
+                logger.info(f"[CountryFilter] skipped {author.get('name')} (South-Asian name, no country data)")
                 skipped += 1
                 continue
 
@@ -370,10 +398,12 @@ HARD RULES (never violate):
 - R4: A RECRUITER/STAFFING agency posting on behalf of clients = NOT a lead.
 - R5: Job seekers looking for a role for themselves = NOT a lead.
 - R6: Pure content/thought-leadership ("5 tips", "why you need", "trends", "case study", "opinion") = NOT a lead even if it scores high on service_match.
+- R7: NON-ENGLISH posts (Spanish, German, French, Hindi, Arabic, etc.) = NOT a lead (is_lead=false). We only serve English-speaking markets. If the post is mostly in another language, reject it even if it describes hiring.
 
 WHO IS THE SUBJECT? (the single most important question)
 🚫 SELLING (reject): "I'm available for X", "I'm open to remote work", "I'm seeking projects", "Looking to collaborate", "I offer X", "DM me for X", "I provide X", "My services include", "I build X", "I'm a freelance X looking for clients", "Open to contract work", "Taking new clients". Headline reads "Freelance X", "X Developer/Designer" and the post promotes their availability, portfolio, or services.
-✅ BUYING (accept): "We're looking for a developer", "I need a website", "Looking for someone to build our X", "We are hiring a freelance X for a project", "Need a designer on contract", "Anyone know a good agency?", "Recommendations for X services?", or a business describing a problem it needs solved (traffic drop, no website, bad conversions, launching a product).
+✅ BUYING (accept): "We're looking for a developer", "I need a website", "Looking for someone to build our X", "We are hiring a freelance X for a project", "Need a designer on contract", "Anyone know a good agency?", "Recommendations for X services?", "We're looking for the right partners to build our marketing", "Seeking agencies & marketers to work with", or a business describing a problem it needs solved (traffic drop, no website, bad conversions, launching a product).
+⚠️ "Looking for partners/agencies/marketers/freelancers" = the company is SOURCING suppliers = BUYER. Only "we offer X / I provide X / we help businesses with X" is a SELLER.
 ⚠️ RECRUITER EXCEPTION: A staffing agency placing candidates at THIRD-PARTY clients = reject. BUT a company/firm saying "We are building our pool of experts", "Experts required for our projects", "Building a team of freelancers" = they are BUYING expertise for their own work = ACCEPT (lead_type="hiring").
 
 TRAP CASES — the mistakes to avoid:
@@ -386,6 +416,7 @@ TRAP CASES — the mistakes to avoid:
 - Trap 7: "Anyone else seeing traffic drops?" (no business context, no "for my business") — passive/research, low score (40-55) or reject if purely casual.
 - Trap 8: A COMPANY/AGENCY/FIRM says "We are building our pool of experts", "Service Line Experts Required", "Looking for experts to join our project roster", "Building a team of freelancers for client projects" — this is a BUYER of talent/expertise. They are not selling their own services; they are recruiting service providers to work FOR them on projects. is_lead=true, lead_type="hiring". (Exception to the recruiter rule: a firm hiring experts for ITS OWN projects is a buyer; only staffing agencies that place candidates at THIRD-PARTY clients are rejected.)
 - Trap 9: "We fired our agency and now use X" — if the post is about replacing a service with a tool, they are NOT currently buying; is_lead=false. But if they say "we fired our agency, looking for a replacement" → buyer.
+- Trap 10: "We're looking for partners / looking for the right partners / seeking agencies & marketers to work with / building our marketing engine" — the author is a COMPANY SEEKING service providers = BUYER. is_lead=true, lead_type="hiring". NEVER classify "looking for partners/marketers/agencies" as a seller — they are sourcing suppliers, not offering services. ONLY if the post says "we offer X", "I provide X", "we help businesses with X" is it a seller.
 
 SCORING (six dimensions, then total):
 - service_match (0-25): direct mention of the service or its core problem = 25; adjacent problem (traffic drop for SEO, slow site for web dev) = 20; general growth/marketing = 15; vague = 10; unrelated = 0.
@@ -469,6 +500,8 @@ REMEMBER:
 - "looking for a freelance X" from a company = buyer (contract). "I'm a freelance X available" = seller.
 - Full-time on-site = never a lead. Content/tips/opinions = never a lead.
 - A firm building a "pool of experts" or saying "experts required for our projects" is BUYING expertise = lead (hiring). Only staffing agencies placing candidates at third-party clients are rejected.
+- "Looking for partners/agencies/marketers" = company sourcing suppliers = BUYER, never a seller.
+- NON-ENGLISH posts = reject (we serve English-speaking markets only).
 - If lead_type is "agency" or "irrelevant", is_lead MUST be false regardless of score.
 
 Return ONLY valid JSON, nothing else."""
@@ -776,7 +809,7 @@ async def run_linkedin_pipeline(
                             "linkedin_url": linkedin_url,
                             "post_url": job.get("jobUrl", ""),
                             "post_text": job.get("descriptionText", "")[:3000],
-                            "posted_at": job.get("postedAt"),
+                            "posted_at": _parse_posted_at(job.get("postedAt")),
                             "engagement_likes": 0,
                             "engagement_comments": 0,
                             "profile_picture_url": job.get("companyLogo", ""),

@@ -99,21 +99,32 @@ def run_post_search(
     max_posts: int = 100,
     posted_limit: str = "week",
 ) -> list[dict]:
-    """Broad LinkedIn post discovery via scrapeforge/linkedin-all-in-one.
+    """Broad LinkedIn post discovery.
 
-    LinkedIn's post-search rejects long boolean queries (~>70 chars), so
-    phrases are packed into small OR-chunks (≤60 chars) and each chunk runs
-    as its own actor call in parallel. Results are merged and deduped.
-    Returns raw post items:
+    Primary: harvestapi/linkedin-post-search — native searchQueries array,
+    author headline included in every post (critical for AI qualification),
+    optional authorKeywords to target decision-makers. Fast (~10s).
+
+    Fallback: scrapeforge/linkedin-all-in-one — phrases packed into ≤60-char
+    OR-chunks, parallel runs. Slower but works when harvestapi is unavailable.
+
+    Returns raw post items (both formats normalized):
       { postId, url, content, postedAt, postedTimestamp,
-        author: {id, name, url, avatar},
+        author: {id, name, url, info/headline, avatar},
         engagement: {likes, comments, shares, reactions}, ... }
     """
     if isinstance(search_queries, str):
         search_queries = [search_queries]
-    clean = [q.strip() for q in search_queries if q and q.strip()][:8]
+    clean = [q.strip() for q in search_queries if q and q.strip()][:12]
     if not clean:
         clean = ["marketing"]
+
+    try:
+        items = run_harvest_post_search(clean, max_posts, posted_limit)
+        logger.info(f"[Apify] harvestapi post-search returned {len(items)} posts")
+        return items
+    except Exception as e:
+        logger.warning(f"[Apify] harvestapi post-search failed, falling back to scrapeforge: {e}")
 
     chunks = _chunk_search_phrases(clean)
     per_chunk = max(20, max_posts // len(chunks))
@@ -146,6 +157,36 @@ def run_post_search(
         seen_ids.add(pid)
         unique.append(item)
     return unique
+
+
+HARVEST_POST_SEARCH_ACTOR = "harvestapi~linkedin-post-search"
+
+
+def run_harvest_post_search(
+    search_queries: list[str],
+    max_posts: int = 100,
+    posted_limit: str = "week",
+) -> list[dict]:
+    """Search LinkedIn posts via harvestapi/linkedin-post-search.
+
+    Author headline (`author.info`) is included per post — no separate
+    profile enrichment required. No authorKeywords filter: the AI
+    WHO-IS-THE-SUBJECT rule rejects freelancers/sellers at scoring time,
+    and a keyword filter silently returns 0 results on longer phrases.
+    """
+    per_query = max(5, max_posts // max(len(search_queries), 1))
+    payload = {
+        "searchQueries": search_queries[:12],
+        "maxPosts": min(per_query, 50),
+        "postedLimit": posted_limit if posted_limit in ("1h", "24h", "week", "month") else "month",
+        "sortBy": "date",
+        "profileScraperMode": "short",
+        "scrapeReactions": False,
+        "postNestedReactions": False,
+        "scrapeComments": False,
+        "postNestedComments": False,
+    }
+    return _run_sync_actor(HARVEST_POST_SEARCH_ACTOR, payload)
 
 
 def _run_post_search_chunk(search: str, max_posts: int, posted_limit: str) -> list[dict]:

@@ -222,7 +222,8 @@ def process_items(items: list[dict], max_results: int) -> tuple[list[dict], int]
 
     for item in items:
         author = item.get("author") or {}
-        author_url = (author.get("url") or "").strip()
+        # harvestapi: author.linkedinUrl / author.info; scrapeforge: author.url
+        author_url = ((author.get("url") or author.get("linkedinUrl") or "")).strip()
         content = (item.get("content") or "").strip()
         if not author_url or len(content) < 20:
             skipped += 1
@@ -231,11 +232,13 @@ def process_items(items: list[dict], max_results: int) -> tuple[list[dict], int]
         eng = item.get("engagement") or {}
         lead = {
             "full_name": author.get("name") or "",
-            "headline": "",  # filled by profile enrichment
+            # harvestapi provides the author's headline inline (author.info)
+            "headline": (author.get("info") or author.get("headline") or "")[:500],
             "company": "",
             "location": "",
             "linkedin_url": author_url,
-            "post_url": item.get("url") or "",
+            # harvestapi: item.linkedinUrl; scrapeforge: item.url
+            "post_url": item.get("url") or item.get("linkedinUrl") or "",
             "post_text": content[:3000],
             "posted_at": _parse_posted_at(item.get("postedAt") or item.get("postedTimestamp")),
             "engagement_likes": _int(eng.get("likes") if eng.get("likes") is not None else eng.get("reactions")),
@@ -601,9 +604,10 @@ async def run_linkedin_pipeline(
         logger.info(f"[LinkedInPipeline:{search_id}] Candidates after parsing: {len(leads)} (skipped {skipped})")
 
         # Enrich authors via profile-detail mode: headline/company/location.
-        # Without headlines the AI cannot tell buyers from sellers/seekers.
-        if leads:
-            enrich_urls = [l["linkedin_url"] for l in leads[:PROFILE_ENRICHMENT_CAP]]
+        # Only needed for scrapeforge results — harvestapi includes headline inline.
+        missing_headline = sum(1 for l in leads if not (l.get("headline") or "").strip())
+        if leads and missing_headline > 0:
+            enrich_urls = [l["linkedin_url"] for l in leads[:PROFILE_ENRICHMENT_CAP] if not (l.get("headline") or "").strip()]
             try:
                 profiles = await asyncio.to_thread(fetch_profile_details, enrich_urls, "basic")
                 by_url = {(p.get("url") or "").rstrip("/").lower(): p for p in profiles if isinstance(p, dict)}
@@ -612,7 +616,7 @@ async def run_linkedin_pipeline(
                     p = by_url.get((lead.get("linkedin_url") or "").rstrip("/").lower())
                     if not p:
                         continue
-                    lead["headline"] = (p.get("headline") or "")[:500]
+                    lead["headline"] = (p.get("headline") or lead.get("headline") or "")[:500]
                     lead["company"] = _company_from_profile(p)
                     lead["location"] = _location_from_profile(p)
                     lead["connections_count"] = p.get("connectionsCount") or 0

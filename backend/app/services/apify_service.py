@@ -166,24 +166,78 @@ def run_harvest_post_search(
 ) -> list[dict]:
     """Search LinkedIn posts via harvestapi/linkedin-post-search.
 
+    Queries are split into groups and each group runs IN PARALLEL using a
+    DIFFERENT Apify API key (key 0 → group 0, key 1 → group 1, ...). This
+    cuts wall time ~Nx while naturally rotating through the 24 configured
+    keys — if one key is out of credits, only its group fails and the rest
+    still return posts.
+
     profileScraperMode="main" returns FULL author data per post:
       author.location.countryCode (US/GB/IN...), author.currentPosition
-      (company), author.info (headline). This is used to filter leads to
-      English-speaking countries and give the AI company context.
+      (company), author.info (headline). Used to filter to English-speaking
+      countries and give the AI company context.
     """
-    per_query = max(5, max_posts // max(len(search_queries), 1))
-    payload = {
-        "searchQueries": search_queries[:12],
-        "maxPosts": min(per_query, 50),
-        "postedLimit": posted_limit if posted_limit in ("1h", "24h", "week", "month") else "month",
-        "sortBy": "date",
-        "profileScraperMode": "main",
-        "scrapeReactions": False,
-        "postNestedReactions": False,
-        "scrapeComments": False,
-        "postNestedComments": False,
-    }
-    return _run_sync_actor(HARVEST_POST_SEARCH_ACTOR, payload)
+    queries = [q.strip() for q in search_queries if q and q.strip()][:12]
+    if not queries:
+        queries = ["marketing"]
+
+    keys = _get_api_keys()
+    # Split queries into as many groups as we have keys (capped at 10 groups
+    # so we don't hammer Apify with too many concurrent runs).
+    n_groups = min(len(keys), len(queries), 10)
+    groups: list[list[str]] = [[] for _ in range(n_groups)]
+    for idx, q in enumerate(queries):
+        groups[idx % n_groups].append(q)
+
+    per_query = max(5, max_posts // max(len(queries), 1))
+
+    def _run_group(group_idx: int, group_queries: list[str]) -> list[dict]:
+        key = keys[group_idx]
+        payload = {
+            "searchQueries": group_queries,
+            "maxPosts": min(per_query, 50),
+            "postedLimit": posted_limit if posted_limit in ("1h", "24h", "week", "month") else "month",
+            "sortBy": "date",
+            "profileScraperMode": "main",
+            "scrapeReactions": False,
+            "postNestedReactions": False,
+            "scrapeComments": False,
+            "postNestedComments": False,
+        }
+        try:
+            return _run_with_key(HARVEST_POST_SEARCH_ACTOR, key, payload)
+        except ApifyRetryableError as e:
+            logger.warning(f"[Apify] harvest group {group_idx} failed on key {key[-6:]} ({e}); retrying with failover...")
+            # fall back to the standard failover (other keys) for this group
+            return _run_sync_actor(HARVEST_POST_SEARCH_ACTOR, payload)
+        except ApifyError:
+            raise
+
+    items: list[dict] = []
+    errors: list[Exception] = []
+    logger.info(f"[Apify] harvest parallel groups: {n_groups} (queries per group: {[len(g) for g in groups]})")
+    with ThreadPoolExecutor(max_workers=n_groups) as pool:
+        futures = [pool.submit(_run_group, i, g) for i, g in enumerate(groups) if g]
+        for fut in as_completed(futures):
+            try:
+                items.extend(fut.result())
+            except Exception as e:
+                logger.warning(f"[Apify] harvest group failed: {e}")
+                errors.append(e)
+
+    if not items and errors:
+        raise errors[0]
+
+    # Dedupe by post id / url across groups.
+    seen: set[str] = set()
+    unique: list[dict] = []
+    for it in items:
+        pid = it.get("postId") or it.get("url")
+        if not pid or pid in seen:
+            continue
+        seen.add(pid)
+        unique.append(it)
+    return unique
 
 
 def _run_post_search_chunk(search: str, max_posts: int, posted_limit: str) -> list[dict]:

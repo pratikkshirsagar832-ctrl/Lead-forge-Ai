@@ -16,6 +16,7 @@ Flow (scrapeforge/linkedin-all-in-one):
 import asyncio
 import json
 import logging
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 
 from app.config import get_settings
@@ -32,6 +33,10 @@ from app.services.apify_service import (
 logger = logging.getLogger(__name__)
 
 MAX_RESULTS_CAP = 50
+
+# Concurrent OpenAI calls during AI qualification — big speedup for large
+# candidate lists. Cap at 10 so we don't trip OpenAI rate limits.
+AI_QUALIFY_CONCURRENCY = 10
 
 # Profile enrichment bills per row on pay-per-event actors — cap it.
 PROFILE_ENRICHMENT_CAP = 60
@@ -474,7 +479,12 @@ def process_items(items: list[dict], max_results: int) -> tuple[list[dict], int]
 
 
 async def qualify_leads_with_ai(leads: list[dict], query: str, client=None, lead_types=None) -> list[dict]:
-    """Use GPT-5 to score commercial intent semantically (0-100). Catches implicit buying signals."""
+    """Score commercial intent semantically (0-100) with GPT-4o-mini.
+
+    Runs up to AI_QUALIFY_CONCURRENCY (10) OpenAI calls in parallel using a
+    thread pool — big speedup over sequential scoring for large candidate
+    lists (55+ candidates per round).
+    """
     if client is None:
         settings = get_settings()
         if not settings.openai_api_key:
@@ -483,15 +493,7 @@ async def qualify_leads_with_ai(leads: list[dict], query: str, client=None, lead
         from openai import OpenAI
         client = OpenAI(api_key=settings.openai_api_key)
 
-    qualified = []
-    for lead in leads:
-        post_text = lead.get("post_text", "")[:3000]
-        headline = lead.get("headline", "")[:500]
-        company = lead.get("company", "")[:200]
-        location = lead.get("location", "")[:100]
-        full_name = lead.get("full_name", "?")
-
-        SYSTEM_PROMPT = """You are a senior B2B lead qualification specialist for an AI-powered lead-generation platform. You decide whether a LinkedIn post is a genuine BUYING signal that a service provider could convert into a client. Your decisions feed a CRM, so precision matters more than recall: one excellent lead is worth more than ten noise records.
+    SYSTEM_PROMPT = """You are a senior B2B lead qualification specialist for an AI-powered lead-generation platform. You decide whether a LinkedIn post is a genuine BUYING signal that a service provider could convert into a client. Your decisions feed a CRM, so precision matters more than recall: one excellent lead is worth more than ten noise records.
 
 WORKFLOW — always follow these steps in order:
 1. Read the post and identify the AUTHOR's role (headline/company).
@@ -559,7 +561,7 @@ OUTREACH_ANGLE rules:
 
 Always output valid JSON. Never include markdown, commentary, or text outside the JSON object."""
 
-        prompt = f"""Analyze this LinkedIn post for a business offering: {query}
+    PROMPT_TEMPLATE = """Analyze this LinkedIn post for a business offering: {query}
 
 --- POST CONTENT ---
 {post_text}
@@ -616,51 +618,76 @@ REMEMBER:
 
 Return ONLY valid JSON, nothing else."""
 
+    def _qualify_one(lead: dict) -> dict | None:
+        """Score a single lead. Returns the lead (mutated) or None if rejected."""
+        post_text = lead.get("post_text", "")[:3000]
+        headline = lead.get("headline", "")[:500]
+        company = lead.get("company", "")[:200]
+        location = lead.get("location", "")[:100]
+        full_name = lead.get("full_name", "?")
+
+        prompt = PROMPT_TEMPLATE.format(
+            query=query, post_text=post_text,
+            headline=headline, company=company, location=location,
+        )
         try:
-            resp = await asyncio.to_thread(
-                lambda: client.chat.completions.create(
-                    model="gpt-4o-mini",
-                    messages=[
-                        {"role": "system", "content": SYSTEM_PROMPT},
-                        {"role": "user", "content": prompt}
-                    ],
-                    temperature=0.0,
-                    max_tokens=700,
-                    response_format={"type": "json_object"}
-                )
+            resp = client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[
+                    {"role": "system", "content": SYSTEM_PROMPT},
+                    {"role": "user", "content": prompt}
+                ],
+                temperature=0.0,
+                max_tokens=700,
+                response_format={"type": "json_object"}
             )
             result = json.loads(resp.choices[0].message.content)
-            work_type = (result.get("work_type") or "unknown").lower()
-            is_hiring = result.get("lead_type") == "hiring"
-            # HARD RULE: only remote / contract / part-time hiring leads
-            if is_hiring and work_type == "full_time_onsite":
-                logger.info(f"[AI Qualify] FILTERED OUT {full_name} - on-site/full-time job, not remote/contract/part-time")
-                continue
-            logger.info(f"[AI Qualify DEBUG] {full_name} -> is_lead={result.get('is_lead')}, score={result.get('lead_score')}, type={result.get('lead_type')}, work={work_type}, reason={result.get('reason')[:100]}")
-
-            if result.get("is_lead") and result.get("lead_score", 0) >= 35:
-                lead["ai_qualified"] = True
-                lead["ai_score"] = result.get("lead_score")
-                lead["lead_type"] = result.get("lead_type", "potential")
-                lead["work_type"] = work_type
-                lead["business_problem"] = result.get("business_problem", False)
-                lead["service_match"] = result.get("service_match", False)
-                lead["buying_intent"] = result.get("buying_intent", 0)
-                lead["urgency"] = result.get("urgency", 0)
-                lead["decision_maker_likelihood"] = result.get("decision_maker_likelihood", 0)
-                lead["outreach_worthiness"] = result.get("outreach_worthiness", 0)
-                lead["ai_reason"] = result.get("reason", "")
-                lead["outreach_angle"] = result.get("outreach_angle", "")
-                qualified.append(lead)
-                logger.info(f"[AI Qualify] KEPT {full_name} (score: {result.get('lead_score')}, type: {result.get('lead_type')}, work: {work_type})")
-            else:
-                logger.info(f"[AI Qualify] FILTERED OUT {full_name} - score: {result.get('lead_score')}, type: {result.get('lead_type')}, reason: {result.get('reason')}")
         except Exception as e:
             logger.error(f"[AI Qualify] Error for {full_name}: {e}")
             # On error, be LENIENT - accept the lead
-            qualified.append(lead)
+            lead["ai_qualified"] = True
+            lead["ai_score"] = 50
+            lead["lead_type"] = "problem_awareness"
+            lead["work_type"] = "unknown"
+            lead["ai_reason"] = "AI call failed — accepted on error"
+            lead["outreach_angle"] = ""
             logger.info(f"[AI Qualify] ACCEPTED on error: {full_name}")
+            return lead
 
+        work_type = (result.get("work_type") or "unknown").lower()
+        is_hiring = result.get("lead_type") == "hiring"
+        # HARD RULE: only remote / contract / part-time hiring leads
+        if is_hiring and work_type == "full_time_onsite":
+            logger.info(f"[AI Qualify] FILTERED OUT {full_name} - on-site/full-time job, not remote/contract/part-time")
+            return None
+        logger.info(f"[AI Qualify DEBUG] {full_name} -> is_lead={result.get('is_lead')}, score={result.get('lead_score')}, type={result.get('lead_type')}, work={work_type}, reason={result.get('reason')[:100]}")
+
+        if result.get("is_lead") and result.get("lead_score", 0) >= 35:
+            lead["ai_qualified"] = True
+            lead["ai_score"] = result.get("lead_score")
+            lead["lead_type"] = result.get("lead_type", "potential")
+            lead["work_type"] = work_type
+            lead["business_problem"] = result.get("business_problem", False)
+            lead["service_match"] = result.get("service_match", False)
+            lead["buying_intent"] = result.get("buying_intent", 0)
+            lead["urgency"] = result.get("urgency", 0)
+            lead["decision_maker_likelihood"] = result.get("decision_maker_likelihood", 0)
+            lead["outreach_worthiness"] = result.get("outreach_worthiness", 0)
+            lead["ai_reason"] = result.get("reason", "")
+            lead["outreach_angle"] = result.get("outreach_angle", "")
+            logger.info(f"[AI Qualify] KEPT {full_name} (score: {result.get('lead_score')}, type: {result.get('lead_type')}, work: {work_type})")
+            return lead
+        else:
+            logger.info(f"[AI Qualify] FILTERED OUT {full_name} - score: {result.get('lead_score')}, type: {result.get('lead_type')}, reason: {result.get('reason')}")
+            return None
+
+    if not leads:
+        return []
+
+    qualified: list[dict] = []
+    with ThreadPoolExecutor(max_workers=AI_QUALIFY_CONCURRENCY) as pool:
+        results = list(pool.map(_qualify_one, leads))
+    qualified = [r for r in results if r is not None]
     return qualified
 
 

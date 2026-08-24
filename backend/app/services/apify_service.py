@@ -172,7 +172,7 @@ def run_post_search(
 
     items: list[dict] = []
     errors: list[Exception] = []
-    with ThreadPoolExecutor(max_workers=min(len(chunks), 3)) as pool:
+    with ThreadPoolExecutor(max_workers=min(len(chunks), 8)) as pool:
         futures = {
             pool.submit(_run_post_search_chunk, c, per_chunk, posted_limit): c
             for c in chunks

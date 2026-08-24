@@ -35,8 +35,9 @@ logger = logging.getLogger(__name__)
 MAX_RESULTS_CAP = 50
 
 # Concurrent OpenAI calls during AI qualification — big speedup for large
-# candidate lists. Cap at 10 so we don't trip OpenAI rate limits.
-AI_QUALIFY_CONCURRENCY = 10
+# candidate lists. 20 workers keeps OpenAI busy while staying under
+# gpt-4o-mini rate limits for typical candidate volumes.
+AI_QUALIFY_CONCURRENCY = 20
 
 # Profile enrichment bills per row on pay-per-event actors — cap it.
 PROFILE_ENRICHMENT_CAP = 60

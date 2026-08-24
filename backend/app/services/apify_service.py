@@ -46,10 +46,7 @@ class ApifyRetryableError(ApifyError):
 
 def _get_api_keys() -> list[str]:
     settings = get_settings()
-    keys = []
-    for key in (settings.apify_api_key, settings.apify_api_key_2):
-        if key:
-            keys.append(key)
+    keys = settings.apify_keys
     if not keys:
         raise ApifyError("APIFY_API_KEY is not configured")
     return keys

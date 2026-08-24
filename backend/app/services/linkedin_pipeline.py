@@ -134,15 +134,25 @@ def build_boolean_query(user_query: str) -> list[str]:
         return [base]
 
     # Derive role variants from the service term.
-    # "website development" -> "web developer", "website developer", "web designer"
-    # "seo"                -> "seo expert", "seo specialist"
-    # "graphic design"     -> "graphic designer"
+    # "website development" -> "website developer"
+    # "graphic design"      -> "graphic designer"
+    # "ui ux designer"      -> already a role, no suffix needed
+    # "seo"                 -> "seo expert", "seo specialist"
+    def _suffix(base_str: str, word: str, suffix: str) -> str:
+        """Replace a word with its role form, avoiding double suffixes
+        (e.g. 'designer' -> not 'designerer')."""
+        replaced = base_str.replace(word, suffix)
+        # avoid double 'er'/'or' endings like "designerer"
+        for bad in ("erer", "oror", "eror"):
+            if bad in replaced:
+                replaced = replaced.replace(bad, bad[:2])
+        return replaced.strip()
+
     roles = {base}
-    lowb = " " + low + " "
     if "development" in low:
-        roles.add(base.replace("development", "developer").strip())
+        roles.add(_suffix(base, "development", "developer"))
     if "design" in low:
-        roles.add(base.replace("design", "designer").strip())
+        roles.add(_suffix(base, "design", "designer"))
     if "marketing" in low:
         roles.add(f"{base} expert")
         roles.add(f"{base} specialist")

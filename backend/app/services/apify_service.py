@@ -169,10 +169,10 @@ def run_harvest_post_search(
 ) -> list[dict]:
     """Search LinkedIn posts via harvestapi/linkedin-post-search.
 
-    Author headline (`author.info`) is included per post — no separate
-    profile enrichment required. No authorKeywords filter: the AI
-    WHO-IS-THE-SUBJECT rule rejects freelancers/sellers at scoring time,
-    and a keyword filter silently returns 0 results on longer phrases.
+    profileScraperMode="main" returns FULL author data per post:
+      author.location.countryCode (US/GB/IN...), author.currentPosition
+      (company), author.info (headline). This is used to filter leads to
+      English-speaking countries and give the AI company context.
     """
     per_query = max(5, max_posts // max(len(search_queries), 1))
     payload = {
@@ -180,7 +180,7 @@ def run_harvest_post_search(
         "maxPosts": min(per_query, 50),
         "postedLimit": posted_limit if posted_limit in ("1h", "24h", "week", "month") else "month",
         "sortBy": "date",
-        "profileScraperMode": "short",
+        "profileScraperMode": "main",
         "scrapeReactions": False,
         "postNestedReactions": False,
         "scrapeComments": False,

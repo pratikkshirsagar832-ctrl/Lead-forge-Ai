@@ -36,6 +36,56 @@ MAX_RESULTS_CAP = 50
 # Profile enrichment bills per row on pay-per-event actors — cap it.
 PROFILE_ENRICHMENT_CAP = 60
 
+# Countries to keep leads from — English-speaking + key EU markets.
+# Country codes come from author.location.countryCode in harvestapi "main" mode.
+ALLOWED_COUNTRY_CODES = {
+    # North America
+    "US", "CA", "MX",
+    # UK & Ireland
+    "GB", "IE", "UK",
+    # Oceania
+    "AU", "NZ",
+    # Western Europe (English-friendly business markets)
+    "DE", "NL", "FR", "BE", "CH", "AT", "SE", "NO", "DK", "FI", "ES", "IT", "PT", "LU", "IS",
+    # Middle East business hubs (often English-speaking clients)
+    "AE", "SA", "QA", "KW",
+    # Singapore
+    "SG",
+}
+
+# If no country code is available, fall back to rejecting known low-value markets.
+BLOCKED_COUNTRY_CODES = {"IN", "PK", "BD", "PH", "NG", "LK", "NP", "EG", "MA", "DZ", "VN", "ID", "TH", "MY", "KE", "GH", "ZA"}
+
+
+def _get_author_location(author: dict) -> tuple[str, str]:
+    """Extract (country_code, location_text) from harvestapi author data."""
+    location = author.get("location") or {}
+    if not isinstance(location, dict):
+        return "", ""
+    country_code = (location.get("countryCode") or "").strip().upper()
+    linkedin_text = (location.get("linkedinText") or "").strip()
+    parsed = location.get("parsed") or {}
+    if isinstance(parsed, dict) and parsed.get("text") and not linkedin_text:
+        linkedin_text = str(parsed["text"])
+    return country_code, linkedin_text
+
+
+def _get_author_company(author: dict) -> str:
+    """Extract company name from harvestapi author.currentPosition."""
+    positions = author.get("currentPosition") or []
+    if isinstance(positions, list):
+        for pos in positions:
+            if not isinstance(pos, dict):
+                continue
+            name = pos.get("companyName") or pos.get("name") or (pos.get("company") or {}).get("name")
+            if name:
+                return str(name)[:100]
+    # fallback: try headline after "at " or "|"
+    info = author.get("info") or author.get("headline") or ""
+    if " at " in info:
+        return info.split(" at ", 1)[1].split("|")[0].strip()[:100]
+    return ""
+
 
 def build_boolean_query(user_query: str) -> list[str]:
     """Broad discovery phrases around a niche, INCLUDING role-based
@@ -229,13 +279,31 @@ def process_items(items: list[dict], max_results: int) -> tuple[list[dict], int]
             skipped += 1
             continue
 
+        # Country filter — harvestapi "main" mode gives location.countryCode.
+        # Only keep leads from English-speaking / target markets.
+        country_code, location_text = _get_author_location(author)
+        if country_code:
+            if country_code not in ALLOWED_COUNTRY_CODES:
+                logger.info(f"[CountryFilter] skipped {author.get('name')} ({country_code} - {location_text[:40]})")
+                skipped += 1
+                continue
+        else:
+            # No country data: if scrapeforge fallback, keep (unknown); we can't filter.
+            # If headline hints a blocked market, skip it.
+            hint = (author.get("info") or author.get("headline") or "").lower()
+            if any(k in hint for k in ("bengaluru", "mumbai", "new delhi", "hyderabad", "pune", "india", "pakistan", "bangladesh", "manila", "lagos", "nairobi")):
+                logger.info(f"[CountryFilter] skipped {author.get('name')} (region hint in headline)")
+                skipped += 1
+                continue
+
         eng = item.get("engagement") or {}
         lead = {
             "full_name": author.get("name") or "",
             # harvestapi provides the author's headline inline (author.info)
             "headline": (author.get("info") or author.get("headline") or "")[:500],
-            "company": "",
-            "location": "",
+            "company": _get_author_company(author),
+            "location": location_text,
+            "country_code": country_code,
             "linkedin_url": author_url,
             # harvestapi: item.linkedinUrl; scrapeforge: item.url
             "post_url": item.get("url") or item.get("linkedinUrl") or "",
@@ -244,7 +312,7 @@ def process_items(items: list[dict], max_results: int) -> tuple[list[dict], int]
             "engagement_likes": _int(eng.get("likes") if eng.get("likes") is not None else eng.get("reactions")),
             "engagement_comments": _int(eng.get("comments")),
             "profile_picture_url": _get_avatar(author),
-            "connections_count": 0,
+            "connections_count": author.get("connectionsCount") or 0,
         }
 
         # Dedupe by clean profile URL (strip ?miniProfileUrn=... query params)
@@ -282,6 +350,7 @@ async def qualify_leads_with_ai(leads: list[dict], query: str, client=None, lead
         post_text = lead.get("post_text", "")[:3000]
         headline = lead.get("headline", "")[:500]
         company = lead.get("company", "")[:200]
+        location = lead.get("location", "")[:100]
         full_name = lead.get("full_name", "?")
 
         SYSTEM_PROMPT = """You are a senior B2B lead qualification specialist for an AI-powered lead-generation platform. You decide whether a LinkedIn post is a genuine BUYING signal that a service provider could convert into a client. Your decisions feed a CRM, so precision matters more than recall: one excellent lead is worth more than ten noise records.
@@ -359,6 +428,9 @@ Always output valid JSON. Never include markdown, commentary, or text outside th
 
 --- AUTHOR COMPANY ---
 {company}
+
+--- AUTHOR LOCATION ---
+{location}
 
 FIRST, mentally classify with this decision tree, THEN emit JSON.
 

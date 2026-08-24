@@ -245,6 +245,10 @@ def build_boolean_query_variant(user_query: str, iteration: int) -> list[str]:
       iteration 2: problem/pain-point angle ("traffic dropped", "website not")
       iteration 3: urgency/action angle ("looking for someone", "need help")
       iteration 4: broad/nearby terms (agency, services, recommendations)
+      iteration 5: hiring/recruitment angle (role + "for our team/company")
+      iteration 6: redesign/rebuild angle ("need a new", "want to redesign")
+      iteration 7: cost/budget angle ("affordable", "quote", "budget")
+      iteration 8: recommendation angle ("recommend", "suggest", "know a good")
     """
     q = user_query.strip().strip('"')
     q = " ".join(q.split())
@@ -285,7 +289,7 @@ def build_boolean_query_variant(user_query: str, iteration: int) -> list[str]:
             f"best {base} agency",
             f"looking for {base} services",
         ]
-    else:
+    elif iteration == 4:
         # Broad angle — service + marketplace terms.
         phrases = [
             base,
@@ -301,6 +305,74 @@ def build_boolean_query_variant(user_query: str, iteration: int) -> list[str]:
             f"{base} project",
             f"{base} redesign",
             f"{base} revamp",
+        ]
+    elif iteration == 5:
+        # Hiring/recruitment angle — roles being filled for teams/companies.
+        phrases = [
+            base,
+            f"looking for {base} for our team",
+            f"hiring {base} for our company",
+            f"{base} needed for our business",
+            f"join our team as {base}",
+            f"we are looking for {base}",
+            f"we need a {base} for",
+            f"{base} position available",
+            f"{base} opportunity",
+            f"recruiting {base}",
+            f"{base} freelance opportunity",
+            f"contract {base} role",
+            f"{base} for a project",
+        ]
+    elif iteration == 6:
+        # Redesign/rebuild angle — replace or improve existing assets.
+        phrases = [
+            base,
+            f"need a new {base}",
+            f"want to redesign our {base}",
+            f"rebuild our {base}",
+            f"redesign {base} for our business",
+            f"looking to improve our {base}",
+            f"our {base} is outdated",
+            f"upgrade our {base}",
+            f"{base} for a new website",
+            f"{base} for relaunch",
+            f"{base} refresh",
+            f"new {base} for startup",
+            f"{base} makeover",
+        ]
+    elif iteration == 7:
+        # Cost/budget angle — buyers mentioning money.
+        phrases = [
+            base,
+            f"affordable {base} services",
+            f"{base} within budget",
+            f"budget for {base}",
+            f"{base} pricing",
+            f"cheap {base} services",
+            f"cost effective {base}",
+            f"{base} freelancer rates",
+            f"{base} on a budget",
+            f"reasonable {base}",
+            f"{base} quotes",
+            f"get a {base} quote",
+            f"{base} cost estimate",
+        ]
+    else:
+        # Recommendation angle — asking for referrals/vendors.
+        phrases = [
+            base,
+            f"recommend a {base}",
+            f"recommendations for {base}",
+            f"suggest a {base}",
+            f"know a good {base}",
+            f"anyone recommend {base}",
+            f"best {base} company",
+            f"top {base} agency",
+            f"{base} referrals",
+            f"who is the best {base}",
+            f"looking for {base} recommendations",
+            f"good {base} agency",
+            f"{base} expert needed",
         ]
 
     seen: set[str] = set()
@@ -816,9 +888,10 @@ async def run_linkedin_pipeline(
 
         # LOOP SYSTEM: keep searching with rotating query variants until we
         # collect the requested number of leads (or hit the iteration cap).
-        MAX_ITERATIONS = 4
+        MAX_ITERATIONS = 8
         iteration = 0
         seen_post_urls: set[str] = set()
+        empty_rounds = 0
 
         while len(all_leads) < max_results and iteration < MAX_ITERATIONS:
             iteration += 1
@@ -929,9 +1002,14 @@ async def run_linkedin_pipeline(
 
             logger.info(f"[LinkedInPipeline:{search_id}] Round {iteration}: +{len(new_leads)} qualified leads (total: {len(all_leads)}/{max_results})")
 
-            # If a round found nothing new, avoid burning more credits.
+            # If a round found nothing new, try 2 consecutive empty rounds
+            # (different query angle each time) before giving up.
             if not new_leads and raw_count == 0:
-                break
+                empty_rounds += 1
+                if empty_rounds >= 2:
+                    break
+            else:
+                empty_rounds = 0
 
         # ALSO search for hiring leads via LinkedIn Job Scraper if "hiring" in lead_types
         if "hiring" in lead_types and len(all_leads) < max_results:

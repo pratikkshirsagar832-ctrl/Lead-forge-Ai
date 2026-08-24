@@ -232,6 +232,83 @@ def build_boolean_query(user_query: str) -> list[str]:
     return out[:12]
 
 
+def build_boolean_query_variant(user_query: str, iteration: int) -> list[str]:
+    """Generate DIFFERENT query sets for loop iterations 2+.
+
+    Each iteration searches from a different angle so we discover NEW leads
+    instead of re-finding the same posts:
+      iteration 2: problem/pain-point angle ("traffic dropped", "website not")
+      iteration 3: urgency/action angle ("looking for someone", "need help")
+      iteration 4: broad/nearby terms (agency, services, recommendations)
+    """
+    q = user_query.strip().strip('"')
+    q = " ".join(q.split())
+    if not q:
+        q = "marketing"
+    base = q.replace("ui-ux", "ui ux").replace("ui/ux", "ui ux")
+
+    if iteration == 2:
+        # Problem / pain-point angle — implicit buyers describing issues.
+        phrases = [
+            base,
+            f"our {base} not working",
+            f"struggling with {base}",
+            f"{base} problem",
+            f"{base} issues",
+            f"traffic dropped",
+            f"website not converting",
+            f"need to improve {base}",
+            f"{base} not getting results",
+            f"help with {base}",
+            f"looking for {base} help",
+            f"{base} for our business",
+        ]
+    elif iteration == 3:
+        # Urgency / action angle — active hiring & immediate needs.
+        phrases = [
+            base,
+            f"looking for someone to {base}",
+            f"need someone for {base}",
+            f"urgently need {base}",
+            f"hiring {base} urgently",
+            f"looking to hire {base}",
+            f"want to hire {base}",
+            f"{base} services needed",
+            f"find a {base} expert",
+            f"{base} recommendations",
+            f"anyone know a good {base}",
+            f"best {base} agency",
+            f"looking for {base} services",
+        ]
+    else:
+        # Broad angle — service + marketplace terms.
+        phrases = [
+            base,
+            f"{base} services",
+            f"{base} solutions",
+            f"{base} company",
+            f"{base} for startups",
+            f"{base} for small business",
+            f"affordable {base}",
+            f"professional {base}",
+            f"{base} quote",
+            f"{base} cost",
+            f"{base} project",
+            f"{base} redesign",
+            f"{base} revamp",
+        ]
+
+    seen: set[str] = set()
+    out: list[str] = []
+    for p in phrases:
+        p = " ".join(p.split())
+        key = p.lower()
+        if key not in seen:
+            seen.add(key)
+            out.append(p)
+    return out[:12]
+
+
 def _public_id_from_author_url(url: str) -> str:
     """/in/johndoe/ → johndoe; /company/acme/ → company:acme."""
     try:
@@ -710,101 +787,123 @@ async def run_linkedin_pipeline(
             "message": "Building intent queries...",
         })
 
-        # Broad discovery phrases — combined into one boolean OR search
-        phrases = build_boolean_query(query)
-        fetch_target = min(max(max_results * 8, 100), 300)
-        logger.info(f"[LinkedInPipeline:{search_id}] Queries: {phrases} (fetch {fetch_target})")
+        # LOOP SYSTEM: keep searching with rotating query variants until we
+        # collect the requested number of leads (or hit the iteration cap).
+        MAX_ITERATIONS = 4
+        iteration = 0
+        seen_post_urls: set[str] = set()
 
-        await _update_search(supabase, search_id, {
-            "progress_percent": 15,
-            "message": f"Searching LinkedIn posts for '{query}'...",
-        })
+        while len(all_leads) < max_results and iteration < MAX_ITERATIONS:
+            iteration += 1
 
-        items = await asyncio.to_thread(run_post_search, phrases, fetch_target)
-        raw_count = len(items)
-        logger.info(f"[LinkedInPipeline:{search_id}] Actor returned {raw_count} raw posts")
+            # Rotate query sets each iteration to find NEW leads.
+            if iteration == 1:
+                phrases = build_boolean_query(query)
+            else:
+                phrases = build_boolean_query_variant(query, iteration)
 
-        await _update_search(supabase, search_id, {
-            "progress_percent": 35,
-            "message": f"Found {raw_count} posts. Enriching author profiles...",
-        })
+            fetch_target = min(max(max_results * 6, 80), 250)
+            logger.info(f"[LinkedInPipeline:{search_id}] Iteration {iteration}/{MAX_ITERATIONS} Queries: {phrases} (fetch {fetch_target})")
 
-        leads, skipped = process_items(items, max_results * 3)
-        all_skipped += skipped
-        logger.info(f"[LinkedInPipeline:{search_id}] Candidates after parsing: {len(leads)} (skipped {skipped})")
+            await _update_search(supabase, search_id, {
+                "progress_percent": min(15 + iteration * 8, 45),
+                "message": f"Searching LinkedIn posts for '{query}' (round {iteration})...",
+            })
 
-        # Enrich authors via profile-detail mode: headline/company/location.
-        # Only needed for scrapeforge results — harvestapi includes headline inline.
-        missing_headline = sum(1 for l in leads if not (l.get("headline") or "").strip())
-        if leads and missing_headline > 0:
-            enrich_urls = [l["linkedin_url"] for l in leads[:PROFILE_ENRICHMENT_CAP] if not (l.get("headline") or "").strip()]
             try:
-                profiles = await asyncio.to_thread(fetch_profile_details, enrich_urls, "basic")
-                by_url = {(p.get("url") or "").rstrip("/").lower(): p for p in profiles if isinstance(p, dict)}
-                enriched = 0
-                for lead in leads:
-                    p = by_url.get((lead.get("linkedin_url") or "").rstrip("/").lower())
-                    if not p:
-                        continue
-                    lead["headline"] = (p.get("headline") or lead.get("headline") or "")[:500]
-                    lead["company"] = _company_from_profile(p)
-                    lead["location"] = _location_from_profile(p)
-                    lead["connections_count"] = p.get("connectionsCount") or 0
-                    enriched += 1
-                logger.info(f"[LinkedInPipeline:{search_id}] Profile enrichment: {enriched}/{len(enrich_urls)}")
+                items = await asyncio.to_thread(run_post_search, phrases, fetch_target)
             except Exception as e:
-                logger.warning(f"[LinkedInPipeline:{search_id}] Profile enrichment failed (continuing without): {e}")
+                logger.error(f"[LinkedInPipeline:{search_id}] Iteration {iteration} post-search failed: {e}")
+                # Key failover already tried all keys; if still failing, stop.
+                if iteration == 1:
+                    raise
+                break
+            raw_count = len(items)
+            logger.info(f"[LinkedInPipeline:{search_id}] Iteration {iteration} returned {raw_count} raw posts")
 
-        await _update_search(supabase, search_id, {
-            "progress_percent": 50,
-            "message": f"Found {raw_count} posts. AI qualifying...",
-        })
+            # Skip posts already seen in earlier iterations.
+            fresh = [it for it in items if (it.get("postId") or it.get("url")) not in seen_post_urls]
+            for it in items:
+                pid = it.get("postId") or it.get("url")
+                if pid:
+                    seen_post_urls.add(pid)
+            logger.info(f"[LinkedInPipeline:{search_id}] Fresh posts this round: {len(fresh)} (of {raw_count})")
 
-        # AI qualify with semantic scoring
-        leads = await qualify_leads_with_ai(leads, query, openai_client, lead_types)
+            leads, skipped = process_items(fresh, max_results * 3)
+            all_skipped += skipped
+            logger.info(f"[LinkedInPipeline:{search_id}] Candidates after parsing: {len(leads)} (skipped {skipped})")
 
-        # Rank by AI score (highest first)
-        leads.sort(key=lambda x: x.get("ai_score", 0), reverse=True)
+            # Enrich authors (only scrapeforge results lack headlines).
+            missing_headline = sum(1 for l in leads if not (l.get("headline") or "").strip())
+            if leads and missing_headline > 0:
+                enrich_urls = [l["linkedin_url"] for l in leads[:PROFILE_ENRICHMENT_CAP] if not (l.get("headline") or "").strip()]
+                try:
+                    profiles = await asyncio.to_thread(fetch_profile_details, enrich_urls, "basic")
+                    by_url = {(p.get("url") or "").rstrip("/").lower(): p for p in profiles if isinstance(p, dict)}
+                    for lead in leads:
+                        p = by_url.get((lead.get("linkedin_url") or "").rstrip("/").lower())
+                        if not p:
+                            continue
+                        lead["headline"] = (p.get("headline") or lead.get("headline") or "")[:500]
+                        lead["company"] = _company_from_profile(p)
+                        lead["location"] = _location_from_profile(p)
+                        lead["connections_count"] = p.get("connectionsCount") or 0
+                except Exception as e:
+                    logger.warning(f"[LinkedInPipeline:{search_id}] Profile enrichment failed (continuing without): {e}")
 
-        # Dedupe by author (keep highest scoring post per author).
-        # Use clean URL (strip query params) so ?miniProfileUrn= variants merge.
-        def _clean_url(u: str) -> str:
-            return (u or "").split("?")[0].rstrip("/").lower()
+            await _update_search(supabase, search_id, {
+                "progress_percent": min(45 + iteration * 4, 60),
+                "message": f"Found {raw_count} posts this round. AI qualifying...",
+            })
 
-        best_by_author = {}
-        for lead in leads:
-            author_url = lead.get("linkedin_url")
-            if not author_url:
-                continue
-            score = lead.get("ai_score", 0)
-            key = _clean_url(author_url)
-            if key not in best_by_author or score > best_by_author[key].get("ai_score", 0):
-                best_by_author[key] = lead
-        leads = list(best_by_author.values())
-        leads.sort(key=lambda x: x.get("ai_score", 0), reverse=True)
+            # AI qualify with semantic scoring
+            leads = await qualify_leads_with_ai(leads, query, openai_client, lead_types)
 
-        # Filter by requested types using lead_type
-        # Map old lead_types to new AI lead_type values
-        lead_type_mapping = {
-            "buyer": ["explicit_need", "problem_awareness", "research"],
-            "agency": ["agency"],
-            "hiring": ["hiring"],
-        }
-        if lead_types and lead_types != ["buyer", "agency", "hiring"]:
-            allowed_types = set()
-            for lt in lead_types:
-                allowed_types.update(lead_type_mapping.get(lt, [lt]))
-            leads = [l for l in leads if l.get("lead_type") in allowed_types]
+            # Rank by AI score (highest first)
+            leads.sort(key=lambda x: x.get("ai_score", 0), reverse=True)
 
-        # Add to all_leads and dedupe again
-        existing_urls = {_clean_url(l.get("linkedin_url")) for l in all_leads if l.get("linkedin_url")}
-        new_leads = [l for l in leads if _clean_url(l.get("linkedin_url")) not in existing_urls]
-        all_leads.extend(new_leads)
+            # Dedupe by author (keep highest scoring post per author).
+            # Use clean URL (strip query params) so ?miniProfileUrn= variants merge.
+            def _clean_url(u: str) -> str:
+                return (u or "").split("?")[0].rstrip("/").lower()
 
-        logger.info(f"[LinkedInPipeline:{search_id}] Found {len(new_leads)} qualified leads from posts (total: {len(all_leads)})")
+            best_by_author = {}
+            for lead in leads:
+                author_url = lead.get("linkedin_url")
+                if not author_url:
+                    continue
+                score = lead.get("ai_score", 0)
+                key = _clean_url(author_url)
+                if key not in best_by_author or score > best_by_author[key].get("ai_score", 0):
+                    best_by_author[key] = lead
+            leads = list(best_by_author.values())
+            leads.sort(key=lambda x: x.get("ai_score", 0), reverse=True)
+
+            # Filter by requested types using lead_type
+            lead_type_mapping = {
+                "buyer": ["explicit_need", "problem_awareness", "research"],
+                "agency": ["agency"],
+                "hiring": ["hiring"],
+            }
+            if lead_types and lead_types != ["buyer", "agency", "hiring"]:
+                allowed_types = set()
+                for lt in lead_types:
+                    allowed_types.update(lead_type_mapping.get(lt, [lt]))
+                leads = [l for l in leads if l.get("lead_type") in allowed_types]
+
+            # Add to all_leads and dedupe again
+            existing_urls = {_clean_url(l.get("linkedin_url")) for l in all_leads if l.get("linkedin_url")}
+            new_leads = [l for l in leads if _clean_url(l.get("linkedin_url")) not in existing_urls]
+            all_leads.extend(new_leads)
+
+            logger.info(f"[LinkedInPipeline:{search_id}] Round {iteration}: +{len(new_leads)} qualified leads (total: {len(all_leads)}/{max_results})")
+
+            # If a round found nothing new, avoid burning more credits.
+            if not new_leads and raw_count == 0:
+                break
 
         # ALSO search for hiring leads via LinkedIn Job Scraper if "hiring" in lead_types
-        if "hiring" in lead_types:
+        if "hiring" in lead_types and len(all_leads) < max_results:
             await _update_search(supabase, search_id, {
                 "progress_percent": 55,
                 "message": f"Searching LinkedIn jobs for '{query}' (remote/contract/part-time US/Europe)...",

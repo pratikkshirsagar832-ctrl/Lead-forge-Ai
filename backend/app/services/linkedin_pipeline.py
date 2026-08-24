@@ -616,10 +616,11 @@ TIERS:
 - 85+ HOT: explicit need or active hiring + decision-maker + concrete problem.
 - 70-84 WARM: clear problem or hiring intent, may need light nurturing.
 - 40-69 POTENTIAL: relevant but vague; still worth saving.
-- <40 NOT a lead.
+- 25-39 BORDERLINE: weak signal but real buyer context; still worth saving (they exist).
+- <25 NOT a lead.
 
 CONSISTENCY CHECKS (verify before output):
-- is_lead=true ⟹ lead_score >= 40.
+- is_lead=true ⟹ lead_score >= 25.
 - is_lead=true ⟹ service_match >= 10 (must relate to the niche).
 - lead_type="hiring" + work_type="full_time_onsite" ⟹ is_lead MUST be false.
 - lead_type="agency" or "irrelevant" ⟹ is_lead MUST be false.
@@ -661,7 +662,7 @@ STEP 2 — If A (buying), what arrangement?
 
 STEP 3 — Score the six dimensions honestly. Don't inflate: vague posts get 40-55, strong hiring posts get 80+.
 
-STEP 4 — Verify consistency (is_lead=true requires score>=40 AND service_match>=10).
+STEP 4 — Verify consistency (is_lead=true requires score>=25 AND service_match>=10).
 
 Output EXACTLY this JSON:
 {{
@@ -734,7 +735,7 @@ Return ONLY valid JSON, nothing else."""
             return None
         logger.info(f"[AI Qualify DEBUG] {full_name} -> is_lead={result.get('is_lead')}, score={result.get('lead_score')}, type={result.get('lead_type')}, work={work_type}, reason={result.get('reason')[:100]}")
 
-        if result.get("is_lead") and result.get("lead_score", 0) >= 35:
+        if result.get("is_lead") and result.get("lead_score", 0) >= 25:
             lead["ai_qualified"] = True
             lead["ai_score"] = result.get("lead_score")
             lead["lead_type"] = result.get("lead_type", "potential")
@@ -888,10 +889,9 @@ async def run_linkedin_pipeline(
 
         # LOOP SYSTEM: keep searching with rotating query variants until we
         # collect the requested number of leads (or hit the iteration cap).
-        MAX_ITERATIONS = 8
+        MAX_ITERATIONS = 3
         iteration = 0
         seen_post_urls: set[str] = set()
-        empty_rounds = 0
 
         while len(all_leads) < max_results and iteration < MAX_ITERATIONS:
             iteration += 1
@@ -1002,14 +1002,12 @@ async def run_linkedin_pipeline(
 
             logger.info(f"[LinkedInPipeline:{search_id}] Round {iteration}: +{len(new_leads)} qualified leads (total: {len(all_leads)}/{max_results})")
 
-            # If a round found nothing new, try 2 consecutive empty rounds
-            # (different query angle each time) before giving up.
-            if not new_leads and raw_count == 0:
-                empty_rounds += 1
-                if empty_rounds >= 2:
-                    break
-            else:
-                empty_rounds = 0
+            # If a round of 40+ posts produced ZERO qualified leads, the AI
+            # already saw the best candidates — more rounds mostly re-scan
+            # the same noise. Break after 1 empty round to save time.
+            if not new_leads:
+                logger.info(f"[LinkedInPipeline:{search_id}] Round {iteration} yielded no new leads — stopping loop early")
+                break
 
         # ALSO search for hiring leads via LinkedIn Job Scraper if "hiring" in lead_types
         if "hiring" in lead_types and len(all_leads) < max_results:

@@ -888,26 +888,32 @@ async def run_linkedin_pipeline(
         })
 
         # LOOP SYSTEM: keep searching with rotating query variants until we
-        # collect the requested number of leads (or hit the iteration cap).
-        MAX_ITERATIONS = 3
+        # collect AT LEAST the requested number of leads. Rounds scale with
+        # the requested count so a bigger request searches harder:
+        #   10 leads -> 10 rounds (one per lead) capped at 24.
+        MAX_ITERATIONS = min(max(max_results, 3), 24)
         iteration = 0
         seen_post_urls: set[str] = set()
 
         while len(all_leads) < max_results and iteration < MAX_ITERATIONS:
             iteration += 1
 
-            # Rotate query sets each iteration to find NEW leads.
+            # Rotate query sets each iteration to find NEW leads (cycles 1-8).
             if iteration == 1:
                 phrases = build_boolean_query(query)
             else:
-                phrases = build_boolean_query_variant(query, iteration)
+                variant = ((iteration - 1) % 7) + 2  # 2,3,4,5,6,7,8 then repeat
+                phrases = build_boolean_query_variant(query, variant)
 
-            fetch_target = min(max(max_results * 6, 80), 250)
+            # Fetch scales with the remaining need — the more leads we still
+            # need, the more posts this round tries to collect.
+            remaining = max_results - len(all_leads)
+            fetch_target = min(max(remaining * 15, 100), 400)
             logger.info(f"[LinkedInPipeline:{search_id}] Iteration {iteration}/{MAX_ITERATIONS} Queries: {phrases} (fetch {fetch_target})")
 
             await _update_search(supabase, search_id, {
-                "progress_percent": min(15 + iteration * 8, 45),
-                "message": f"Searching LinkedIn posts for '{query}' (round {iteration})...",
+                "progress_percent": min(15 + iteration * 4, 45),
+                "message": f"Searching LinkedIn posts for '{query}' (round {iteration}/{MAX_ITERATIONS})...",
             })
 
             try:
@@ -1002,12 +1008,9 @@ async def run_linkedin_pipeline(
 
             logger.info(f"[LinkedInPipeline:{search_id}] Round {iteration}: +{len(new_leads)} qualified leads (total: {len(all_leads)}/{max_results})")
 
-            # If a round of 40+ posts produced ZERO qualified leads, the AI
-            # already saw the best candidates — more rounds mostly re-scan
-            # the same noise. Break after 1 empty round to save time.
-            if not new_leads:
-                logger.info(f"[LinkedInPipeline:{search_id}] Round {iteration} yielded no new leads — stopping loop early")
-                break
+            # Keep looping until the requested count is met — each round uses
+            # a different query angle, so more rounds = more chances.
+            # (No early break: user asked for exactly this many leads.)
 
         # ALSO search for hiring leads via LinkedIn Job Scraper if "hiring" in lead_types
         if "hiring" in lead_types and len(all_leads) < max_results:
@@ -1016,9 +1019,11 @@ async def run_linkedin_pipeline(
                 "message": f"Searching LinkedIn jobs for '{query}' (remote/contract/part-time US/Europe)...",
             })
 
-            # Cap to 2 queries — each job-actor run can take minutes
-            job_queries = get_job_queries_for_niche(query)[:2]
-            logger.info(f"[LinkedInPipeline:{search_id}] Job queries: {job_queries}")
+            # Use more job queries when we still need many leads — up to 4
+            # queries to fill the gap faster.
+            remaining_need = max_results - len(all_leads)
+            job_queries = get_job_queries_for_niche(query)[: min(4, max(2, remaining_need))]
+            logger.info(f"[LinkedInPipeline:{search_id}] Job queries: {job_queries} (need {remaining_need} more)")
 
             for job_query in job_queries:
                 try:

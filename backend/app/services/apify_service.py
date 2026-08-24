@@ -9,12 +9,16 @@ Legacy actors kept for optional extras:
   - harvestapi~linkedin-profile-scraper : email enrichment (all-in-one has no emails)
   - shahidirfan~linkedin-job-scraper    : job postings (hiring leads)
 
-Supports multiple API keys with automatic failover: if a call fails with a
-retryable error (quota exhausted, auth, server error), the next configured key
-is tried.
+Supports up to 24 API keys with SMART AUTOMATIC ROTATION:
+  - When a key's credits run out (402/403) or it fails (401/429/5xx), the next
+    key is tried automatically.
+  - A rotating cursor means parallel calls start from different positions, so
+    keys are spread evenly and dead keys are skipped via a cooldown cache.
 """
 
 import logging
+import threading
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import httpx
@@ -31,6 +35,10 @@ SYNC_TIMEOUT_SECONDS = 300
 
 RETRYABLE_STATUS_CODES = {401, 402, 403, 407, 429, 500, 502, 503, 504}
 
+# Dead-key cooldown: a key that hit a quota/auth failure is skipped for this
+# many seconds before being retried (free Apify plans reset monthly).
+KEY_COOLDOWN_SECONDS = 600
+
 
 class ApifyError(Exception):
     """Raised when all configured Apify keys fail."""
@@ -44,6 +52,39 @@ class ApifyRetryableError(ApifyError):
     """Raised for errors where a different API key might succeed."""
 
 
+# ── Key rotation state ────────────────────────────────────────────────────
+_key_lock = threading.Lock()
+_key_cursor = 0
+_key_cooldown: dict[str, float] = {}  # key -> timestamp when it can be retried
+
+
+def _is_key_in_cooldown(key: str) -> bool:
+    until = _key_cooldown.get(key, 0.0)
+    return time.time() < until
+
+
+def _mark_key_cooldown(key: str) -> None:
+    _key_cooldown[key] = time.time() + KEY_COOLDOWN_SECONDS
+    logger.warning(f"[Apify] Key {key[-6:]} marked dead for {KEY_COOLDOWN_SECONDS}s")
+
+
+def _ordered_keys() -> list[str]:
+    """Rotating view of configured keys: starts from cursor, wraps around,
+    puts healthy (non-cooldown) keys first."""
+    keys = _get_api_keys()
+    if not keys:
+        return []
+    global _key_cursor
+    with _key_lock:
+        start = _key_cursor % len(keys)
+        _key_cursor += 1
+    rotated = keys[start:] + keys[:start]
+    # healthy first, cooldown keys at the end (so they are only tried as last resort)
+    healthy = [k for k in rotated if not _is_key_in_cooldown(k)]
+    cooling = [k for k in rotated if _is_key_in_cooldown(k)]
+    return healthy + cooling
+
+
 def _get_api_keys() -> list[str]:
     settings = get_settings()
     keys = settings.apify_keys
@@ -55,12 +96,14 @@ def _get_api_keys() -> list[str]:
 def _run_sync_actor(actor_id: str, payload: dict) -> list[dict]:
     """Run an actor synchronously and return dataset items, with key failover."""
     last_error: ApifyError | None = None
-    for key in _get_api_keys():
+    for key in _ordered_keys():
         try:
             return _run_with_key(actor_id, key, payload)
         except ApifyRetryableError as e:
             logger.warning(f"[Apify:{actor_id}] Key failed (HTTP {e.status_code}): {e}. Trying next key...")
             last_error = e
+            if e.status_code in (401, 402, 403, 429):
+                _mark_key_cooldown(key)
         except ApifyError:
             raise
 
@@ -148,7 +191,7 @@ def run_post_search(
     seen_ids: set[str] = set()
     unique: list[dict] = []
     for item in items:
-        pid = item.get("postId") or item.get("url")
+        pid = item.get("postId") or item.get("id") or item.get("url") or item.get("linkedinUrl")
         if not pid or pid in seen_ids:
             continue
         seen_ids.add(pid)
@@ -181,10 +224,20 @@ def run_harvest_post_search(
     if not queries:
         queries = ["marketing"]
 
-    keys = _get_api_keys()
-    # Split queries into as many groups as we have keys (capped at 10 groups
-    # so we don't hammer Apify with too many concurrent runs).
-    n_groups = min(len(keys), len(queries), 10)
+    # Assign each group a DIFFERENT starting key via the rotating cursor.
+    # Only HEALTHY keys (not in cooldown) are used for parallel groups —
+    # dead keys are skipped automatically until their cooldown expires.
+    n_groups = min(10, len(queries))
+    all_rotated = _ordered_keys()
+    healthy_keys = [k for k in all_rotated if not _is_key_in_cooldown(k)]
+    group_keys = healthy_keys[:n_groups]
+    if not group_keys:
+        # Every key is in cooldown — last resort: use the rotation anyway.
+        group_keys = all_rotated[:n_groups]
+    n_actual = len(group_keys)
+    if n_actual == 0:
+        raise ApifyError("APIFY_API_KEY is not configured")
+    n_groups = min(n_groups, n_actual)
     groups: list[list[str]] = [[] for _ in range(n_groups)]
     for idx, q in enumerate(queries):
         groups[idx % n_groups].append(q)
@@ -192,7 +245,7 @@ def run_harvest_post_search(
     per_query = max(5, max_posts // max(len(queries), 1))
 
     def _run_group(group_idx: int, group_queries: list[str]) -> list[dict]:
-        key = keys[group_idx]
+        key = group_keys[group_idx]
         payload = {
             "searchQueries": group_queries,
             "maxPosts": min(per_query, 50),
@@ -229,10 +282,11 @@ def run_harvest_post_search(
         raise errors[0]
 
     # Dedupe by post id / url across groups.
+    # harvestapi uses `id`/`linkedinUrl`; scrapeforge uses `postId`/`url`.
     seen: set[str] = set()
     unique: list[dict] = []
     for it in items:
-        pid = it.get("postId") or it.get("url")
+        pid = it.get("postId") or it.get("id") or it.get("url") or it.get("linkedinUrl")
         if not pid or pid in seen:
             continue
         seen.add(pid)

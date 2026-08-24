@@ -849,9 +849,13 @@ async def run_linkedin_pipeline(
             logger.info(f"[LinkedInPipeline:{search_id}] Iteration {iteration} returned {raw_count} raw posts")
 
             # Skip posts already seen in earlier iterations.
-            fresh = [it for it in items if (it.get("postId") or it.get("url")) not in seen_post_urls]
+            # harvestapi uses id/linkedinUrl; scrapeforge uses postId/url.
+            def _pid(it):
+                return it.get("postId") or it.get("id") or it.get("url") or it.get("linkedinUrl")
+
+            fresh = [it for it in items if _pid(it) not in seen_post_urls]
             for it in items:
-                pid = it.get("postId") or it.get("url")
+                pid = _pid(it)
                 if pid:
                     seen_post_urls.add(pid)
             logger.info(f"[LinkedInPipeline:{search_id}] Fresh posts this round: {len(fresh)} (of {raw_count})")

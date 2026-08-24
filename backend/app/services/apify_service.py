@@ -172,7 +172,7 @@ def run_post_search(
 
     items: list[dict] = []
     errors: list[Exception] = []
-    with ThreadPoolExecutor(max_workers=min(len(chunks), 8)) as pool:
+    with ThreadPoolExecutor(max_workers=min(len(chunks), 4)) as pool:
         futures = {
             pool.submit(_run_post_search_chunk, c, per_chunk, posted_limit): c
             for c in chunks
@@ -227,9 +227,9 @@ def run_harvest_post_search(
     # Assign each group a DIFFERENT starting key via the rotating cursor.
     # Only HEALTHY keys (not in cooldown) are used for parallel groups —
     # dead keys are skipped automatically until their cooldown expires.
-    # Use ALL healthy keys: 96 queries / 24 keys = 4 queries per key,
-    # every key fires simultaneously in one pass.
-    n_groups = min(24, len(queries))
+    # Concurrency kept at 6 for reliability — too many simultaneous runs
+    # trips Apify free-tier rate limits and causes failures.
+    n_groups = min(6, len(queries))
     all_rotated = _ordered_keys()
     healthy_keys = [k for k in all_rotated if not _is_key_in_cooldown(k)]
     group_keys = healthy_keys[:n_groups]

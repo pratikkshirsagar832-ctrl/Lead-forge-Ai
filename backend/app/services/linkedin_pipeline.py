@@ -34,10 +34,9 @@ logger = logging.getLogger(__name__)
 
 MAX_RESULTS_CAP = 50
 
-# Concurrent OpenAI calls during AI qualification — big speedup for large
-# candidate lists. 30 workers keeps OpenAI busy while staying under
-# gpt-4o-mini rate limits for typical candidate volumes.
-AI_QUALIFY_CONCURRENCY = 30
+# Concurrent OpenAI calls during AI qualification. Kept low (5) for
+# reliability — free-tier OpenAI accounts rate-limit quickly when hammered.
+AI_QUALIFY_CONCURRENCY = 5
 
 # Profile enrichment bills per row on pay-per-event actors — cap it.
 PROFILE_ENRICHMENT_CAP = 60
@@ -893,7 +892,7 @@ async def run_linkedin_pipeline(
         # healthy Apify keys and runs them CONCURRENTLY — so 10 leads means
         # ~96 queries hit ~10-24 keys simultaneously in a single pass, not
         # round after round. Repeat only if still short.
-        MAX_PASSES = 3
+        MAX_PASSES = 2
         seen_post_urls: set[str] = set()
 
         # All 8 query angles (12 queries each = up to 96 distinct phrases).

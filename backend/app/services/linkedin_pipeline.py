@@ -35,9 +35,9 @@ logger = logging.getLogger(__name__)
 MAX_RESULTS_CAP = 50
 
 # Concurrent OpenAI calls during AI qualification — big speedup for large
-# candidate lists. 20 workers keeps OpenAI busy while staying under
+# candidate lists. 30 workers keeps OpenAI busy while staying under
 # gpt-4o-mini rate limits for typical candidate volumes.
-AI_QUALIFY_CONCURRENCY = 20
+AI_QUALIFY_CONCURRENCY = 30
 
 # Profile enrichment bills per row on pay-per-event actors — cap it.
 PROFILE_ENRICHMENT_CAP = 60
@@ -888,48 +888,52 @@ async def run_linkedin_pipeline(
             "message": "Building intent queries...",
         })
 
-        # LOOP SYSTEM: keep searching with rotating query variants until we
-        # collect AT LEAST the requested number of leads. Rounds scale with
-        # the requested count so a bigger request searches harder:
-        #   10 leads -> 10 rounds (one per lead) capped at 24.
-        MAX_ITERATIONS = min(max(max_results, 3), 24)
-        iteration = 0
+        # MEGA-PARALLEL DISCOVERY: build ALL query angles up front and fire
+        # them in ONE batch. run_post_search splits the queries across all
+        # healthy Apify keys and runs them CONCURRENTLY — so 10 leads means
+        # ~96 queries hit ~10-24 keys simultaneously in a single pass, not
+        # round after round. Repeat only if still short.
+        MAX_PASSES = 3
         seen_post_urls: set[str] = set()
 
-        while len(all_leads) < max_results and iteration < MAX_ITERATIONS:
-            iteration += 1
+        # All 8 query angles (12 queries each = up to 96 distinct phrases).
+        all_phrases: list[str] = []
+        all_phrases.extend(build_boolean_query(query))
+        for variant in range(2, 9):
+            all_phrases.extend(build_boolean_query_variant(query, variant))
+        # Dedupe, cap to a sane number (harvest splits into <=12 groups/keys)
+        seen_q: set[str] = set()
+        final_phrases: list[str] = []
+        for p in all_phrases:
+            k = p.lower()
+            if k not in seen_q:
+                seen_q.add(k)
+                final_phrases.append(p)
+        final_phrases = final_phrases[:96]
 
-            # Rotate query sets each iteration to find NEW leads (cycles 1-8).
-            if iteration == 1:
-                phrases = build_boolean_query(query)
-            else:
-                variant = ((iteration - 1) % 7) + 2  # 2,3,4,5,6,7,8 then repeat
-                phrases = build_boolean_query_variant(query, variant)
-
-            # Fetch scales with the remaining need — the more leads we still
-            # need, the more posts this round tries to collect.
+        pass_no = 0
+        while len(all_leads) < max_results and pass_no < MAX_PASSES:
+            pass_no += 1
             remaining = max_results - len(all_leads)
-            fetch_target = min(max(remaining * 15, 100), 400)
-            logger.info(f"[LinkedInPipeline:{search_id}] Iteration {iteration}/{MAX_ITERATIONS} Queries: {phrases} (fetch {fetch_target})")
+            fetch_target = min(max(remaining * 12, 200), 500)
+            logger.info(f"[LinkedInPipeline:{search_id}] Pass {pass_no}/{MAX_PASSES} — firing {len(final_phrases)} queries in parallel across keys (fetch {fetch_target})")
 
             await _update_search(supabase, search_id, {
-                "progress_percent": min(15 + iteration * 4, 45),
-                "message": f"Searching LinkedIn posts for '{query}' (round {iteration}/{MAX_ITERATIONS})...",
+                "progress_percent": 15,
+                "message": f"Searching LinkedIn with {len(final_phrases)} intent queries in parallel...",
             })
 
             try:
-                items = await asyncio.to_thread(run_post_search, phrases, fetch_target)
+                items = await asyncio.to_thread(run_post_search, final_phrases, fetch_target)
             except Exception as e:
-                logger.error(f"[LinkedInPipeline:{search_id}] Iteration {iteration} post-search failed: {e}")
-                # Key failover already tried all keys; if still failing, stop.
-                if iteration == 1:
+                logger.error(f"[LinkedInPipeline:{search_id}] Pass {pass_no} post-search failed: {e}")
+                if pass_no == 1:
                     raise
                 break
             raw_count = len(items)
-            logger.info(f"[LinkedInPipeline:{search_id}] Iteration {iteration} returned {raw_count} raw posts")
+            logger.info(f"[LinkedInPipeline:{search_id}] Pass {pass_no} returned {raw_count} raw posts (parallel)")
 
-            # Skip posts already seen in earlier iterations.
-            # harvestapi uses id/linkedinUrl; scrapeforge uses postId/url.
+            # Skip posts already seen in earlier passes.
             def _pid(it):
                 return it.get("postId") or it.get("id") or it.get("url") or it.get("linkedinUrl")
 
@@ -938,7 +942,7 @@ async def run_linkedin_pipeline(
                 pid = _pid(it)
                 if pid:
                     seen_post_urls.add(pid)
-            logger.info(f"[LinkedInPipeline:{search_id}] Fresh posts this round: {len(fresh)} (of {raw_count})")
+            logger.info(f"[LinkedInPipeline:{search_id}] Fresh posts this pass: {len(fresh)} (of {raw_count})")
 
             leads, skipped = process_items(fresh, max_results * 3)
             all_skipped += skipped
@@ -963,8 +967,8 @@ async def run_linkedin_pipeline(
                     logger.warning(f"[LinkedInPipeline:{search_id}] Profile enrichment failed (continuing without): {e}")
 
             await _update_search(supabase, search_id, {
-                "progress_percent": min(45 + iteration * 4, 60),
-                "message": f"Found {raw_count} posts this round. AI qualifying...",
+                "progress_percent": min(45 + pass_no * 4, 60),
+                "message": f"Found {raw_count} posts this pass. AI qualifying...",
             })
 
             # AI qualify with semantic scoring
@@ -1007,10 +1011,10 @@ async def run_linkedin_pipeline(
             new_leads = [l for l in leads if _clean_url(l.get("linkedin_url")) not in existing_urls]
             all_leads.extend(new_leads)
 
-            logger.info(f"[LinkedInPipeline:{search_id}] Round {iteration}: +{len(new_leads)} qualified leads (total: {len(all_leads)}/{max_results})")
+            logger.info(f"[LinkedInPipeline:{search_id}] Pass {pass_no}: +{len(new_leads)} qualified leads (total: {len(all_leads)}/{max_results})")
 
-            # Keep looping until the requested count is met — each round uses
-            # a different query angle, so more rounds = more chances.
+            # Keep looping until the requested count is met — next pass skips
+            # already-seen posts and searches fresh angles.
             # (No early break: user asked for exactly this many leads.)
 
         # ALSO search for hiring leads via LinkedIn Job Scraper if "hiring" in lead_types

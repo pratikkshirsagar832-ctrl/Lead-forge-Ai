@@ -166,6 +166,17 @@ def build_boolean_query(user_query: str) -> list[str]:
         roles.add("video editor")
     if "social media" in low or "smm" in low:
         roles.add("social media manager")
+    if "video" in low or "editing" in low:
+        roles.add("video editor")
+        roles.add("video editor for")
+    if "wordpress" in low:
+        roles.add("wordpress developer")
+    if "web" in low or "website" in low:
+        roles.add(f"{base.replace(' website', '').replace('website', 'web').strip()} developer")
+        roles.add(f"{base.replace(' website', '').replace('website', 'web').strip()} designer")
+    # If the base itself is a role (designer/developer/expert/specialist/manager),
+    # make sure we still generate intent phrases around the base itself.
+    base_is_role = any(k in low for k in ("designer", "developer", "expert", "specialist", "manager", "editor", "builder", "consultant"))
 
     phrases: list[str] = [base]
     for role in sorted(roles, key=len):
@@ -188,6 +199,18 @@ def build_boolean_query(user_query: str) -> list[str]:
             f"need {role} for project",
             f"contract {role}",
             f"{role} needed",
+        ])
+    # If the user typed a ROLE directly (e.g. "ui ux designer"), also search
+    # buyer-intent phrases around that exact role — otherwise we only get
+    # the generic base phrases.
+    if base_is_role and len(roles) == 1:
+        phrases.extend([
+            f"looking for a freelance {base}",
+            f"looking for freelance {base}",
+            f"hiring {base}",
+            f"need a {base} for our",
+            f"{base} required for",
+            f"contract {base}",
         ])
     # general intent phrases too
     phrases.extend([

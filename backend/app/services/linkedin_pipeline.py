@@ -1028,15 +1028,23 @@ async def run_linkedin_pipeline(
 
             async def _fetch_jobs(job_query: str) -> list[dict]:
                 try:
-                    jobs = await asyncio.to_thread(
-                        run_job_search,
-                        query=job_query,
-                        location="United States",
-                        time_range="7d",
-                        max_jobs=min(max_results * 2, 40),
+                    # Hard timeout — the job actor can hang; never let it block
+                    # the whole search for more than 60s.
+                    jobs = await asyncio.wait_for(
+                        asyncio.to_thread(
+                            run_job_search,
+                            query=job_query,
+                            location="United States",
+                            time_range="7d",
+                            max_jobs=min(max_results * 2, 40),
+                        ),
+                        timeout=60,
                     )
                     logger.info(f"[LinkedInPipeline:{search_id}] Job search '{job_query}' returned {len(jobs)} jobs")
                     return filter_jobs_by_work_type(jobs, ["Remote", "Part-time", "Contract"])
+                except asyncio.TimeoutError:
+                    logger.warning(f"[LinkedInPipeline:{search_id}] Job search '{job_query}' timed out — skipping")
+                    return []
                 except Exception as e:
                     logger.error(f"[LinkedInPipeline:{search_id}] Job search error for '{job_query}': {e}")
                     return []

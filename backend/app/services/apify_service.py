@@ -227,7 +227,7 @@ def run_harvest_post_search(
     # Assign each group a DIFFERENT starting key via the rotating cursor.
     # Only HEALTHY keys (not in cooldown) are used for parallel groups —
     # dead keys are skipped automatically until their cooldown expires.
-    n_groups = min(10, len(queries))
+    n_groups = min(12, len(queries))
     all_rotated = _ordered_keys()
     healthy_keys = [k for k in all_rotated if not _is_key_in_cooldown(k)]
     group_keys = healthy_keys[:n_groups]

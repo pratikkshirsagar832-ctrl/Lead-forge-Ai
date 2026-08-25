@@ -157,9 +157,10 @@ async def create_order(
 
         plan = plan_resp.data[0]
         # price_monthly is stored in USD CENTS (display pricing is USD).
-        # Razorpay settles in INR for Indian accounts, so convert at a
-        # fixed rate: usd_cents x rate = INR paise (e.g. $19 -> Rs.1672).
-        USD_TO_INR_RATE = 88
+        # Razorpay settles in INR for Indian accounts, so convert at the
+        # current market rate (checked 2026-08-25): usd_cents x rate =
+        # INR paise. e.g. $19 -> Rs.1,819 | $99 -> Rs.9,479 | $299 -> Rs.28,629
+        USD_TO_INR_RATE = 95.75
         amount = int(int(plan["price_monthly"]) * USD_TO_INR_RATE)
 
         if amount <= 0:

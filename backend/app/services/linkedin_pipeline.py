@@ -1358,8 +1358,10 @@ async def _update_search(supabase, search_id: str, data: dict) -> None:
 # FAST PIPELINE — N selected leads → N parallel Apify lanes + async OpenAI
 # ══════════════════════════════════════════════════════════════════════════
 
-# Max concurrent OpenAI calls during async qualification.
-AI_ASYNC_CONCURRENCY = 30
+# Max concurrent OpenAI calls during async qualification. gpt-4o-mini TPM
+# budget is 200k tokens/call-org-min; each qualification call is ~1.7k
+# tokens, so 12 concurrent keeps us comfortably under the ceiling.
+AI_ASYNC_CONCURRENCY = 12
 
 # Acceptance tiers for the guarantee loop. Applied to ALREADY-SCORED leads,
 # so relaxing costs zero extra API calls. Only two gates: strict quality
@@ -1541,7 +1543,19 @@ Return ONLY valid JSON."""
 
     sem = asyncio.Semaphore(concurrency)
 
+    # Shared TPM cooldown: when any call hits a 429, ALL tasks pause until
+    # this timestamp. Single event loop → no lock needed.
+    cooldown_until = 0.0
+    import re as _re
+
+    def _retry_wait_ms(err_text: str, attempt: int) -> float:
+        m = _re.search(r"try again in (\d+)ms", err_text)
+        if m:
+            return int(m.group(1)) + 150
+        return (1.5 ** attempt) * 1000 + 250
+
     async def _one(lead: dict) -> dict | None:
+        nonlocal cooldown_until
         async with sem:
             post_text = lead.get("post_text", "")[:3000]
             prompt = PROMPT_TEMPLATE.format(
@@ -1551,27 +1565,38 @@ Return ONLY valid JSON."""
                 company=lead.get("company", "")[:200],
                 location=lead.get("location", "")[:100],
             )
-            try:
-                resp = await client.chat.completions.create(
-                    model="gpt-4o-mini",
-                    messages=[
-                        {"role": "system", "content": SYSTEM_PROMPT},
-                        {"role": "user", "content": prompt},
-                    ],
-                    temperature=0.0,
-                    max_tokens=700,
-                    response_format={"type": "json_object"},
-                )
-                result = _json.loads(resp.choices[0].message.content)
-            except Exception as e:
-                logger.warning(f"[FastQualify] error for {lead.get('full_name', '?')}: {e} — accepting leniently")
-                lead["ai_qualified"] = True
-                lead["ai_score"] = 50
-                lead["lead_type"] = "problem_awareness"
-                lead["work_type"] = "unknown"
-                lead["ai_reason"] = "AI call failed — accepted on error"
-                lead["outreach_angle"] = ""
-                return lead
+            result = None
+            # Up to 4 attempts with adaptive backoff on rate limits.
+            for attempt in range(4):
+                pause = cooldown_until - asyncio.get_event_loop().time()
+                if pause > 0:
+                    await asyncio.sleep(pause)
+                try:
+                    resp = await client.chat.completions.create(
+                        model="gpt-4o-mini",
+                        messages=[
+                            {"role": "system", "content": SYSTEM_PROMPT},
+                            {"role": "user", "content": prompt},
+                        ],
+                        temperature=0.0,
+                        max_tokens=700,
+                        response_format={"type": "json_object"},
+                    )
+                    result = _json.loads(resp.choices[0].message.content)
+                    break
+                except Exception as e:
+                    err_text = str(e)
+                    if "rate_limit" in err_text or "429" in err_text:
+                        # Cool the WHOLE org briefly so parallel calls drain.
+                        cooldown_until = asyncio.get_event_loop().time() + 2.0
+                        if attempt < 3:
+                            await asyncio.sleep(_retry_wait_ms(err_text, attempt) / 1000.0)
+                            continue
+                    logger.warning(f"[FastQualify] dropping {lead.get('full_name', '?')} after {attempt + 1} attempts: {err_text[:120]}")
+                    return None  # NEVER accept unqualified — quality first
+
+            if result is None:
+                return None
 
         work_type = (result.get("work_type") or "unknown").lower()
         if result.get("lead_type") == "hiring" and work_type == "full_time_onsite":
@@ -1738,7 +1763,9 @@ async def run_linkedin_pipeline_fast(
         n_lanes = max_results
         lanes, reserve_pool = split_lane_phrases(pool, n_lanes)
         n_lanes = len(lanes)
-        fetch_per_lane = max(20, min(50, (max_results * 10) // n_lanes))
+        # Keep raw volume proportional to the ask: ~8 posts per requested
+        # lead per lane, capped — prevents TPM blowups on small searches.
+        fetch_per_lane = max(12, min(25, -(-max_results * 8 // n_lanes)))
 
         logger.info(
             f"[LinkedInPipeline:{search_id}] FAST start: {n_lanes} parallel lanes "
@@ -1777,7 +1804,7 @@ async def run_linkedin_pipeline_fast(
                     seen_post_ids.add(pid)
                 fresh.append(it)
             deduped = dedupe_post_items(fresh)
-            candidates, skipped = process_items(deduped, MAX_RESULTS_CAP * 6)
+            candidates, skipped = process_items(deduped, max_results * 8)
             # Drop authors the user already has — BEFORE scoring (saves tokens).
             candidates = [
                 c for c in candidates

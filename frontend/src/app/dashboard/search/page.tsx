@@ -14,7 +14,7 @@ import { SearchProgressCard } from '@/components/dashboard/SearchProgressCard';
 import { UpgradeModal } from '@/components/shared/UpgradeModal';
 import { API_ROUTES } from '@/lib/constants';
 import { useSearchStore } from '@/stores/searchStore';
-import { MapPin, Briefcase, SearchIcon, Sparkles, Globe, Star, Phone, ChevronRight, Users, AlertCircle, Search, Linkedin, Mail, Clock, ExternalLink } from 'lucide-react';
+import { MapPin, Briefcase, SearchIcon, Sparkles, Globe, Star, Phone, ChevronRight, Users, AlertCircle, Search, Linkedin, Mail, Clock, ExternalLink, Unlock } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import Link from 'next/link';
 import { LEAD_CATEGORIES } from '@/lib/constants';
@@ -189,6 +189,11 @@ export default function SearchPage() {
   const [source, setSource] = useState<'google_maps' | 'linkedin'>('google_maps');
   const sourceRef = useRef<'google_maps' | 'linkedin'>('google_maps');
   const [maxResults, setMaxResults] = useState(10);
+  const requestedCount = useSearchStore((s) => s.requestedCount);
+  const isUnlocked = useSearchStore((s) => s.unlocked);
+  const unlockResults = useSearchStore((s) => s.unlockResults);
+  const limitHit = useSearchStore((s) => s.limitHit);
+  const setLimitHit = useSearchStore((s) => s.setLimitHit);
 
   const REVIEW_RANGES = [
     { key: 'all', label: 'All' },
@@ -204,6 +209,12 @@ export default function SearchPage() {
       (reviewFilter.max === null || l.total_reviews <= reviewFilter.max)
     );
   }, [results, reviewFilter]);
+
+  // LinkedIn: show only the requested count until the user clicks
+  // "Get More" — over-delivered extras stay hidden behind the button.
+  const isLocked = requestedCount !== null && !isUnlocked;
+  const visibleLeads = isLocked ? filteredResults.slice(0, requestedCount) : filteredResults;
+  const hiddenCount = Math.max(0, filteredResults.length - (requestedCount ?? 0));
 
   const mapsForm = useForm<{ niche: string; location?: string }>({
     resolver: ((values: { niche: string; location?: string }) => {
@@ -434,7 +445,7 @@ export default function SearchPage() {
                   <h2 className="text-lg font-bold text-offwhite tracking-tight">Live Results</h2>
                 </div>
                 <span className="text-sm text-ice/40 font-mono">
-                  {filteredResults.length}{resultsTotal > results.length ? ' / ' + resultsTotal : ''} found
+                  {visibleLeads.length}{resultsTotal > results.length ? ' / ' + resultsTotal : ''} found
                 </span>
               </div>
 
@@ -465,10 +476,21 @@ export default function SearchPage() {
               )}
 
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-                {filteredResults.map((lead, idx) => (
+                {visibleLeads.map((lead, idx) => (
                   <LiveResultCard key={lead.id} lead={lead} index={idx} />
                 ))}
               </div>
+              {!isSearchActive && isLocked && hiddenCount > 0 && (
+                <div className="flex justify-center mt-6">
+                  <button
+                    onClick={unlockResults}
+                    className="btn-gradient-cyan inline-flex items-center gap-2 px-6 py-2.5 rounded-xl text-sm transition-opacity"
+                  >
+                    <Unlock className="w-4 h-4" />
+                    Get More Leads (+{hiddenCount})
+                  </button>
+                </div>
+              )}
               {!isSearchActive && resultsTotal > 0 && (
                 <div className="flex justify-center mt-6 gap-4 flex-wrap">
                   <Link href="/dashboard/leads"
@@ -501,7 +523,11 @@ export default function SearchPage() {
         </motion.div>
       )}
 
-      <UpgradeModal isOpen={showUpgradeModal} onClose={() => setShowUpgradeModal(false)} type="limit" />
+      <UpgradeModal
+        isOpen={showUpgradeModal || limitHit}
+        onClose={() => { setShowUpgradeModal(false); setLimitHit(false); }}
+        type="limit"
+      />
     </div>
   );
 }

@@ -6,6 +6,8 @@ import { useToast } from './useToast';
 
 export function useSearch() {
   const { activeSearchId, progress, setActiveSearch, setProgress, clearActiveSearch, setHistory, appendResults, results, resultsTotal } = useSearchStore();
+  const setRequestedCount = useSearchStore((s) => s.setRequestedCount);
+  const setLimitHit = useSearchStore((s) => s.setLimitHit);
   const { showToast } = useToast();
   const [isStarting, setIsStarting] = useState(false);
   const [isCancelling, setIsCancelling] = useState(false);
@@ -80,6 +82,10 @@ export function useSearch() {
 
       if (['completed', 'failed', 'cancelled'].includes(data.status)) {
         clearPolling();
+        // HARD LIMIT: backend marks truncation in the message → upgrade popup
+        if (/lead limit/i.test(data.message || '')) {
+          setLimitHit(true);
+        }
         try {
           resultsAbortRef.current?.abort();
           const resultsAbort = new AbortController();
@@ -156,6 +162,10 @@ export function useSearch() {
           payload.lead_types = options.leadTypes;
         }
       }
+      // Extras beyond the requested count stay locked until user clicks
+      // "Get More" — only applies to LinkedIn searches.
+      setRequestedCount(options?.source === 'linkedin' ? (options.maxResults ?? 10) : null);
+      setLimitHit(false);
 
       const { data } = await api.post(API_ROUTES.searches.create, payload);
       setActiveSearch(data.id);

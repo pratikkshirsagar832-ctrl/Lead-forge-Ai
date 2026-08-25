@@ -54,9 +54,9 @@ async def run_search_pipeline(
                 await _mark_cancelled(supabase, search_id)
                 return
 
-            await _run_maps_search(supabase, search_id, user_id, niche, location, start_time)
+            limit_hit = await _run_maps_search(supabase, search_id, user_id, niche, location, start_time)
 
-            await _finalize_search(supabase, search_id)
+            await _finalize_search(supabase, search_id, limit_hit=limit_hit)
 
     except Exception as e:
         logger.error(f"[Pipeline:{search_id}] Unexpected error: {e}", exc_info=True)
@@ -119,7 +119,7 @@ async def load_more_maps_search(
         logger.info(f"[Pipeline:{search_id}] No new unique leads found for load-more")
         return 0
 
-    lead_ids = await _save_maps_leads(supabase, search_id, user_id, new_results)
+    lead_ids, _ = await _save_maps_leads(supabase, search_id, user_id, new_results)
     logger.info(f"[Pipeline:{search_id}] Load-more saved {len(lead_ids)} new leads")
 
     # Update search totals
@@ -172,13 +172,14 @@ async def _run_maps_search(
         "message": f"Found {len(raw_results)} businesses. Saving leads...",
     })
 
-    lead_ids = await _save_maps_leads(supabase, search_id, user_id, raw_results)
-    logger.info(f"[Pipeline:{search_id}] Saved {len(lead_ids)} maps leads")
+    lead_ids, maps_limit_hit = await _save_maps_leads(supabase, search_id, user_id, raw_results)
+    logger.info(f"[Pipeline:{search_id}] Saved {len(lead_ids)} maps leads (limit_hit={maps_limit_hit})")
+    return maps_limit_hit
 
 
 async def _save_maps_leads(
     supabase, search_id: str, user_id: str, raw_results: list[dict]
-) -> list[str]:
+) -> tuple[list[str], bool]:
     # Check remaining leads limit before saving
     remaining_leads = 30  # default fallback
     try:
@@ -202,8 +203,10 @@ async def _save_maps_leads(
             pass
 
     lead_ids = []
+    hit_limit = False
     for result in raw_results:
         if remaining_leads <= 0:
+            hit_limit = True
             logger.warning(f"[Pipeline:{search_id}] Daily leads limit reached. Skipping {len(raw_results) - len(lead_ids)} remaining results.")
             break
         try:
@@ -234,12 +237,12 @@ async def _save_maps_leads(
                 remaining_leads -= 1  # decrement local counter after successful save
         except Exception as e:
             logger.error(f"Failed to save lead '{result.get('business_name', '?')}': {e}")
-    return lead_ids
+    return lead_ids, hit_limit
 
 
 # ── FINALIZE ─────────────────────────────────────────────────────────
 
-async def _finalize_search(supabase, search_id: str) -> None:
+async def _finalize_search(supabase, search_id: str, limit_hit: bool = False) -> None:
     try:
         all_leads = await asyncio.to_thread(
             lambda: supabase.table("leads")
@@ -253,10 +256,14 @@ async def _finalize_search(supabase, search_id: str) -> None:
         hot = sum(1 for l in leads_data if l.get("lead_category") == "hot")
         warm = sum(1 for l in leads_data if l.get("lead_category") == "warm")
 
+        message = f"Found {total} leads: {hot} hot, {warm} warm"
+        if limit_hit:
+            message += " | Daily lead limit reached — upgrade your plan for more."
+
         await _update_search(supabase, search_id, {
             "status": "completed",
             "progress_percent": 100,
-            "message": f"Found {total} leads: {hot} hot, {warm} warm",
+            "message": message,
             "total_results": total,
             "hot_leads": hot,
             "warm_leads": warm,

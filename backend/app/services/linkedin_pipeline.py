@@ -1756,6 +1756,20 @@ async def run_linkedin_pipeline_fast(
             logger.warning(f"[LinkedInPipeline:{search_id}] Known-url prefetch failed: {e}")
             known_urls = set()
 
+        # ── HARD LIMIT: no daily leads left → fail fast WITHOUT burning
+        # any Apify/OpenAI credits. User sees the upgrade prompt.
+        remaining_now = await _get_remaining_leads(supabase, user_id)
+        if remaining_now <= 0:
+            logger.warning(f"[LinkedInPipeline:{search_id}] HARD STOP — daily lead limit already reached")
+            await _update_search(supabase, search_id, {
+                "status": "completed", "progress_percent": 100,
+                "message": "Daily lead limit reached — upgrade your plan to get more leads.",
+                "total_results": 0, "hot_leads": 0, "warm_leads": 0,
+                "skipped": 0, "emails_found": 0,
+                "completed_at": datetime.now(timezone.utc).isoformat(),
+            })
+            return
+
         # ── Phase 1: build phrase pool and split into N dedicated lanes.
         pool = list(build_boolean_query(query))
         for variant in range(2, 9):
@@ -1978,6 +1992,8 @@ async def run_linkedin_pipeline_fast(
         })
         lead_ids = await _save_leads_bulk(supabase, search_id, user_id, final_leads)
 
+        saved = len(lead_ids)
+        lead_limit_hit = saved < len(final_leads)  # plan cap truncated saves
         emails_found = 0
         if enrich_emails and lead_ids:
             await _update_search(supabase, search_id, {
@@ -1985,11 +2001,13 @@ async def run_linkedin_pipeline_fast(
             })
             emails_found = await _enrich_emails(supabase, search_id, user_id, final_leads, lead_ids)
 
-        saved = len(lead_ids)
         suffix = f", {emails_found} emails" if emails_found else ""
+        final_message = f"Found {saved} leads{suffix}"
+        if lead_limit_hit:
+            final_message += " | Daily lead limit reached — upgrade your plan for more."
         await _update_search(supabase, search_id, {
             "status": "completed", "progress_percent": 100,
-            "message": f"Found {saved} leads{suffix}",
+            "message": final_message,
             "total_results": saved, "hot_leads": hot, "warm_leads": warm,
             "skipped": max(0, raw_count_total - saved),
             "emails_found": emails_found,
@@ -1997,7 +2015,7 @@ async def run_linkedin_pipeline_fast(
         })
         logger.info(
             f"[LinkedInPipeline:{search_id}] FAST completed — {saved}/{max_results} leads "
-            f"({hot} hot), {emails_found} emails, {raw_count_total} raw posts"
+            f"({hot} hot), {emails_found} emails, limit_hit={lead_limit_hit}, {raw_count_total} raw posts"
         )
 
     except ApifyError as e:

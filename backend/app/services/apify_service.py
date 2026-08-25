@@ -202,6 +202,50 @@ def run_post_search(
 HARVEST_POST_SEARCH_ACTOR = "harvestapi~linkedin-post-search"
 
 
+def run_lane_search(
+    search_queries: list[str],
+    max_posts: int = 50,
+    posted_limit: str = "month",
+) -> list[dict]:
+    """ONE harvestapi actor run — designed to be fired N times IN PARALLEL.
+
+    Each call grabs its own key from the rotating cursor (healthy keys
+    first, cooldown keys last resort) with full failover to other keys.
+    Callers (fast pipeline) launch one lane per requested lead, so N
+    selected leads → N concurrent actor runs on N different keys.
+    """
+    queries = [q.strip() for q in search_queries if q and q.strip()][:12]
+    if not queries:
+        queries = ["marketing"]
+    payload = {
+        "searchQueries": queries,
+        "maxPosts": max(10, min(max_posts, 50)),
+        "postedLimit": posted_limit if posted_limit in ("1h", "24h", "week", "month") else "month",
+        "sortBy": "date",
+        "profileScraperMode": "main",
+        "scrapeReactions": False,
+        "postNestedReactions": False,
+        "scrapeComments": False,
+        "postNestedComments": False,
+    }
+    return _run_sync_actor(HARVEST_POST_SEARCH_ACTOR, payload)
+
+
+def dedupe_post_items(items: list[dict]) -> list[dict]:
+    """Dedupe raw post items by post id / url across lanes.
+    Handles both harvestapi (`id`/`linkedinUrl`) and scrapeforge
+    (`postId`/`url`) formats."""
+    seen: set[str] = set()
+    unique: list[dict] = []
+    for it in items:
+        pid = it.get("postId") or it.get("id") or it.get("url") or it.get("linkedinUrl")
+        if not pid or pid in seen:
+            continue
+        seen.add(pid)
+        unique.append(it)
+    return unique
+
+
 def run_harvest_post_search(
     search_queries: list[str],
     max_posts: int = 100,

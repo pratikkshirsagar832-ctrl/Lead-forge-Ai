@@ -151,7 +151,7 @@ export function useSearch() {
       };
       if (options?.source === 'linkedin') {
         payload.enrich_emails = options.enrichEmails ?? true;
-        payload.max_results = options.maxResults ?? 20;
+        payload.max_results = options.maxResults ?? 10;
         if (options.leadTypes) {
           payload.lead_types = options.leadTypes;
         }

@@ -30,7 +30,7 @@ from app.schemas.search import (
     SearchStatusResponse,
 )
 from app.services.pipeline import cancel_search, run_search_pipeline, load_more_maps_search
-from app.services.linkedin_pipeline import run_linkedin_pipeline
+from app.services.linkedin_pipeline import run_linkedin_pipeline_fast
 
 router = APIRouter(prefix="/api/searches", tags=["Searches"])
 
@@ -101,7 +101,7 @@ async def create_search(
             raise HTTPException(status_code=500, detail="Failed to create search")
 
         background_tasks.add_task(
-            run_linkedin_pipeline,
+            run_linkedin_pipeline_fast,
             search_id=search["id"],
             user_id=user_id,
             query=query_term,

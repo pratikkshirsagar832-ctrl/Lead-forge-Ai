@@ -23,9 +23,11 @@ from app.config import get_settings
 from app.database import get_supabase_admin
 from app.services.apify_service import (
     ApifyError,
+    dedupe_post_items,
     enrich_profiles,
     fetch_profile_details,
     run_post_search,
+    run_lane_search,
     run_job_search,
     filter_jobs_by_work_type,
 )
@@ -1350,3 +1352,624 @@ async def _update_search(supabase, search_id: str, data: dict) -> None:
         )
     except Exception as e:
         logger.error(f"[LinkedInPipeline:{search_id}] Failed to update search: {e}")
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# FAST PIPELINE — N selected leads → N parallel Apify lanes + async OpenAI
+# ══════════════════════════════════════════════════════════════════════════
+
+# Max concurrent OpenAI calls during async qualification.
+AI_ASYNC_CONCURRENCY = 30
+
+# Acceptance tiers for the guarantee loop. Applied to ALREADY-SCORED leads,
+# so relaxing costs zero extra API calls. Only two gates: strict quality
+# first (25), absolute last resort (10).
+TIER_1 = {"min_score": 25, "country": "allowed"}   # strict — best quality
+TIER_FINAL = {"min_score": 10, "country": "any"}   # last resort
+TIERS = [TIER_1, TIER_FINAL]
+
+
+def _country_ok(lead: dict, mode: str) -> bool:
+    if mode == "any":
+        return True
+    cc = lead.get("country_code") or ""
+    if not cc:
+        # Unknown country: apply the cheap heuristics from discovery phase.
+        return not (
+            _looks_south_asian(lead.get("full_name") or "")
+            or any(k in (lead.get("headline") or "").lower() for k in (
+                "india", "pakistan", "bangladesh", "manila", "lagos", "nairobi"))
+        )
+    return cc in ALLOWED_COUNTRY_CODES
+
+
+def _type_ok(lead: dict, allowed_types: set[str] | None) -> bool:
+    if not allowed_types:
+        return True
+    return lead.get("lead_type") in allowed_types
+
+
+def tier_filter(scored: list[dict], lead_types: list[str], tier: dict) -> tuple[list[dict], set[str]]:
+    """Filter scored leads by a relaxation tier.
+
+    Returns (accepted_leads, rejected_author_urls). Rejected URLs are
+    authors whose ONLY post failed this tier — they may pass a looser tier.
+    """
+    type_map = {
+        "buyer": ["explicit_need", "problem_awareness", "research"],
+        "agency": ["agency"],
+        "hiring": ["hiring"],
+    }
+    all_types = lead_types is None or set(lead_types) == {"buyer", "agency", "hiring"}
+    allowed = None
+    if not all_types:
+        allowed = set()
+        for lt in lead_types or []:
+            allowed.update(type_map.get(lt, [lt]))
+
+    accepted: list[dict] = []
+    for lead in scored:
+        score = lead.get("ai_score", 0) or 0
+        if score < tier["min_score"]:
+            continue
+        if not _country_ok(lead, tier["country"]):
+            continue
+        if not _type_ok(lead, allowed):
+            continue
+        accepted.append(lead)
+    return accepted
+
+
+def split_lane_phrases(pool: list[str], n_lanes: int, per_lane_cap: int = 12) -> tuple[list[list[str]], list[str]]:
+    """Split the phrase pool into n_lanes chunks (+ leftover phrases for wave 2)."""
+    pool = list(dict.fromkeys(p.strip() for p in pool if p.strip()))
+    per_lane = min(per_lane_cap, max(4, len(pool) // n_lanes))
+    lanes, used = [], 0
+    for i in range(n_lanes):
+        chunk = pool[used : used + per_lane]
+        if not chunk:
+            break
+        lanes.append(chunk)
+        used += len(chunk)
+    return lanes, pool[used:]
+
+
+async def qualify_leads_with_ai_async(
+    leads: list[dict],
+    query: str,
+    client=None,
+    concurrency: int = AI_ASYNC_CONCURRENCY,
+) -> list[dict]:
+    """Async twin of qualify_leads_with_ai — SAME prompts & rules (quality
+    unchanged), but all OpenAI calls fire concurrently via AsyncOpenAI +
+    semaphore instead of a 5-worker thread pool."""
+    import json as _json
+
+    if not leads:
+        return []
+    if client is None:
+        settings = get_settings()
+        if not settings.openai_api_key:
+            logger.warning("OpenAI API key not configured, skipping AI qualification")
+            for l in leads:
+                l.setdefault("ai_qualified", True)
+                l.setdefault("ai_score", 50)
+                l.setdefault("lead_type", "problem_awareness")
+                l.setdefault("work_type", "unknown")
+            return leads
+        from openai import AsyncOpenAI
+        client = AsyncOpenAI(api_key=settings.openai_api_key)
+
+    SYSTEM_PROMPT = """You are a senior B2B lead qualification specialist for an AI-powered lead-generation platform. You decide whether a LinkedIn post is a genuine BUYING signal that a service provider could convert into a client. Your decisions feed a CRM, so precision matters more than recall: one excellent lead is worth more than ten noise records.
+
+WORKFLOW — always follow these steps in order:
+1. Read the post and identify the AUTHOR's role (headline/company).
+2. Determine WHO IS THE SUBJECT: is the author BUYING this service, or SELLING their own labor/services?
+3. Identify the work arrangement (remote / contract / part-time / full-time on-site).
+4. Apply the hard rules below.
+5. Score the six dimensions, then compute lead_score.
+6. Cross-check internal consistency before emitting JSON.
+
+HARD RULES (never violate):
+- R1: A company/owner HIRING a freelancer/contractor/agency on a REMOTE, CONTRACT or PART-TIME basis = STRONG LEAD.
+- R2: A company hiring a FULL-TIME ON-SITE employee = NOT a lead (is_lead=false). They are building a payroll team, not buying your service.
+- R3: The author SELLING their own services ("I'm available", "open to projects", "seeking contract work", "DM me for work", "I offer X", "my services include") = NEVER a lead, regardless of how well the post matches the niche.
+- R4: A RECRUITER/STAFFING agency posting on behalf of clients = NOT a lead.
+- R5: Job seekers looking for a role for themselves = NOT a lead.
+- R6: Pure content/thought-leadership ("5 tips", "why you need", "trends", "case study", "opinion") = NOT a lead even if it scores high on service_match.
+- R7: NON-ENGLISH posts (Spanish, German, French, Hindi, Arabic, etc.) = NOT a lead (is_lead=false). We only serve English-speaking markets. If the post is mostly in another language, reject it even if it describes hiring.
+
+WHO IS THE SUBJECT? (the single most important question)
+SELLING (reject): "I'm available for X", "I'm open to remote work", "I'm seeking projects", "Looking to collaborate", "I offer X", "DM me for X", "I provide X", "My services include", "I build X". Headline reads "Freelance X" and the post promotes their availability.
+BUYING (accept): "We're looking for a developer", "I need a website", "Looking for someone to build our X", "We are hiring a freelance X for a project", "Need a designer on contract", "Anyone know a good agency?", "Recommendations for X services?", or a business describing a problem it needs solved (traffic drop, no website, bad conversions, launching a product).
+"Looking for partners/agencies/marketers/freelancers" = SOURCING suppliers = BUYER.
+RECRUITER EXCEPTION: staffing agency placing candidates at THIRD-PARTY clients = reject. BUT a firm saying "Experts required for our projects" = BUYING expertise = ACCEPT (lead_type="hiring").
+
+SCORING (six dimensions, then total):
+- service_match (0-25): direct mention = 25; adjacent problem = 20; general growth = 15; vague = 10; unrelated = 0.
+- business_problem (0-20): metrics declining/explicit build = 20; clear pain = 15; dissatisfaction = 10; exploring = 5; none = 0.
+- buying_intent (0-20): explicit vendor search with budget/ASAP = 20; HIRING freelancer/remote/part-time = 18; strong implicit ("recommendations?") = 15; problem + commercial context = 10; passive = 5; none = 0.
+- decision_maker_likelihood (0-15): Founder/CEO/Owner/VP/Director = 15; Manager/Lead = 12; unclear but business context = 10; individual contributor = 5; student = 0.
+- urgency (0-10): urgent/ASAP = 10; looking now = 8; soon = 7; active problem no timeline = 5; none = 0.
+- outreach_worthiness (0-10): explicit vendor search + problem + decision maker = 10; strong problem + reachable role = 8; clear problem unclear authority = 6; vague = 4; wrong audience = 0.
+
+lead_score = sum (0-100).
+TIERS: 85+ HOT, 70-84 WARM, 40-69 POTENTIAL, 25-39 BORDERLINE, <25 NOT a lead.
+
+CONSISTENCY: is_lead=true requires lead_score>=25 AND service_match>=10. hiring+full_time_onsite => is_lead=false. agency/irrelevant => is_lead=false.
+
+OUTREACH_ANGLE: reference a SPECIFIC detail from their post/company; never generic; 1 sentence under 25 words.
+
+Always output valid JSON only."""
+
+    PROMPT_TEMPLATE = """Analyze this LinkedIn post for a business offering: {query}
+
+--- POST CONTENT ---
+{post_text}
+
+--- AUTHOR HEADLINE ---
+{headline}
+
+--- AUTHOR COMPANY ---
+{company}
+
+--- AUTHOR LOCATION ---
+{location}
+
+STEP 1 — Who is the subject? A) BUYING B) SELLING C) recruiter/job-seeker/content. If B or C → is_lead=false.
+STEP 2 — If A: remote/contract/freelance/part-time → VALID lead; full-time on-site → is_lead=false.
+STEP 3 — Score the six dimensions honestly. Vague posts 40-55, strong hiring posts 80+.
+STEP 4 — Verify consistency (is_lead=true requires score>=25 AND service_match>=10).
+
+Output EXACTLY this JSON:
+{{
+  "is_lead": true/false,
+  "lead_score": 0-100,
+  "service_match": 0-25,
+  "business_problem": 0-20,
+  "buying_intent": 0-20,
+  "decision_maker_likelihood": 0-15,
+  "urgency": 0-10,
+  "outreach_worthiness": 0-10,
+  "lead_type": "explicit_need|problem_awareness|research|hiring|agency|irrelevant",
+  "work_type": "remote|contract|part_time|full_time_onsite|unknown",
+  "reason": "1-2 sentences with SPECIFIC quoted evidence",
+  "outreach_angle": "one specific opening line referencing their exact situation (max 25 words)"
+}}
+
+Return ONLY valid JSON."""
+
+    sem = asyncio.Semaphore(concurrency)
+
+    async def _one(lead: dict) -> dict | None:
+        async with sem:
+            post_text = lead.get("post_text", "")[:3000]
+            prompt = PROMPT_TEMPLATE.format(
+                query=query,
+                post_text=post_text,
+                headline=lead.get("headline", "")[:500],
+                company=lead.get("company", "")[:200],
+                location=lead.get("location", "")[:100],
+            )
+            try:
+                resp = await client.chat.completions.create(
+                    model="gpt-4o-mini",
+                    messages=[
+                        {"role": "system", "content": SYSTEM_PROMPT},
+                        {"role": "user", "content": prompt},
+                    ],
+                    temperature=0.0,
+                    max_tokens=700,
+                    response_format={"type": "json_object"},
+                )
+                result = _json.loads(resp.choices[0].message.content)
+            except Exception as e:
+                logger.warning(f"[FastQualify] error for {lead.get('full_name', '?')}: {e} — accepting leniently")
+                lead["ai_qualified"] = True
+                lead["ai_score"] = 50
+                lead["lead_type"] = "problem_awareness"
+                lead["work_type"] = "unknown"
+                lead["ai_reason"] = "AI call failed — accepted on error"
+                lead["outreach_angle"] = ""
+                return lead
+
+        work_type = (result.get("work_type") or "unknown").lower()
+        if result.get("lead_type") == "hiring" and work_type == "full_time_onsite":
+            return None  # hard rule: no on-site payroll hires
+        if result.get("is_lead") and (result.get("lead_score", 0) >= 10):
+            lead["ai_qualified"] = True
+            lead["ai_score"] = result.get("lead_score")
+            lead["lead_type"] = result.get("lead_type", "potential")
+            lead["work_type"] = work_type
+            lead["ai_reason"] = result.get("reason", "")
+            lead["outreach_angle"] = result.get("outreach_angle", "")
+            return lead
+        return None
+
+    results = await asyncio.gather(*[_one(l) for l in leads])
+    qualified = [r for r in results if r is not None]
+    logger.info(f"[FastQualify] {len(qualified)}/{len(leads)} candidates passed AI gate")
+    return qualified
+
+
+async def _save_leads_bulk(supabase, search_id: str, user_id: str, leads: list[dict]) -> list[str]:
+    """Bulk-insert leads in ONE Supabase call (per-row fallback on error).
+    Respects the user's daily remaining-leads limit."""
+    remaining_leads = await _get_remaining_leads(supabase, user_id)
+    if remaining_leads <= 0:
+        logger.warning(f"[LinkedInPipeline:{search_id}] Daily leads limit reached, skipping saves")
+        return []
+
+    rows: list[dict] = []
+    for lead in leads[:remaining_leads]:
+        ai_score = lead.get("ai_score", 0) or 0
+        lead_category = "hot" if ai_score >= 85 else "warm"
+
+        ai_type = lead.get("lead_type") or ""
+        if ai_type in ("explicit_need", "problem_awareness", "research"):
+            post_type = "buyer"
+        elif ai_type == "agency":
+            post_type = "agency"
+        elif ai_type == "hiring":
+            post_type = "hiring"
+        elif ai_type == "job_seeker":
+            post_type = "job_seeker"
+        else:
+            post_type = "buyer"
+
+        work_label = {
+            "remote": "🌍 Remote",
+            "contract": "📄 Contract",
+            "part_time": "⏱️ Part-time",
+            "full_time_onsite": "🏢 On-site",
+        }.get((lead.get("work_type") or "").lower())
+        headline = lead.get("headline") or ""
+        if work_label and headline:
+            headline = f"{work_label} — {headline}"
+        elif work_label:
+            headline = work_label
+
+        linkedin_url = (lead.get("linkedin_url") or "").strip()
+        rows.append({
+            "search_id": search_id,
+            "user_id": user_id,
+            "source": "linkedin",
+            "business_name": lead.get("full_name") or "Unknown",
+            "category": lead.get("company") or "LinkedIn",
+            "full_address": lead.get("location") or "",
+            "phone": "",
+            "email_found": "",
+            "website_url": "",
+            "rating": None,
+            "total_reviews": 0,
+            "google_maps_link": "",
+            "description": lead.get("post_text") or "",
+            "lead_category": lead_category,
+            "post_type": post_type,
+            "linkedin_url": linkedin_url,
+            "post_url": lead.get("post_url") or "",
+            "post_text": lead.get("post_text") or "",
+            "headline": headline,
+            "profile_picture_url": lead.get("profile_picture_url") or "",
+            "connections_count": lead.get("connections_count") or 0,
+            "posted_at": lead.get("posted_at"),
+            "ai_qualified": True,
+            "ai_confidence_score": min(ai_score, 100) / 100.0,
+            "ai_reason": lead.get("ai_reason"),
+            "ai_pitch": lead.get("outreach_angle"),
+        })
+
+    if not rows:
+        return []
+
+    try:
+        response = await asyncio.to_thread(
+            lambda: supabase.table("leads").insert(rows).execute()
+        )
+        if response.data:
+            return [r["id"] for r in response.data]
+        return []
+    except Exception as e:
+        logger.warning(f"[LinkedInPipeline:{search_id}] Bulk insert failed ({e}), falling back to per-row")
+        lead_ids: list[str] = []
+        for row in rows:
+            try:
+                response = await asyncio.to_thread(
+                    lambda r=row: supabase.table("leads").insert(r).execute()
+                )
+                if response.data and len(response.data) > 0:
+                    lead_ids.append(response.data[0]["id"])
+            except Exception as row_err:
+                logger.error(f"[LinkedInPipeline:{search_id}] Row insert failed for '{row.get('business_name')}': {row_err}")
+        return lead_ids
+
+
+async def run_linkedin_pipeline_fast(
+    search_id: str,
+    user_id: str,
+    query: str,
+    enrich_emails: bool,
+    max_results: int,
+    lead_types: list[str] = None,
+) -> None:
+    """GUARANTEED-COUNT fast pipeline.
+
+    User selects N leads → N parallel Apify lanes (each on its own key)
+    fire SIMULTANEOUSLY → all candidates scored by GPT-4o-mini with up to
+    30 CONCURRENT async calls → tiered acceptance guarantees at least N
+    fresh leads whenever they exist. Wave 2 lanes + job-scraper act as
+    gap fillers. Quality ordering is always by ai_score desc.
+    """
+    supabase = get_supabase_admin()
+    max_results = max(1, min(max_results, MAX_RESULTS_CAP))
+    if lead_types is None:
+        lead_types = ["buyer", "agency", "hiring"]
+
+    settings = get_settings()
+    openai_client = None
+    if settings.openai_api_key:
+        from openai import AsyncOpenAI
+        openai_client = AsyncOpenAI(api_key=settings.openai_api_key)
+
+    try:
+        # ── Phase 0: prefetch user's already-saved author URLs so the
+        # guarantee counts FRESH leads only (no silent dedupe shrink later).
+        await _update_search(supabase, search_id, {
+            "status": "scraping", "progress_percent": 3,
+            "message": "Preparing parallel search...",
+        })
+        try:
+            existing_resp = await asyncio.to_thread(
+                lambda: supabase.table("leads").select("linkedin_url")
+                .eq("user_id", user_id).neq("linkedin_url", "").execute()
+            )
+            known_urls = {
+                (r.get("linkedin_url") or "").split("?")[0].rstrip("/").lower()
+                for r in (existing_resp.data or [])
+            }
+        except Exception as e:
+            logger.warning(f"[LinkedInPipeline:{search_id}] Known-url prefetch failed: {e}")
+            known_urls = set()
+
+        # ── Phase 1: build phrase pool and split into N dedicated lanes.
+        pool = list(build_boolean_query(query))
+        for variant in range(2, 9):
+            pool.extend(build_boolean_query_variant(query, variant))
+        n_lanes = max_results
+        lanes, reserve_pool = split_lane_phrases(pool, n_lanes)
+        n_lanes = len(lanes)
+        fetch_per_lane = max(20, min(50, (max_results * 10) // n_lanes))
+
+        logger.info(
+            f"[LinkedInPipeline:{search_id}] FAST start: {n_lanes} parallel lanes "
+            f"(~{fetch_per_lane} posts each), {len(reserve_pool)} reserve phrases"
+        )
+        await _update_search(supabase, search_id, {
+            "progress_percent": 8,
+            "message": f"Firing {n_lanes} parallel LinkedIn searches...",
+        })
+
+        seen_post_ids: set[str] = set()
+        raw_count_total = 0
+        all_skipped = 0
+
+        async def _run_wave_async(lane_list: list[list[str]]) -> list[dict]:
+            results = await asyncio.gather(*[
+                asyncio.to_thread(run_lane_search, lq, fetch_per_lane, "month")
+                for lq in lane_list
+            ])
+            items: list[dict] = []
+            ok_lanes = 0
+            for lane_items in results:
+                if lane_items:
+                    ok_lanes += 1
+                    items.extend(lane_items)
+            logger.info(f"[LinkedInPipeline:{search_id}] wave done: {ok_lanes}/{len(lane_list)} lanes returned data")
+            return items
+
+        async def _process_items_to_candidates(items: list[dict]) -> tuple[list[dict], int]:
+            fresh = []
+            for it in items:
+                pid = it.get("postId") or it.get("id") or it.get("url") or it.get("linkedinUrl")
+                if pid and pid in seen_post_ids:
+                    continue
+                if pid:
+                    seen_post_ids.add(pid)
+                fresh.append(it)
+            deduped = dedupe_post_items(fresh)
+            candidates, skipped = process_items(deduped, MAX_RESULTS_CAP * 6)
+            # Drop authors the user already has — BEFORE scoring (saves tokens).
+            candidates = [
+                c for c in candidates
+                if (c.get("linkedin_url") or "").split("?")[0].rstrip("/").lower() not in known_urls
+            ]
+            return candidates, skipped
+
+        # ── Phase 2: WAVE 1 — all N lanes simultaneously.
+        items = await _run_wave_async(lanes)
+        raw_count_total += len(items)
+        candidates, skipped = await _process_items_to_candidates(items)
+        all_skipped += skipped
+
+        # Optional profile enrichment for missing headlines (ONE batched call).
+        missing = [c for c in candidates if not (c.get("headline") or "").strip()]
+        if missing:
+            try:
+                enrich_urls = [c["linkedin_url"] for c in missing[:PROFILE_ENRICHMENT_CAP]]
+                profiles = await asyncio.to_thread(fetch_profile_details, enrich_urls, "basic")
+                by_url = {(p.get("url") or "").rstrip("/").lower(): p for p in profiles if isinstance(p, dict)}
+                for c in candidates:
+                    p = by_url.get((c.get("linkedin_url") or "").rstrip("/").lower())
+                    if not p:
+                        continue
+                    c["headline"] = (p.get("headline") or c.get("headline") or "")[:500]
+                    c["company"] = _company_from_profile(p) or c.get("company") or ""
+                    c["location"] = _location_from_profile(p) or c.get("location") or ""
+            except Exception as e:
+                logger.warning(f"[LinkedInPipeline:{search_id}] enrichment skipped: {e}")
+
+        await _update_search(supabase, search_id, {
+            "progress_percent": 35,
+            "message": f"{raw_count_total} posts found. AI qualifying {len(candidates)} candidates...",
+        })
+
+        # ── Phase 3: async AI qualification (ALL candidates concurrently).
+        scored = await qualify_leads_with_ai_async(candidates, query, openai_client)
+
+        # ── Phase 4: tiered acceptance until we have N leads.
+        final_leads: list[dict] = []
+        chosen_urls: set[str] = set()
+
+        def _absorb(leads_in: list[dict]) -> int:
+            added = 0
+            for l in leads_in:
+                key = (l.get("linkedin_url") or "").split("?")[0].rstrip("/").lower()
+                if key and key not in chosen_urls:
+                    chosen_urls.add(key)
+                    final_leads.append(l)
+                    added += 1
+            return added
+
+        for tier_idx, tier in enumerate(TIERS, 1):
+            if len(final_leads) >= max_results:
+                break
+            got = _absorb(tier_filter(scored, lead_types, tier))
+            logger.info(f"[LinkedInPipeline:{search_id}] Tier {tier_idx}: +{got} (total {len(final_leads)}/{max_results})")
+
+        # Sort once — highest quality always first.
+        final_leads.sort(key=lambda x: x.get("ai_score", 0), reverse=True)
+
+        # ── Phase 5: still short → WAVE 2 with reserve phrases (fresh angles).
+        if len(final_leads) < max_results and reserve_pool:
+            wave2_lanes, _ = split_lane_phrases(reserve_pool, min(n_lanes, max(2, max_results - len(final_leads))))
+            await _update_search(supabase, search_id, {
+                "progress_percent": 55,
+                "message": f"Wave 2: {len(wave2_lanes)} more searches for the remaining {max_results - len(final_leads)} leads...",
+            })
+            items2 = await _run_wave_async(wave2_lanes)
+            raw_count_total += len(items2)
+            candidates2, skipped2 = await _process_items_to_candidates(items2)
+            all_skipped += skipped2
+            scored2 = await qualify_leads_with_ai_async(candidates2, query, openai_client)
+            combined = scored + scored2
+            final_leads = []
+            chosen_urls = set()
+            for tier in TIERS:
+                if len(final_leads) >= max_results:
+                    break
+                _absorb(tier_filter(combined, lead_types, tier))
+            final_leads.sort(key=lambda x: x.get("ai_score", 0), reverse=True)
+
+        # ── Phase 6: STILL short + hiring wanted → job postings as filler
+        # (a live job ad is a strong buying signal; fixed high score).
+        if len(final_leads) < max_results and "hiring" in lead_types:
+            await _update_search(supabase, search_id, {
+                "progress_percent": 70,
+                "message": "Adding hiring-intent leads from job postings...",
+            })
+            need = max_results - len(final_leads)
+            job_queries = get_job_queries_for_niche(query)[: min(4, max(2, need))]
+            try:
+                job_lists = await asyncio.gather(*[
+                    asyncio.wait_for(
+                        asyncio.to_thread(
+                            run_job_search,
+                            query=q,
+                            location="United States",
+                            time_range="7d",
+                            max_jobs=min(need * 3, 40),
+                        ),
+                        timeout=60,
+                    )
+                    for q in job_queries
+                ])
+            except Exception as e:
+                logger.warning(f"[LinkedInPipeline:{search_id}] job filler failed: {e}")
+                job_lists = []
+            for jobs in job_lists:
+                for job in filter_jobs_by_work_type(jobs, ["Remote", "Part-time", "Contract"]):
+                    if len(final_leads) >= max_results:
+                        break
+                    company_url = (job.get("companyUrl") or "").strip()
+                    job_url = (job.get("jobUrl") or "").strip()
+                    linkedin_url = company_url or job_url
+                    key = linkedin_url.split("?")[0].rstrip("/").lower()
+                    if not linkedin_url or key in chosen_urls or key in known_urls:
+                        continue
+                    final_leads.append({
+                        "full_name": job.get("company") or "Unknown Company",
+                        "headline": f"{job.get('title', '')} at {job.get('company', '')}",
+                        "company": job.get("company", ""),
+                        "location": job.get("location", ""),
+                        "linkedin_url": linkedin_url,
+                        "post_url": job_url,
+                        "post_text": (job.get("descriptionText") or "")[:3000],
+                        "posted_at": _parse_posted_at(job.get("postedAt")),
+                        "engagement_likes": 0,
+                        "engagement_comments": 0,
+                        "profile_picture_url": job.get("companyLogo", ""),
+                        "connections_count": 0,
+                        "ai_qualified": True,
+                        "ai_score": 75,
+                        "lead_type": "hiring",
+                        "work_type": "contract",
+                        "ai_reason": "Active LinkedIn job posting (remote/contract/part-time)",
+                        "outreach_angle": "",
+                        "country_code": "",
+                    })
+                    chosen_urls.add(key)
+
+        final_leads = final_leads[:max_results]
+
+        # ── Phase 7: save (bulk) + optional email enrichment.
+        hot = sum(1 for l in final_leads if (l.get("ai_score", 0) or 0) >= 85)
+        warm = len(final_leads) - hot
+
+        if not final_leads:
+            await _update_search(supabase, search_id, {
+                "status": "completed", "progress_percent": 100,
+                "message": "No relevant leads found after AI qualification.",
+                "total_results": 0, "hot_leads": 0, "warm_leads": 0,
+                "skipped": all_skipped, "emails_found": 0,
+                "completed_at": datetime.now(timezone.utc).isoformat(),
+            })
+            return
+
+        await _update_search(supabase, search_id, {
+            "progress_percent": 88,
+            "message": f"Saving {len(final_leads)} leads ({hot} hot, {warm} warm)...",
+        })
+        lead_ids = await _save_leads_bulk(supabase, search_id, user_id, final_leads)
+
+        emails_found = 0
+        if enrich_emails and lead_ids:
+            await _update_search(supabase, search_id, {
+                "progress_percent": 94, "message": "Finding emails for your leads...",
+            })
+            emails_found = await _enrich_emails(supabase, search_id, user_id, final_leads, lead_ids)
+
+        saved = len(lead_ids)
+        suffix = f", {emails_found} emails" if emails_found else ""
+        await _update_search(supabase, search_id, {
+            "status": "completed", "progress_percent": 100,
+            "message": f"Found {saved} leads{suffix}",
+            "total_results": saved, "hot_leads": hot, "warm_leads": warm,
+            "skipped": max(0, raw_count_total - saved),
+            "emails_found": emails_found,
+            "completed_at": datetime.now(timezone.utc).isoformat(),
+        })
+        logger.info(
+            f"[LinkedInPipeline:{search_id}] FAST completed — {saved}/{max_results} leads "
+            f"({hot} hot), {emails_found} emails, {raw_count_total} raw posts"
+        )
+
+    except ApifyError as e:
+        logger.error(f"[LinkedInPipeline:{search_id}] Apify error: {e}", exc_info=True)
+        await _update_search(supabase, search_id, {
+            "status": "failed", "message": "LinkedIn scraper failed", "error_message": str(e),
+        })
+    except Exception as e:
+        logger.error(f"[LinkedInPipeline:{search_id}] Unexpected error: {e}", exc_info=True)
+        await _update_search(supabase, search_id, {
+            "status": "failed", "message": "Search failed unexpectedly", "error_message": str(e),
+        })

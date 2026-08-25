@@ -188,7 +188,7 @@ export default function SearchPage() {
   const [reviewFilter, setReviewFilter] = useState<'all' | { min: number; max: number | null }>('all');
   const [source, setSource] = useState<'google_maps' | 'linkedin'>('google_maps');
   const sourceRef = useRef<'google_maps' | 'linkedin'>('google_maps');
-  const [maxResults, setMaxResults] = useState(20);
+  const [maxResults, setMaxResults] = useState(10);
 
   const REVIEW_RANGES = [
     { key: 'all', label: 'All' },

@@ -1763,9 +1763,10 @@ async def run_linkedin_pipeline_fast(
         n_lanes = max_results
         lanes, reserve_pool = split_lane_phrases(pool, n_lanes)
         n_lanes = len(lanes)
-        # Keep raw volume proportional to the ask: ~8 posts per requested
-        # lead per lane, capped — prevents TPM blowups on small searches.
-        fetch_per_lane = max(12, min(25, -(-max_results * 8 // n_lanes)))
+        # Keep raw volume proportional to the ask. We AIM to OVER-deliver
+        # (user prefers extra leads), so pull enough candidates to clear
+        # ~2x the request after the strict AI gate, within TPM budget.
+        fetch_per_lane = max(12, min(25, -(-max_results * 12 // n_lanes)))
 
         logger.info(
             f"[LinkedInPipeline:{search_id}] FAST start: {n_lanes} parallel lanes "
@@ -1804,7 +1805,9 @@ async def run_linkedin_pipeline_fast(
                     seen_post_ids.add(pid)
                 fresh.append(it)
             deduped = dedupe_post_items(fresh)
-            candidates, skipped = process_items(deduped, max_results * 8)
+            # Aim for ~2x delivery: pull enough candidates to survive the
+            # strict AI gate (~10% pass rate), capped for TPM safety.
+            candidates, skipped = process_items(deduped, min(max_results * 15, 120))
             # Drop authors the user already has — BEFORE scoring (saves tokens).
             candidates = [
                 c for c in candidates
@@ -1842,14 +1845,21 @@ async def run_linkedin_pipeline_fast(
 
         # ── Phase 3: async AI qualification (ALL candidates concurrently).
         scored = await qualify_leads_with_ai_async(candidates, query, openai_client)
+        # Best first, so the 2x over-deliver cap keeps the strongest leads.
+        scored.sort(key=lambda x: x.get("ai_score", 0) or 0, reverse=True)
 
-        # ── Phase 4: tiered acceptance until we have N leads.
+        # ── Phase 4: tiered acceptance. Deliver AT LEAST max_results
+        # (guaranteed), and keep absorbing quality leads up to 2x — user
+        # prefers EXTRA leads, never fewer than requested.
+        overdeliver_cap = max_results * 2
         final_leads: list[dict] = []
         chosen_urls: set[str] = set()
 
         def _absorb(leads_in: list[dict]) -> int:
             added = 0
             for l in leads_in:
+                if len(final_leads) >= overdeliver_cap:
+                    break
                 key = (l.get("linkedin_url") or "").split("?")[0].rstrip("/").lower()
                 if key and key not in chosen_urls:
                     chosen_urls.add(key)
@@ -1861,7 +1871,7 @@ async def run_linkedin_pipeline_fast(
             if len(final_leads) >= max_results:
                 break
             got = _absorb(tier_filter(scored, lead_types, tier))
-            logger.info(f"[LinkedInPipeline:{search_id}] Tier {tier_idx}: +{got} (total {len(final_leads)}/{max_results})")
+            logger.info(f"[LinkedInPipeline:{search_id}] Tier {tier_idx}: +{got} (total {len(final_leads)}/{max_results}, cap {overdeliver_cap})")
 
         # Sort once — highest quality always first.
         final_leads.sort(key=lambda x: x.get("ai_score", 0), reverse=True)
@@ -1946,7 +1956,7 @@ async def run_linkedin_pipeline_fast(
                     })
                     chosen_urls.add(key)
 
-        final_leads = final_leads[:max_results]
+        final_leads = final_leads[:overdeliver_cap]
 
         # ── Phase 7: save (bulk) + optional email enrichment.
         hot = sum(1 for l in final_leads if (l.get("ai_score", 0) or 0) >= 85)

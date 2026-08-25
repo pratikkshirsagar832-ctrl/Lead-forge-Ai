@@ -523,6 +523,31 @@ export default function SearchPage() {
         </motion.div>
       )}
 
+      {/* Failed / cancelled search → let the user start over immediately */}
+      {(progress?.status === 'failed' || progress?.status === 'cancelled') && (
+        <motion.div
+          initial={{ opacity: 0, y: 10 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.3 }}
+          className="flex flex-col items-center gap-4 mt-8"
+        >
+          <p className="text-sm text-ice/50">
+            {progress?.status === 'failed'
+              ? 'Something went wrong with this search.'
+              : 'This search was cancelled.'}
+          </p>
+          <LoadingButton
+            onClick={() => { clearActiveSearch(); }}
+            variant="gradient-cyan"
+            size="md"
+            className="px-6 py-3"
+          >
+            <Search className="w-4 h-4 mr-1.5" />
+            Start New Search
+          </LoadingButton>
+        </motion.div>
+      )}
+
       <UpgradeModal
         isOpen={showUpgradeModal || limitHit}
         onClose={() => { setShowUpgradeModal(false); setLimitHit(false); }}

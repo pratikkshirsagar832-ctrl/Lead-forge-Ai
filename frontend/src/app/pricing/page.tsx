@@ -22,7 +22,7 @@ const plans = [
   {
     id: 'solo', name: 'Solo', price: 19, currency: '$', period: '/mo',
     linkedinLeads: '20', gmbLeads: '200', trial: null,
-    features: ['5 searches', 'Up to 50 leads', 'Website analysis', 'AI pitch generation', 'CSV export'],
+    features: ['5 searches', 'Up to 50 leads', 'Website analysis', 'AI pitch generation'],
     icon: Star, color: 'text-sky-400', popular: false,
   },
   {

@@ -14,26 +14,26 @@ import { Check, Zap, Star, Building2, ArrowRight, Loader2 } from 'lucide-react';
 
 const plans = [
   {
-    id: 'free', name: 'Free', price: 0, currency: '₹', period: '/mo',
-    leads: '30', searches: '3', trial: '3 day trial',
+    id: 'free', name: 'Free', price: 0, currency: '$', period: '/mo',
+    linkedinLeads: '3', gmbLeads: '30', trial: '1 day trial',
     features: ['3 searches per day', 'Up to 10 leads/search', 'Website analysis', 'Basic lead data'],
     icon: Zap, color: 'text-ice/60',
   },
   {
-    id: 'solo', name: 'Solo', price: 999, currency: '₹', period: '/mo',
-    leads: '50', searches: '5', trial: null,
+    id: 'solo', name: 'Solo', price: 19, currency: '$', period: '/mo',
+    linkedinLeads: '20', gmbLeads: '200', trial: null,
     features: ['5 searches per day', 'Up to 50 leads/day', 'Website analysis', 'AI pitch generation', 'CSV export'],
     icon: Star, color: 'text-sky-400', popular: false,
   },
   {
-    id: 'pro', name: 'Pro', price: 2499, currency: '₹', period: '/mo',
-    leads: '150', searches: '15', trial: null,
+    id: 'pro', name: 'Pro', price: 99, currency: '$', period: '/mo',
+    linkedinLeads: '120', gmbLeads: '1500', trial: null,
     features: ['15 searches per day', 'Up to 150 leads/day', 'Priority support', 'Everything in Solo', 'Advanced analytics'],
     icon: Star, color: 'text-violet', popular: true,
   },
   {
-    id: 'agency', name: 'Agency', price: 6999, currency: '₹', period: '/mo',
-    leads: '500', searches: '50', trial: null,
+    id: 'agency', name: 'Agency', price: 299, currency: '$', period: '/mo',
+    linkedinLeads: '400', gmbLeads: '6000', trial: null,
     features: ['50 searches per day', 'Up to 500 leads/day', 'Team access', 'Everything in Pro', 'API access', 'Dedicated support'],
     icon: Building2, color: 'text-amber-400',
   },
@@ -118,16 +118,22 @@ export default function PricingPage() {
                   <div className="mb-6">
                     <div className="flex items-baseline gap-1">
                       <span className="text-3xl font-extrabold text-offwhite">
-                        {plan.price === 0 ? 'Free' : `${plan.currency}${plan.price.toLocaleString('en-IN')}`}
+                        {plan.price === 0 ? 'Free' : `${plan.currency}${plan.price}`}
                       </span>
                       {plan.price > 0 && <span className="text-sm text-ice/40">{plan.period}</span>}
                     </div>
                     {plan.trial && <p className="text-xs text-ice/40 mt-1">{plan.trial}</p>}
                   </div>
 
-                  <div className="flex items-center gap-2 mb-6 p-3 rounded-lg bg-ocean/20">
-                    <span className="text-2xl font-bold text-steel">{plan.leads}</span>
-                    <span className="text-xs text-ice/60">leads/day<br/>{plan.searches} searches</span>
+                  <div className="flex flex-col gap-2 mb-6 p-3 rounded-lg bg-ocean/20">
+                    <div className="flex items-center gap-2">
+                      <span className="text-xl font-bold text-steel">{plan.linkedinLeads}</span>
+                      <span className="text-xs text-ice/60">HQ LinkedIn Leads</span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <span className="text-xl font-bold text-steel">{plan.gmbLeads}</span>
+                      <span className="text-xs text-ice/60">GMB Leads /day</span>
+                    </div>
                   </div>
 
                   <ul className="space-y-2.5 mb-8 flex-1">

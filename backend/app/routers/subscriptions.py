@@ -156,7 +156,11 @@ async def create_order(
             raise HTTPException(status_code=404, detail="Plan not found")
 
         plan = plan_resp.data[0]
-        amount = int(plan["price_monthly"])
+        # price_monthly is stored in USD CENTS (display pricing is USD).
+        # Razorpay settles in INR for Indian accounts, so convert at a
+        # fixed rate: usd_cents x rate = INR paise (e.g. $19 -> Rs.1672).
+        USD_TO_INR_RATE = 88
+        amount = int(int(plan["price_monthly"]) * USD_TO_INR_RATE)
 
         if amount <= 0:
             raise HTTPException(status_code=400, detail="Cannot create order for free plan")

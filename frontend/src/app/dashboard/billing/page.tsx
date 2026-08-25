@@ -237,7 +237,7 @@ function BillingContent() {
             const meta = PLAN_META[plan.id];
             const Icon = meta?.icon || Zap;
             const isCurrent = plan.id === currentPlanId;
-            const priceInr = (plan.price_monthly / 100).toLocaleString('en-IN');
+            const priceUsd = (plan.price_monthly / 100);
 
             return (
               <div
@@ -249,7 +249,7 @@ function BillingContent() {
                   <h4 className="font-bold text-offwhite">{plan.name}</h4>
                 </div>
                 <p className="text-2xl font-extrabold text-offwhite mb-1">
-                  ₹{priceInr}<span className="text-sm font-normal text-ice/40">/mo</span>
+                  ${priceUsd}<span className="text-sm font-normal text-ice/40">/mo</span>
                 </p>
                 <p className="text-xs text-ice/50 mb-4">{plan.leads_per_day} leads/day · {plan.searches_per_day} searches</p>
                 {isCurrent ? (

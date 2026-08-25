@@ -132,7 +132,7 @@ export default function PricingPage() {
                     </div>
                     <div className="flex items-center gap-2">
                       <span className="text-xl font-bold text-steel">{plan.gmbLeads}</span>
-                      <span className="text-xs text-ice/60">GMB Leads /day</span>
+                      <span className="text-xs text-ice/60">GMB Leads</span>
                     </div>
                   </div>
 

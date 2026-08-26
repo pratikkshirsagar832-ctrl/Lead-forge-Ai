@@ -1,214 +1,109 @@
 "use client"
 
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
-import { Badge } from "@/components/ui/badge"
-import { Button } from "@/components/ui/button"
-import {
-  Users, Mail, Search, Megaphone, TrendingUp, ArrowUpRight,
-  Plus, MessageSquare, Download, Eye, Linkedin, MapPin
-} from "lucide-react"
-import Link from "next/link"
+import { useState } from "react"
+import { Card } from "@/components/ui/card"
+import { Zap, Loader2, ExternalLink, RefreshCw } from "lucide-react"
 
-export default function DashboardPage() {
-  const stats = [
-    { label: "Total Leads", value: "12,847", change: "+12.5%", icon: Users, color: "text-accent-cyan" },
-    { label: "Verified Emails", value: "9,234", change: "+8.2%", icon: Mail, color: "text-emerald" },
-    { label: "Searches Today", value: "156", change: "+23.1%", icon: Search, color: "text-purple-400" },
-    { label: "Active Campaigns", value: "8", change: "+2", icon: Megaphone, color: "text-orange-400" },
-  ]
+const HYPERAGENT_URL = process.env.NEXT_PUBLIC_HYPERAGENT_URL || "http://localhost:8000"
 
-  const recentActivity = [
-    { action: "New lead found", detail: "Sarah Chen — CloudSync", time: "2 min ago", type: "lead" },
-    { action: "Email verified", detail: "james@techcorp.io — Valid", time: "5 min ago", type: "verify" },
-    { action: "Research completed", detail: "Tesla Inc. — Full profile", time: "12 min ago", type: "research" },
-    { action: "Campaign sent", detail: "Q4 Outreach — 45 emails", time: "1 hour ago", type: "campaign" },
-    { action: "Export completed", detail: "1,234 leads to CSV", time: "2 hours ago", type: "export" },
-    { action: "New lead found", detail: "Mike Johnson — DataVault", time: "3 hours ago", type: "lead" },
-  ]
+export default function HyperAgentPage() {
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState(false)
 
-  const topSources = [
-    { name: "LinkedIn", leads: 4523, percentage: 35 },
-    { name: "Web Search", leads: 3211, percentage: 25 },
-    { name: "Crunchbase", leads: 1934, percentage: 15 },
-    { name: "GitHub", leads: 1289, percentage: 10 },
-    { name: "Google Maps", leads: 967, percentage: 7.5 },
-    { name: "Other", leads: 923, percentage: 7.5 },
-  ]
+  const handleLoad = () => {
+    setLoading(false)
+    setError(false)
+  }
+
+  const handleError = () => {
+    setLoading(false)
+    setError(true)
+  }
+
+  const handleRetry = () => {
+    setLoading(true)
+    setError(false)
+    const iframe = document.getElementById("hyperagent-iframe") as HTMLIFrameElement
+    if (iframe) {
+      iframe.src = HYPERAGENT_URL
+    }
+  }
 
   return (
-    <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-bold">Dashboard</h1>
-          <p className="text-ice/60 text-sm mt-1">Welcome back! Here&apos;s your lead generation overview.</p>
+    <div className="h-[calc(100vh-2rem)] flex flex-col">
+      {/* Header */}
+      <div className="flex items-center justify-between mb-4 flex-shrink-0">
+        <div className="flex items-center gap-3">
+          <div className="bg-violet/20 rounded-lg p-2">
+            <Zap className="w-5 h-5 text-violet" />
+          </div>
+          <div>
+            <h1 className="text-xl font-bold text-offwhite">Hyper Agent</h1>
+            <p className="text-xs text-ice/50">AI-powered coding assistant</p>
+          </div>
         </div>
-        <div className="flex gap-2">
-          <Link href="/chat">
-            <Button variant="outline" size="sm" className="border-ocean/20 hover:bg-steel/10">
-              <MessageSquare className="w-4 h-4 mr-2" /> AI Chat
-            </Button>
-          </Link>
-          <Link href="/dashboard/leads">
-            <Button size="sm" className="bg-blue-500 hover:bg-steel/80">
-              <Plus className="w-4 h-4 mr-2" /> Add Lead
-            </Button>
-          </Link>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={handleRetry}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium text-ice/60 hover:text-offwhite hover:bg-ocean/30 border border-steel/20 transition-colors"
+          >
+            <RefreshCw className="w-3.5 h-3.5" />
+            Refresh
+          </button>
+          <a
+            href={HYPERAGENT_URL}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium text-ice/60 hover:text-offwhite hover:bg-ocean/30 border border-steel/20 transition-colors"
+          >
+            <ExternalLink className="w-3.5 h-3.5" />
+            Open Full Screen
+          </a>
         </div>
       </div>
 
-      {/* Stats Grid */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        {stats.map((stat) => (
-          <Card key={stat.label} className="bg-ocean border-ocean/20">
-            <CardContent className="p-4">
-              <div className="flex items-center justify-between mb-2">
-                <span className="text-ice/60 text-sm">{stat.label}</span>
-                <stat.icon className={`w-4 h-4 ${stat.color}`} />
-              </div>
-              <div className="text-2xl font-bold">{stat.value}</div>
-              <div className="flex items-center gap-1 mt-1">
-                <ArrowUpRight className="w-3 h-3 text-emerald" />
-                <span className="text-xs text-emerald">{stat.change}</span>
-                <span className="text-xs text-ice0">vs last week</span>
-              </div>
-            </CardContent>
-          </Card>
-        ))}
-      </div>
-
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {/* Recent Activity */}
-        <Card className="lg:col-span-2 bg-ocean border-ocean/20">
-          <CardHeader className="pb-3">
-            <div className="flex items-center justify-between">
-              <CardTitle className="text-base">Recent Activity</CardTitle>
-              <Button variant="ghost" size="sm" className="text-ice/60 hover:text-offwhite">
-                View All
-              </Button>
-            </div>
-          </CardHeader>
-          <CardContent>
-            <div className="space-y-3">
-              {recentActivity.map((activity, i) => (
-                <div key={i} className="flex items-center gap-3 p-2 rounded-lg hover:bg-steel/10 transition">
-                  <div className={`w-8 h-8 rounded-full flex items-center justify-center ${
-                    activity.type === "lead" ? "bg-steel/20" :
-                    activity.type === "verify" ? "bg-emerald/20" :
-                    activity.type === "research" ? "bg-purple-500/20" :
-                    activity.type === "campaign" ? "bg-orange-500/20" :
-                    "bg-zinc-500/20"
-                  }`}>
-                    {activity.type === "lead" ? <Users className="w-4 h-4 text-accent-cyan" /> :
-                     activity.type === "verify" ? <Mail className="w-4 h-4 text-emerald" /> :
-                     activity.type === "research" ? <Eye className="w-4 h-4 text-purple-400" /> :
-                     activity.type === "campaign" ? <Megaphone className="w-4 h-4 text-orange-400" /> :
-                     <Download className="w-4 h-4 text-ice/60" />}
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <p className="text-sm font-medium">{activity.action}</p>
-                    <p className="text-xs text-ice/60 truncate">{activity.detail}</p>
-                  </div>
-                  <span className="text-xs text-ice0 flex-shrink-0">{activity.time}</span>
-                </div>
-              ))}
-            </div>
-          </CardContent>
-        </Card>
-
-        {/* Lead Sources */}
-        <Card className="bg-ocean border-ocean/20">
-          <CardHeader className="pb-3">
-            <CardTitle className="text-base">Top Sources</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="space-y-3">
-              {topSources.map((source) => (
-                <div key={source.name}>
-                  <div className="flex items-center justify-between text-sm mb-1">
-                    <span>{source.name}</span>
-                    <span className="text-ice/60">{source.leads.toLocaleString()}</span>
-                  </div>
-                  <div className="h-1.5 bg-white/5 rounded-full overflow-hidden">
-                    <div
-                      className="h-full bg-gradient-to-r from-steel to-accent-cyan rounded-full transition-all"
-                      style={{ width: `${source.percentage}%` }}
-                    />
-                  </div>
-                </div>
-              ))}
-            </div>
-          </CardContent>
-        </Card>
-      </div>
-
-      {/* Quick Actions */}
-      <Card className="bg-ocean border-ocean/20">
-        <CardHeader className="pb-3">
-          <CardTitle className="text-base">Quick Actions</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
-            <Link href="/dashboard/search?source=linkedin">
-              <Button variant="outline" className="w-full justify-start border-sky-500/30 hover:bg-sky-500/10 text-sky-400">
-                <Linkedin className="w-4 h-4 mr-2" /> LinkedIn Search
-              </Button>
-            </Link>
-            <Link href="/dashboard/search">
-              <Button variant="outline" className="w-full justify-start border-emerald-500/30 hover:bg-emerald-500/10 text-emerald-400">
-                <MapPin className="w-4 h-4 mr-2" /> Maps Search
-              </Button>
-            </Link>
-            <Link href="/chat">
-              <Button variant="outline" className="w-full justify-start border-ocean/20 hover:bg-steel/10">
-                <MessageSquare className="w-4 h-4 mr-2" /> AI Search
-              </Button>
-            </Link>
-            <Link href="/dashboard/verify">
-              <Button variant="outline" className="w-full justify-start border-ocean/20 hover:bg-steel/10">
-                <Mail className="w-4 h-4 mr-2" /> Verify Email
-              </Button>
-            </Link>
-            <Link href="/dashboard/research">
-              <Button variant="outline" className="w-full justify-start border-ocean/20 hover:bg-steel/10">
-                <Search className="w-4 h-4 mr-2" /> Research Co.
-              </Button>
-            </Link>
-            <Link href="/dashboard/export">
-              <Button variant="outline" className="w-full justify-start border-ocean/20 hover:bg-steel/10">
-                <Download className="w-4 h-4 mr-2" /> Export
-              </Button>
-            </Link>
-          </div>
-        </CardContent>
-      </Card>
-
-      {/* Usage Chart Placeholder */}
-      <Card className="bg-ocean border-ocean/20">
-        <CardHeader className="pb-3">
-          <div className="flex items-center justify-between">
-            <CardTitle className="text-base">Usage Over Time</CardTitle>
-            <div className="flex gap-2">
-              <Badge variant="outline" className="border-ocean/20 text-ice/60">7 days</Badge>
-              <Badge variant="outline" className="border-ocean/20 text-ice/60">30 days</Badge>
-              <Badge className="bg-steel/20 text-accent-cyan border-0">90 days</Badge>
+      {/* Iframe */}
+      <Card className="flex-1 bg-ocean border-ocean/20 overflow-hidden relative">
+        {loading && !error && (
+          <div className="absolute inset-0 flex items-center justify-center bg-navy/80 z-10">
+            <div className="flex flex-col items-center gap-3">
+              <Loader2 className="w-8 h-8 text-violet animate-spin" />
+              <p className="text-sm text-ice/60">Loading HyperAgent...</p>
             </div>
           </div>
-        </CardHeader>
-        <CardContent>
-          <div className="h-48 flex items-end gap-2">
-            {[35, 45, 30, 60, 75, 55, 80, 65, 90, 70, 85, 95].map((h, i) => (
-              <div key={i} className="flex-1 flex flex-col items-center gap-1">
-                <div
-                  className="w-full rounded-t bg-gradient-to-t from-steel to-accent-cyan opacity-80 hover:opacity-100 transition"
-                  style={{ height: `${h}%` }}
-                />
-                <span className="text-[10px] text-zinc-600">
-                  {["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"][i]}
-                </span>
+        )}
+        {error && (
+          <div className="absolute inset-0 flex items-center justify-center bg-navy/80 z-10">
+            <div className="flex flex-col items-center gap-4 text-center max-w-md">
+              <div className="bg-violet/10 rounded-full p-4">
+                <Zap className="w-10 h-10 text-violet/50" />
               </div>
-            ))}
+              <div>
+                <h3 className="text-lg font-semibold text-offwhite mb-1">HyperAgent not running</h3>
+                <p className="text-sm text-ice/50">
+                  The HyperAgent service is not available. Make sure it&apos;s running on{" "}
+                  <code className="text-violet bg-violet/10 px-1.5 py-0.5 rounded text-xs">{HYPERAGENT_URL}</code>
+                </p>
+              </div>
+              <button
+                onClick={handleRetry}
+                className="px-4 py-2 bg-violet/20 hover:bg-violet/30 text-violet rounded-lg text-sm font-medium transition-colors border border-violet/30"
+              >
+                <RefreshCw className="w-4 h-4 mr-1.5 inline" />
+                Try Again
+              </button>
+            </div>
           </div>
-        </CardContent>
+        )}
+        <iframe
+          id="hyperagent-iframe"
+          src={HYPERAGENT_URL}
+          onLoad={handleLoad}
+          onError={handleError}
+          className="w-full h-full border-0"
+          title="HyperAgent"
+          allow="clipboard-read; clipboard-write; microphone"
+        />
       </Card>
     </div>
   )

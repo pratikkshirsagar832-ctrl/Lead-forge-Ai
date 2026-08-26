@@ -1367,6 +1367,86 @@ TIER_1 = {"min_score": 25, "country": "allowed"}   # strict — best quality
 TIER_FINAL = {"min_score": 10, "country": "any"}   # last resort
 TIERS = [TIER_1, TIER_FINAL]
 
+# ── Persistent guarantee loop limits ──────────────────────────────────────
+MAX_WAVES = 5                 # hunt up to 5 waves until count is met
+WAVE_DEADLINE_SECONDS = 480   # never hunt longer than 8 minutes total
+TRIAGE_BATCH_SIZE = 20        # posts per cheap triage call
+TRIAGE_CONCURRENCY = 12
+DEEP_SCORE_CAP = 90           # max survivors sent to full GPT scoring
+
+
+async def triage_candidates_async(
+    candidates: list[dict],
+    query: str,
+    client=None,
+    concurrency: int = TRIAGE_CONCURRENCY,
+) -> list[dict]:
+    """Stage-1 CHEAP screening of EVERY parsed post (no engagement bias).
+
+    Batches of 20 posts per call ask gpt-4o-mini ONLY one question: does the
+    author show BUYING/HIRING intent for this service? Sellers, thought-
+    leadership, job-seekers and non-English posts are dropped here so the
+    expensive deep scorer only sees genuine prospects. Costs ~500 tokens per
+    batch — screening 300 posts costs less than deep-scoring 15.
+    """
+    import json as _json
+
+    if not candidates:
+        return []
+    if client is None:
+        return candidates  # no key configured → don't gate, let deep stage decide
+
+    SYSTEM = """You triage LinkedIn posts for a B2B lead-generation CRM. For each numbered post decide if the AUTHOR shows BUYING signal for the given service: they need it done, are hiring a freelancer/contractor/agency (remote/contract/part-time), ask for recommendations of providers, or describe a business problem needing this service.
+
+REJECT (do NOT keep): freelancers/agents SELLING their own services ("I offer", "available for", portfolio posts); pure content/tips/opinions/case-studies; job-seekers describing their own availability; students; non-English posts; companies hiring FULL-TIME ON-SITE employees.
+
+Keep only genuine prospective CLIENTS. Output strict JSON."""
+
+    USER_TMPL = """Service niche: {query}
+
+Posts:
+{posts}
+
+Return JSON: {{"keep": [post numbers showing buying/hiring intent]}}"""
+
+    sem = asyncio.Semaphore(concurrency)
+    batches = [candidates[i:i + TRIAGE_BATCH_SIZE] for i in range(0, len(candidates), TRIAGE_BATCH_SIZE)]
+
+    async def _triage_batch(batch_idx: int, batch: list[dict]) -> list[int]:
+        lines = []
+        for j, c in enumerate(batch):
+            head = f"{c.get('full_name','?')} | {c.get('company') or c.get('headline','')[:80]}"
+            text = (c.get('post_text') or '')[:400].replace('\n', ' ')
+            lines.append(f"{j}. [{head}] {text}")
+        prompt = USER_TMPL.format(query=query, posts="\n".join(lines))
+        async with sem:
+            try:
+                resp = await client.chat.completions.create(
+                    model="gpt-4o-mini",
+                    messages=[
+                        {"role": "system", "content": SYSTEM},
+                        {"role": "user", "content": prompt},
+                    ],
+                    temperature=0.0,
+                    max_tokens=80,
+                    response_format={"type": "json_object"},
+                )
+                data = _json.loads(resp.choices[0].message.content)
+                keep = data.get("keep", [])
+                return [int(k) for k in keep if isinstance(k, (int, float)) and 0 <= int(k) < len(batch)]
+            except Exception as e:
+                # Triage must never LOSE candidates on error → keep whole batch
+                logger.warning(f"[Triage] batch {batch_idx} failed ({str(e)[:100]}) — keeping all {len(batch)}")
+                return list(range(len(batch)))
+
+    results = await asyncio.gather(*[_triage_batch(i, b) for i, b in enumerate(batches)])
+    kept: list[dict] = []
+    for batch, keep_idx in zip(batches, results):
+        kept.extend(batch[k] for k in keep_idx)
+
+    logger.info(f"[LinkedInPipeline] Triage: {len(kept)}/{len(candidates)} posts show buying/hiring intent")
+    return kept
+
 
 def _country_ok(lead: dict, mode: str) -> bool:
     if mode == "any":
@@ -1767,21 +1847,21 @@ async def run_linkedin_pipeline_fast(
             })
             return
 
-        # ── Phase 1: build phrase pool and split into N dedicated lanes.
+        # ── Phase 1: build phrase pool (cycled across guarantee waves).
         pool = list(build_boolean_query(query))
         for variant in range(2, 9):
             pool.extend(build_boolean_query_variant(query, variant))
         n_lanes = max_results
-        lanes, reserve_pool = split_lane_phrases(pool, n_lanes)
-        n_lanes = len(lanes)
-        # Keep raw volume proportional to the ask. We AIM to OVER-deliver
-        # (user prefers extra leads), so pull enough candidates to clear
-        # ~2x the request after the strict AI gate, within TPM budget.
+        lanes_check, _ = split_lane_phrases(pool, n_lanes)
+        n_lanes = max(1, len(lanes_check))
+        # Aim to over-deliver (~2x): enough posts per lane for the triage+score
+        # pipeline to clear the request even on strict niches.
         fetch_per_lane = max(12, min(25, -(-max_results * 12 // n_lanes)))
 
         logger.info(
             f"[LinkedInPipeline:{search_id}] FAST start: {n_lanes} parallel lanes "
-            f"(~{fetch_per_lane} posts each), {len(reserve_pool)} reserve phrases"
+            f"(~{fetch_per_lane} posts each), {len(pool)}-phrase pool, "
+            f"up to {MAX_WAVES} waves / {WAVE_DEADLINE_SECONDS}s"
         )
         await _update_search(supabase, search_id, {
             "progress_percent": 8,
@@ -1816,9 +1896,10 @@ async def run_linkedin_pipeline_fast(
                     seen_post_ids.add(pid)
                 fresh.append(it)
             deduped = dedupe_post_items(fresh)
-            # Aim for ~2x delivery: pull enough candidates to survive the
-            # strict AI gate (~10% pass rate), capped for TPM safety.
-            candidates, skipped = process_items(deduped, min(max_results * 15, 120))
+            # Keep EVERY parsed post (cap 400) — Stage-1 triage screens all of
+            # them cheaply, so genuine low-engagement buyers are never lost to
+            # viral-noise ranking.
+            candidates, skipped = process_items(deduped, 400)
             # Drop authors the user already has — BEFORE scoring (saves tokens).
             candidates = [
                 c for c in candidates
@@ -1826,49 +1907,20 @@ async def run_linkedin_pipeline_fast(
             ]
             return candidates, skipped
 
-        # ── Phase 2: WAVE 1 — all N lanes simultaneously.
-        items = await _run_wave_async(lanes)
-        raw_count_total += len(items)
-        candidates, skipped = await _process_items_to_candidates(items)
-        all_skipped += skipped
-
-        # Optional profile enrichment for missing headlines (ONE batched call).
-        missing = [c for c in candidates if not (c.get("headline") or "").strip()]
-        if missing:
-            try:
-                enrich_urls = [c["linkedin_url"] for c in missing[:PROFILE_ENRICHMENT_CAP]]
-                profiles = await asyncio.to_thread(fetch_profile_details, enrich_urls, "basic")
-                by_url = {(p.get("url") or "").rstrip("/").lower(): p for p in profiles if isinstance(p, dict)}
-                for c in candidates:
-                    p = by_url.get((c.get("linkedin_url") or "").rstrip("/").lower())
-                    if not p:
-                        continue
-                    c["headline"] = (p.get("headline") or c.get("headline") or "")[:500]
-                    c["company"] = _company_from_profile(p) or c.get("company") or ""
-                    c["location"] = _location_from_profile(p) or c.get("location") or ""
-            except Exception as e:
-                logger.warning(f"[LinkedInPipeline:{search_id}] enrichment skipped: {e}")
-
-        await _update_search(supabase, search_id, {
-            "progress_percent": 35,
-            "message": f"{raw_count_total} posts found. AI qualifying {len(candidates)} candidates...",
-        })
-
-        # ── Phase 3: async AI qualification (ALL candidates concurrently).
-        scored = await qualify_leads_with_ai_async(candidates, query, openai_client)
-        # Best first, so the 2x over-deliver cap keeps the strongest leads.
-        scored.sort(key=lambda x: x.get("ai_score", 0) or 0, reverse=True)
-
-        # ── Phase 4: tiered acceptance. Deliver AT LEAST max_results
-        # (guaranteed), and keep absorbing quality leads up to 2x — user
-        # prefers EXTRA leads, never fewer than requested.
+        # ── Phases 2-6: PERSISTENT GUARANTEE LOOP ─────────────────────────
+        # Waves keep hunting (fresh angles → cheap intent-triage on EVERY
+        # post → deep scoring on survivors → tiered absorption → job-postings
+        # filler) until max_results leads are delivered or the wave/time
+        # budget is exhausted. Accepted leads ACCUMULATE across waves.
         overdeliver_cap = max_results * 2
         final_leads: list[dict] = []
         chosen_urls: set[str] = set()
+        deadline = asyncio.get_event_loop().time() + WAVE_DEADLINE_SECONDS
 
         def _absorb(leads_in: list[dict]) -> int:
+            """Accept tier-passing leads, best-scored first, into final list."""
             added = 0
-            for l in leads_in:
+            for l in sorted(leads_in, key=lambda x: x.get("ai_score", 0) or 0, reverse=True):
                 if len(final_leads) >= overdeliver_cap:
                     break
                 key = (l.get("linkedin_url") or "").split("?")[0].rstrip("/").lower()
@@ -1878,94 +1930,159 @@ async def run_linkedin_pipeline_fast(
                     added += 1
             return added
 
-        for tier_idx, tier in enumerate(TIERS, 1):
-            if len(final_leads) >= max_results:
-                break
-            got = _absorb(tier_filter(scored, lead_types, tier))
-            logger.info(f"[LinkedInPipeline:{search_id}] Tier {tier_idx}: +{got} (total {len(final_leads)}/{max_results}, cap {overdeliver_cap})")
+        # Flat cycling phrase queue — repeated phrases are safe because
+        # seen_post_ids drops already-processed posts across waves.
+        flat_pool = list(dict.fromkeys(pool))
+        flat_pos = {"i": 0}
 
-        # Sort once — highest quality always first.
-        final_leads.sort(key=lambda x: x.get("ai_score", 0), reverse=True)
+        def _next_wave_lanes(count: int, per_lane: int) -> list[list[str]]:
+            lane_list = []
+            for _ in range(count):
+                chunk = []
+                for _ in range(per_lane):
+                    chunk.append(flat_pool[flat_pos["i"] % len(flat_pool)])
+                    flat_pos["i"] += 1
+                lane_list.append(chunk)
+            return lane_list
 
-        # ── Phase 5: still short → WAVE 2 with reserve phrases (fresh angles).
-        if len(final_leads) < max_results and reserve_pool:
-            wave2_lanes, _ = split_lane_phrases(reserve_pool, min(n_lanes, max(2, max_results - len(final_leads))))
-            await _update_search(supabase, search_id, {
-                "progress_percent": 55,
-                "message": f"Wave 2: {len(wave2_lanes)} more searches for the remaining {max_results - len(final_leads)} leads...",
-            })
-            items2 = await _run_wave_async(wave2_lanes)
-            raw_count_total += len(items2)
-            candidates2, skipped2 = await _process_items_to_candidates(items2)
-            all_skipped += skipped2
-            scored2 = await qualify_leads_with_ai_async(candidates2, query, openai_client)
-            combined = scored + scored2
-            final_leads = []
-            chosen_urls = set()
-            for tier in TIERS:
-                if len(final_leads) >= max_results:
-                    break
-                _absorb(tier_filter(combined, lead_types, tier))
-            final_leads.sort(key=lambda x: x.get("ai_score", 0), reverse=True)
-
-        # ── Phase 6: STILL short + hiring wanted → job postings as filler
-        # (a live job ad is a strong buying signal; fixed high score).
-        if len(final_leads) < max_results and "hiring" in lead_types:
+        async def _run_job_filler(need: int) -> int:
+            """Hiring-intent filler from live job postings (strong buying signal)."""
+            if need <= 0 or "hiring" not in lead_types:
+                return 0
             await _update_search(supabase, search_id, {
                 "progress_percent": 70,
-                "message": "Adding hiring-intent leads from job postings...",
+                "message": f"Adding hiring-intent leads from job postings ({need} more)...",
             })
-            need = max_results - len(final_leads)
             job_queries = get_job_queries_for_niche(query)[: min(4, max(2, need))]
-            try:
-                job_lists = await asyncio.gather(*[
-                    asyncio.wait_for(
-                        asyncio.to_thread(
-                            run_job_search,
-                            query=q,
-                            location="United States",
-                            time_range="7d",
-                            max_jobs=min(need * 3, 40),
-                        ),
-                        timeout=60,
-                    )
-                    for q in job_queries
-                ])
-            except Exception as e:
-                logger.warning(f"[LinkedInPipeline:{search_id}] job filler failed: {e}")
-                job_lists = []
-            for jobs in job_lists:
-                for job in filter_jobs_by_work_type(jobs, ["Remote", "Part-time", "Contract"]):
-                    if len(final_leads) >= max_results:
-                        break
-                    company_url = (job.get("companyUrl") or "").strip()
-                    job_url = (job.get("jobUrl") or "").strip()
-                    linkedin_url = company_url or job_url
-                    key = linkedin_url.split("?")[0].rstrip("/").lower()
-                    if not linkedin_url or key in chosen_urls or key in known_urls:
-                        continue
-                    final_leads.append({
-                        "full_name": job.get("company") or "Unknown Company",
-                        "headline": f"{job.get('title', '')} at {job.get('company', '')}",
-                        "company": job.get("company", ""),
-                        "location": job.get("location", ""),
-                        "linkedin_url": linkedin_url,
-                        "post_url": job_url,
-                        "post_text": (job.get("descriptionText") or "")[:3000],
-                        "posted_at": _parse_posted_at(job.get("postedAt")),
-                        "engagement_likes": 0,
-                        "engagement_comments": 0,
-                        "profile_picture_url": job.get("companyLogo", ""),
-                        "connections_count": 0,
-                        "ai_qualified": True,
-                        "ai_score": 75,
-                        "lead_type": "hiring",
-                        "work_type": "contract",
-                        "ai_reason": "Active LinkedIn job posting (remote/contract/part-time)",
-                        "outreach_angle": "",
-                        "country_code": "",
-                    })
-                    chosen_urls.add(key)
+            added = 0
+            for location in ("United States", "Remote"):
+                if added >= need:
+                    break
+                try:
+                    job_lists = await asyncio.gather(*[
+                        asyncio.wait_for(
+                            asyncio.to_thread(
+                                run_job_search,
+                                query=q,
+                                location=location,
+                                time_range="7d",
+                                max_jobs=min(need * 3, 40),
+                            ),
+                            timeout=60,
+                        )
+                        for q in job_queries
+                    ])
+                except Exception as e:
+                    logger.warning(f"[LinkedInPipeline:{search_id}] job filler ({location}) failed: {e}")
+                    continue
+                for jobs in job_lists:
+                    filtered = filter_jobs_by_work_type(jobs, ["Remote", "Part-time", "Contract"])
+                    logger.info(f"[LinkedInPipeline:{search_id}] job filler ({location}): {len(filtered)} remote/contract jobs")
+                    for job in filtered:
+                        if len(final_leads) >= overdeliver_cap or added >= need:
+                            break
+                        company_url = (job.get("companyUrl") or "").strip()
+                        job_url = (job.get("jobUrl") or "").strip()
+                        linkedin_url = company_url or job_url
+                        key = linkedin_url.split("?")[0].rstrip("/").lower()
+                        if not linkedin_url or key in chosen_urls or key in known_urls:
+                            continue
+                        final_leads.append({
+                            "full_name": job.get("company") or "Unknown Company",
+                            "headline": f"{job.get('title', '')} at {job.get('company', '')}",
+                            "company": job.get("company", ""),
+                            "location": job.get("location", ""),
+                            "linkedin_url": linkedin_url,
+                            "post_url": job_url,
+                            "post_text": (job.get("descriptionText") or "")[:3000],
+                            "posted_at": _parse_posted_at(job.get("postedAt")),
+                            "engagement_likes": 0,
+                            "engagement_comments": 0,
+                            "profile_picture_url": job.get("companyLogo", ""),
+                            "connections_count": 0,
+                            "ai_qualified": True,
+                            "ai_score": 75,
+                            "lead_type": "hiring",
+                            "work_type": "contract",
+                            "ai_reason": "Active LinkedIn job posting (remote/contract/part-time)",
+                            "outreach_angle": "",
+                            "country_code": "",
+                        })
+                        chosen_urls.add(key)
+                        added += 1
+            return added
+
+        async def _hunt_wave(wave_no: int, lane_list: list[list[str]]) -> None:
+            nonlocal raw_count_total, all_skipped
+            remaining = max_results - len(final_leads)
+            await _update_search(supabase, search_id, {
+                "progress_percent": min(25 + wave_no * 13, 82),
+                "message": f"Wave {wave_no}: hunting {remaining} more leads with {len(lane_list)} parallel searches...",
+            })
+
+            items = await _run_wave_async(lane_list)
+            raw_count_total += len(items)
+            candidates_w, skipped_w = await _process_items_to_candidates(items)
+            all_skipped += skipped_w
+            if not candidates_w:
+                logger.info(f"[LinkedInPipeline:{search_id}] Wave {wave_no}: no fresh candidates")
+                return
+
+            # STAGE 1 — cheap buying-intent triage over EVERY parsed post.
+            promising = await triage_candidates_async(candidates_w, query, openai_client)
+
+            # Enrich ONLY triage survivors missing a headline (Apify cost control).
+            missing = [c for c in promising if not (c.get("headline") or "").strip()]
+            if missing:
+                try:
+                    enrich_urls = [c["linkedin_url"] for c in missing[:PROFILE_ENRICHMENT_CAP]]
+                    profiles = await asyncio.to_thread(fetch_profile_details, enrich_urls, "basic")
+                    by_url = {(p.get("url") or "").rstrip("/").lower(): p for p in profiles if isinstance(p, dict)}
+                    for c in promising:
+                        p = by_url.get((c.get("linkedin_url") or "").rstrip("/").lower())
+                        if not p:
+                            continue
+                        c["headline"] = (p.get("headline") or c.get("headline") or "")[:500]
+                        c["company"] = _company_from_profile(p) or c.get("company") or ""
+                        c["location"] = _location_from_profile(p) or c.get("location") or ""
+                except Exception as e:
+                    logger.warning(f"[LinkedInPipeline:{search_id}] enrichment skipped: {e}")
+
+            await _update_search(supabase, search_id, {
+                "progress_percent": min(30 + wave_no * 13, 84),
+                "message": f"Wave {wave_no}: {len(promising)} prospects found. AI scoring...",
+            })
+
+            # STAGE 2 — full semantic scoring on the best survivors only.
+            survivors = promising[:DEEP_SCORE_CAP]
+            scored_w = await qualify_leads_with_ai_async(survivors, query, openai_client)
+
+            for tier_idx, tier in enumerate(TIERS, 1):
+                if len(final_leads) >= max_results:
+                    break
+                got = _absorb(tier_filter(scored_w, lead_types, tier))
+                logger.info(
+                    f"[LinkedInPipeline:{search_id}] Wave {wave_no} Tier {tier_idx}: "
+                    f"+{got} (total {len(final_leads)}/{max_results}, cap {overdeliver_cap})"
+                )
+
+            # Mid-loop filler: top up with job postings while still short.
+            if len(final_leads) < max_results:
+                added = await _run_job_filler(max_results - len(final_leads))
+                if added:
+                    logger.info(f"[LinkedInPipeline:{search_id}] Wave {wave_no} job filler: +{added}")
+
+        wave_no = 0
+        while len(final_leads) < max_results and wave_no < MAX_WAVES:
+            if asyncio.get_event_loop().time() > deadline:
+                logger.warning(f"[LinkedInPipeline:{search_id}] Wave deadline reached after {wave_no} waves")
+                break
+            wave_no += 1
+            await _hunt_wave(wave_no, _next_wave_lanes(n_lanes, fetch_per_lane))
+
+        # Final safety net: one last filler pass if somehow still short.
+        if len(final_leads) < max_results:
+            await _run_job_filler(max_results - len(final_leads))
 
         final_leads = final_leads[:overdeliver_cap]
 

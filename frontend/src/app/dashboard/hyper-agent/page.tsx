@@ -2,7 +2,7 @@
 
 import { useState } from "react"
 import { Card } from "@/components/ui/card"
-import { Zap, Loader2, ExternalLink, RefreshCw } from "lucide-react"
+import { Zap, Loader2, RefreshCw } from "lucide-react"
 
 const HYPERAGENT_URL = "/hyperagent/"
 
@@ -50,15 +50,6 @@ export default function HyperAgentPage() {
             <RefreshCw className="w-3.5 h-3.5" />
             Refresh
           </button>
-          <a
-            href={HYPERAGENT_URL}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium text-ice/60 hover:text-offwhite hover:bg-ocean/30 border border-steel/20 transition-colors"
-          >
-            <ExternalLink className="w-3.5 h-3.5" />
-            Open Full Screen
-          </a>
         </div>
       </div>
 

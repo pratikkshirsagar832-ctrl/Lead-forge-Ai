@@ -88,6 +88,16 @@ export function useLeads() {
     try {
       setIsExporting(true);
       setError(null);
+
+      // Plan gate — CSV export is Pro/Agency only (backend enforces too).
+      const { data: me } = await api.get('/api/auth/me');
+      const planId = me?.subscription?.plan_id || 'free';
+      if (!['pro', 'agency'].includes(planId)) {
+        showToast('CSV export is available on Pro & Agency plans', 'error');
+        setIsExporting(false);
+        return;
+      }
+
       const params = new URLSearchParams();
       if (filters.search) params.append('search', filters.search);
       if (filters.searchId) params.append('search_id', filters.searchId);
@@ -110,8 +120,21 @@ export function useLeads() {
       window.URL.revokeObjectURL(url);
       document.body.removeChild(a);
       showToast('Export successful', 'success');
-    } catch (error) {
-      const msg = 'Failed to export CSV';
+    } catch (error: any) {
+      const detail = error?.response?.data;
+      let msg = 'Failed to export CSV';
+      if (detail instanceof Blob) {
+        // blob response type — read the JSON error inside
+        try {
+          const text = await detail.text();
+          const parsed = JSON.parse(text);
+          msg = parsed?.detail?.message || parsed?.detail || msg;
+        } catch { /* keep default */ }
+      } else if (typeof detail === 'object' && detail?.message) {
+        msg = detail.message;
+      } else if (typeof detail === 'string') {
+        msg = detail;
+      }
       setError(msg);
       showToast(msg, 'error');
     } finally {

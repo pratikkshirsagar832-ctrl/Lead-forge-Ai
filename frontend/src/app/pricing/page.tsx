@@ -22,19 +22,19 @@ const plans = [
   {
     id: 'solo', name: 'Solo', price: 19, currency: '$', period: '/mo',
     linkedinLeads: '20', gmbLeads: '200', trial: null,
-    features: ['5 searches', 'Up to 50 leads', 'Leads management', 'Website analysis', 'AI pitch generation'],
+    features: ['5 searches', 'Leads management', 'Website analysis', 'AI pitch generation'],
     icon: Star, color: 'text-sky-400', popular: false,
   },
   {
     id: 'pro', name: 'Pro', price: 99, currency: '$', period: '/mo',
-    linkedinLeads: '120', gmbLeads: '1500', trial: null,
-    features: ['15 searches', 'Up to 150 leads', 'Leads management', 'CSV export', 'Priority support', 'Everything in Solo', 'Advanced analytics'],
+    linkedinLeads: '120', gmbLeads: '1500', trial: null, seats: '2 team seats included',
+    features: ['15 searches', 'Leads management', 'CSV export', 'Priority support', 'Everything in Solo', 'Advanced analytics'],
     icon: Star, color: 'text-violet', popular: true,
   },
   {
     id: 'agency', name: 'Agency', price: 299, currency: '$', period: '/mo',
-    linkedinLeads: '400', gmbLeads: '6000', trial: null,
-    features: ['50 searches', 'Up to 500 leads', 'Leads management', 'CSV export', 'Team access', 'Everything in Pro', 'API access', 'Dedicated support'],
+    linkedinLeads: '400', gmbLeads: '6000', trial: null, seats: '10 team seats included',
+    features: ['50 searches', 'Leads management', 'CSV export', 'Team access', 'Everything in Pro', 'API access', 'Dedicated support'],
     icon: Building2, color: 'text-amber-400',
   },
 ];
@@ -123,6 +123,7 @@ export default function PricingPage() {
                       {plan.price > 0 && <span className="text-sm text-ice/40">{plan.period}</span>}
                     </div>
                     {plan.trial && <p className="text-xs text-ice/40 mt-1">{plan.trial}</p>}
+                    {!plan.trial && plan.seats && <p className="text-xs text-steel font-semibold mt-1">{plan.seats}</p>}
                   </div>
 
                   <div className="flex flex-col gap-2 mb-6 p-3 rounded-lg bg-ocean/20">

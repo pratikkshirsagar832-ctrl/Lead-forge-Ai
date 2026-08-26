@@ -121,6 +121,20 @@ async def list_leads(
 
 
 EXPORT_MAX_ROWS = 10000
+CSV_EXPORT_PLANS = {"pro", "agency"}
+
+
+def _get_plan_id(supabase, user_id: str) -> str:
+    resp = supabase.table("user_subscriptions") \
+        .select("plan_id") \
+        .eq("user_id", user_id) \
+        .order("created_at", desc=True) \
+        .limit(1) \
+        .execute()
+    if resp.data and len(resp.data) > 0:
+        return resp.data[0].get("plan_id", "free")
+    return "free"
+
 
 @router.get("/export")
 async def export_leads_csv(
@@ -133,9 +147,16 @@ async def export_leads_csv(
     search: Optional[str] = Query(None),
     current_user: dict = Depends(get_current_user),
 ):
-    """Export leads as a CSV file (max 10,000 rows)."""
+    """Export leads as a CSV file (max 10,000 rows). Pro & Agency plans only."""
     supabase = get_supabase_admin()
     user_id = current_user["id"]
+
+    plan_id = _get_plan_id(supabase, user_id)
+    if plan_id not in CSV_EXPORT_PLANS:
+        raise HTTPException(status_code=403, detail={
+            "message": "CSV export is available on Pro and Agency plans",
+            "upgrade_url": "/pricing",
+        })
 
     try:
         query = supabase.table("leads").select("*").eq("user_id", user_id)

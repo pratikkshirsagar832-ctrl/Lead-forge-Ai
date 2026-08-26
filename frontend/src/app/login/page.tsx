@@ -7,7 +7,8 @@ import { useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import Image from 'next/image';
 import { supabase } from '@/lib/supabase';
-import { Mail, Lock, Eye, EyeOff, Loader2, WifiOff } from 'lucide-react';
+import api from '@/lib/api';
+import { Mail, Lock, Eye, EyeOff, Loader2, WifiOff, User } from 'lucide-react';
 import { GlassCard } from '@/components/shared/GlassCard';
 import { LoadingButton } from '@/components/shared/LoadingButton';
 import { Footer } from '@/components/landing/Footer';
@@ -57,8 +58,16 @@ function LoginContent() {
         return;
       }
 
+      // Team members log in with a USERNAME (no email). Resolve it to the
+      // underlying account email first, then sign in with the password.
+      let loginEmail = email;
+      if (!email.includes('@')) {
+        const { data: resolved } = await api.post('/api/auth/team-resolve', { username: email.trim().toLowerCase() });
+        loginEmail = resolved.email;
+      }
+
       const { data, error: signInError } = await supabase.auth.signInWithPassword({
-        email,
+        email: loginEmail,
         password,
       });
       if (signInError) throw signInError;
@@ -123,14 +132,18 @@ function LoginContent() {
 
         <form onSubmit={handleEmailAuth} className="space-y-4">
           <div>
-            <label className="block text-xs font-semibold uppercase tracking-wider text-ice/60 mb-1.5">Email</label>
+            <label className="block text-xs font-semibold uppercase tracking-wider text-ice/60 mb-1.5">
+              {mode === 'login' ? 'Username or Email' : 'Email'}
+            </label>
             <div className="relative">
-              <Mail className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-ice/40" />
+              {mode === 'login'
+                ? <User className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-ice/40" />
+                : <Mail className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-ice/40" />}
               <input
-                type="email"
+                type={mode === 'login' ? 'text' : 'email'}
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
-                placeholder="you@example.com"
+                placeholder={mode === 'login' ? 'username or you@example.com' : 'you@example.com'}
                 required
                 className="w-full pl-10 pr-4 py-2.5 rounded-lg bg-ocean/20 border border-ocean/40 text-ice placeholder-ice/30 text-sm focus:outline-none focus:border-steel focus:ring-1 focus:ring-steel/50 transition-all"
               />

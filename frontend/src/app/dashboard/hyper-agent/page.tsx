@@ -4,7 +4,7 @@ import { useState } from "react"
 import { Card } from "@/components/ui/card"
 import { Zap, Loader2, RefreshCw } from "lucide-react"
 
-const HYPERAGENT_URL = "/hyperagent/"
+const HYPERAGENT_URL = "/canvas/"
 
 export default function HyperAgentPage() {
   const [loading, setLoading] = useState(true)

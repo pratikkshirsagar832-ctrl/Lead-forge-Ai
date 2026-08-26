@@ -47,3 +47,13 @@ linkedin-mcp-server/
 # KeeLead source (code copied to frontend)
 /keelead
 
+# HyperAgent (OpenHands rebrand — separate project, deploy independently)
+OpenHands-main/
+
+# Misc untracked
+API'S.txt
+New-assets/
+pratik-kshirsagar.png
+publisher.png
+test_search.py
+

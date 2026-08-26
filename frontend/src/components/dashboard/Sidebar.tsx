@@ -34,6 +34,7 @@ const navItems = [
   { name: 'Leads', href: '/dashboard/leads', icon: Users },
   { name: 'Lead Manager', href: '/dashboard/pipeline', icon: Kanban },
   { name: 'Team', href: '/dashboard/team', icon: UsersRound },
+  { name: 'Hyper Agent', href: process.env.NEXT_PUBLIC_HYPERAGENT_URL || 'http://localhost:8000', icon: Zap, external: true },
   { name: 'History', href: '/dashboard/history', icon: History },
   { name: 'Export', href: '/dashboard/export', icon: Download },
   { name: 'Billing', href: '/dashboard/billing', icon: CreditCard },
@@ -105,7 +106,24 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
 
         <nav className="flex-1 px-3 py-2 space-y-0.5 overflow-y-auto">
           {navItems.map((item, idx) => {
-            const isActive = pathname === item.href || (item.href !== '/dashboard' && pathname.startsWith(item.href));
+            const isActive = !item.external && (pathname === item.href || (item.href !== '/dashboard' && pathname.startsWith(item.href)));
+            const isExternal = 'external' in item && item.external;
+            if (isExternal) {
+              return (
+                <a
+                  key={item.name}
+                  href={item.href}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  onClick={onClose}
+                  className="flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition-all duration-200 group relative overflow-hidden text-ice/50 hover:text-offwhite hover:bg-ocean/30 hover:border-steel/10 border border-transparent"
+                >
+                  <item.icon className="w-4.5 h-4.5 shrink-0 text-ice/40 group-hover:text-ice/70" />
+                  {item.name}
+                  <ArrowUpRight className="w-3 h-3 ml-auto text-ice/30 group-hover:text-ice/50" />
+                </a>
+              );
+            }
             return (
               <Link
                 key={item.name}

@@ -180,25 +180,18 @@ async def _run_maps_search(
 async def _save_maps_leads(
     supabase, search_id: str, user_id: str, raw_results: list[dict]
 ) -> tuple[list[str], bool]:
-    # Check remaining leads limit before saving
+    # Check remaining leads limit before saving (team-aware)
     remaining_leads = 30  # default fallback
     try:
-        rem_resp = await asyncio.to_thread(
-            lambda: supabase.rpc("get_remaining_leads", {"p_user_id": user_id}).execute()
-        )
-        if rem_resp and rem_resp.data is not None:
-            remaining_leads = rem_resp.data
+        from app.services.plans import remaining_leads_today
+        remaining_leads = await asyncio.to_thread(remaining_leads_today, supabase, user_id)
     except Exception:
-        # Try direct query as fallback
         try:
-            sub_resp = supabase.table("user_subscriptions").select("plan_id").eq("user_id", user_id).order("created_at", desc=True).limit(1).execute()
-            if sub_resp.data and len(sub_resp.data) > 0:
-                plan_resp = supabase.table("plans").select("leads_per_day").eq("id", sub_resp.data[0].get("plan_id", "free")).execute()
-                if plan_resp.data and len(plan_resp.data) > 0:
-                    remaining_leads = plan_resp.data[0].get("leads_per_day", 30)
-            usage_resp = supabase.table("daily_usage").select("leads_generated").eq("user_id", user_id).eq("date", date.today().isoformat()).execute()
-            if usage_resp.data and len(usage_resp.data) > 0:
-                remaining_leads = max(0, remaining_leads - (usage_resp.data[0].get("leads_generated", 0) or 0))
+            rem_resp = await asyncio.to_thread(
+                lambda: supabase.rpc("get_remaining_leads", {"p_user_id": user_id}).execute()
+            )
+            if rem_resp.data is not None:
+                remaining_leads = rem_resp.data
         except Exception:
             pass
 

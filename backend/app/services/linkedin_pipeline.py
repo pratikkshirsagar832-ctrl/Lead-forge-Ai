@@ -1260,15 +1260,12 @@ async def _save_leads(supabase, search_id: str, user_id: str, leads: list[dict])
 
 
 async def _get_remaining_leads(supabase, user_id: str) -> int:
+    from app.services.plans import remaining_leads_today
     try:
-        resp = await asyncio.to_thread(
-            lambda: supabase.rpc("get_remaining_leads", {"p_user_id": user_id}).execute()
-        )
-        if resp and resp.data is not None:
-            return int(resp.data)
-    except Exception:
-        pass
-    return 50
+        return await asyncio.to_thread(remaining_leads_today, supabase, user_id)
+    except Exception as e:
+        logger.warning(f"[LinkedInPipeline] remaining-leads calc failed, defaulting: {e}")
+        return 50
 
 
 async def _enrich_emails(

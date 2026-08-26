@@ -1,14 +1,16 @@
 import logging
-from datetime import date, datetime, timezone
 
 from fastapi import Depends, HTTPException, status
 
 from app.database import get_supabase_admin
 from app.middleware.auth_middleware import get_current_user
+from app.services.plans import (
+    get_plan_row,
+    get_used_today,
+    resolve_effective_subscription,
+)
 
 logger = logging.getLogger(__name__)
-
-VALID_STATUSES = ('active', 'trial')
 
 
 async def check_search_limit(current_user: dict = Depends(get_current_user)) -> dict:
@@ -16,47 +18,36 @@ async def check_search_limit(current_user: dict = Depends(get_current_user)) -> 
     user_id = current_user["id"]
 
     try:
-        plan_max = 3
-        plan_name = "Free"
+        eff = resolve_effective_subscription(supabase, user_id)
+        plan_id = eff["plan_id"]
 
-        sub_resp = supabase.table("user_subscriptions").select("plan_id, status, trial_end").eq("user_id", user_id).order("created_at", desc=True).limit(1).execute()
-        if sub_resp.data and len(sub_resp.data) > 0:
-            sub = sub_resp.data[0]
-            sub_status = sub.get("status", "")
+        if eff["status"] not in ("active", "trial"):
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail={
+                    "message": "Subscription is not active",
+                    "remaining_searches": 0,
+                    "plan": plan_id,
+                    "upgrade_url": "/pricing",
+                },
+            )
 
-            if sub_status not in VALID_STATUSES:
-                raise HTTPException(
-                    status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-                    detail={
-                        "message": "Subscription is not active",
-                        "remaining_searches": 0,
-                        "plan": plan_name,
-                        "upgrade_url": "/pricing",
-                    },
-                )
+        # Trial expiry only applies to free-plan trials (never team members).
+        if eff["status"] == "trial" and plan_id == "free":
+            row = None
+            from app.services.plans import get_latest_subscription_row
+            row = get_latest_subscription_row(supabase, user_id)
+            trial_end = (row or {}).get("trial_end")
+            if trial_end:
+                from datetime import datetime, timezone
+                trial_end_naive = datetime.fromisoformat(trial_end.replace('Z', '+00:00')).replace(tzinfo=None)
+                if trial_end_naive < datetime.now(timezone.utc).replace(tzinfo=None):
+                    plan_id = "free"
+                    eff = {**eff, "plan_id": "free", "status": "inactive"}
 
-            # Get plan limits FIRST
-            plan_id = sub.get("plan_id", "free")
-            plan_resp = supabase.table("plans").select("searches_per_day, name").eq("id", plan_id).execute()
-            if plan_resp.data and len(plan_resp.data) > 0:
-                plan_max = plan_resp.data[0].get("searches_per_day", 3)
-                plan_name = plan_resp.data[0].get("name", "Free")
-
-            # THEN check trial expiry (only applies to free plan)
-            if sub_status == "trial" or plan_id == "free":
-                trial_end = sub.get("trial_end")
-                if trial_end:
-                    trial_end_naive = datetime.fromisoformat(trial_end.replace('Z', '+00:00')).replace(tzinfo=None)
-                    if trial_end_naive < datetime.now(timezone.utc).replace(tzinfo=None):
-                        plan_max = 0
-        else:
-            plan_max = 3
-
-        today = date.today().isoformat()
-        usage_resp = supabase.table("daily_usage").select("searches_run").eq("user_id", user_id).eq("date", today).execute()
-        used_today = 0
-        if usage_resp.data and len(usage_resp.data) > 0:
-            used_today = usage_resp.data[0].get("searches_run", 0) or 0
+        plan = get_plan_row(supabase, plan_id)
+        plan_max = plan.get("searches_per_day", 3)
+        used_today, _ = get_used_today(supabase, user_id)
 
         remaining = max(0, plan_max - used_today)
 
@@ -66,7 +57,7 @@ async def check_search_limit(current_user: dict = Depends(get_current_user)) -> 
                 detail={
                     "message": "Daily search limit reached",
                     "remaining_searches": 0,
-                    "plan": plan_name,
+                    "plan": plan.get("name", plan_id),
                     "upgrade_url": "/pricing",
                 },
             )

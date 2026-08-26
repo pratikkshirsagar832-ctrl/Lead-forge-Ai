@@ -20,15 +20,9 @@ USERNAME_RE = re.compile(r"^[a-z0-9_]{3,20}$")
 
 
 def _get_owner_plan(supabase, user_id: str) -> tuple[str, str]:
-    resp = supabase.table("user_subscriptions") \
-        .select("plan_id, status") \
-        .eq("user_id", user_id) \
-        .order("created_at", desc=True) \
-        .limit(1) \
-        .execute()
-    if resp.data and len(resp.data) > 0:
-        return resp.data[0].get("plan_id", "free"), resp.data[0].get("status", "trial")
-    return "free", "trial"
+    from app.services.plans import resolve_effective_subscription
+    eff = resolve_effective_subscription(supabase, user_id)
+    return eff["plan_id"], eff["status"]
 
 
 @router.get("/team")
@@ -220,45 +214,50 @@ async def get_me(current_user: dict = Depends(get_current_user)):
             subscription["remaining_searches"] = max(0, searches_per_day - used_searches)
             subscription["remaining_leads"] = max(0, leads_per_day - used_leads)
 
-        # Direct-table truth check: team-member accounts mirror the owner's
-        # plan in user_subscriptions, but the RPC may not resolve them.
-        # An ACTIVE unexpired row always wins.
+        # Direct-table truth check: team members resolve their plan LIVE
+        # from the owner's subscription (upgrades/renewals propagate instantly).
         try:
-            tbl = supabase.table("user_subscriptions") \
-                .select("plan_id, status, current_period_start, current_period_end, trial_end") \
-                .eq("user_id", current_user["id"]) \
-                .order("created_at", desc=True) \
-                .limit(1) \
-                .execute()
-            if tbl.data and len(tbl.data) > 0:
-                row = tbl.data[0]
-                pe = row.get("current_period_end")
-                not_expired = True
-                if pe:
-                    try:
-                        not_expired = datetime.fromisoformat(str(pe).replace("Z", "+00:00")) > datetime.now(timezone.utc)
-                    except ValueError:
-                        not_expired = True
-                if row.get("status") == "active" and not_expired \
-                        and (not subscription or subscription.get("plan_id") != row.get("plan_id")):
-                    plan_resp = supabase.table("plans") \
-                        .select("*").eq("id", row["plan_id"]).limit(1).execute()
-                    plan = plan_resp.data[0] if plan_resp.data else {}
+            from app.services.plans import get_plan_row, resolve_effective_subscription, get_used_today
+            eff = resolve_effective_subscription(supabase, current_user["id"])
+
+            if eff["status"] not in ("active", "trial"):
+                # Owner lapsed/downgraded below seats → lock the seat down.
+                if eff.get("team_owner_id") and (
+                    not subscription or subscription.get("plan_id") != "free"
+                ):
                     subscription = {
-                        "plan_id": row["plan_id"],
-                        "plan_name": plan.get("name", row["plan_id"]),
-                        "status": "active",
-                        "searches_per_day": plan.get("searches_per_day", 3),
-                        "leads_per_day": plan.get("leads_per_day", 30),
-                        "remaining_searches": max(0, plan.get("searches_per_day", 3) - used_searches),
-                        "remaining_leads": max(0, plan.get("leads_per_day", 30) - used_leads),
-                        "current_period_start": row.get("current_period_start"),
-                        "current_period_end": row.get("current_period_end"),
-                        "trial_end": row.get("trial_end"),
-                        "is_trial_expired": False,
+                        "plan_id": "free",
+                        "plan_name": "Free",
+                        "status": "inactive",
+                        "searches_per_day": 0,
+                        "leads_per_day": 0,
+                        "remaining_searches": 0,
+                        "remaining_leads": 0,
+                        "current_period_start": None,
+                        "current_period_end": None,
+                        "trial_end": None,
+                        "is_trial_expired": True,
+                        "is_team_seat": True,
                     }
+            elif not subscription or subscription.get("plan_id") != eff["plan_id"]:
+                plan = get_plan_row(supabase, eff["plan_id"])
+                used_s, used_l = get_used_today(supabase, current_user["id"])
+                subscription = {
+                    "plan_id": eff["plan_id"],
+                    "plan_name": plan.get("name", eff["plan_id"]),
+                    "status": "active",
+                    "searches_per_day": plan.get("searches_per_day", 3),
+                    "leads_per_day": plan.get("leads_per_day", 30),
+                    "remaining_searches": max(0, plan.get("searches_per_day", 3) - used_s),
+                    "remaining_leads": max(0, plan.get("leads_per_day", 30) - used_l),
+                    "current_period_start": None,
+                    "current_period_end": (eff.get("source_row") or {}).get("current_period_end"),
+                    "trial_end": None,
+                    "is_trial_expired": False,
+                    "is_team_seat": eff.get("team_owner_id") is not None,
+                }
         except Exception as tbl_err:
-            logger.warning(f"Direct subscription check failed: {tbl_err}")
+            logger.warning(f"Effective-plan resolution failed: {tbl_err}")
     except Exception as e:
         logger.warning(f"RPC get_user_subscription failed: {e}")
 

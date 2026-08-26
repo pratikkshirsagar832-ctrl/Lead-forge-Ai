@@ -4,7 +4,7 @@ import { useState } from "react"
 import { Card } from "@/components/ui/card"
 import { Zap, Loader2, ExternalLink, RefreshCw } from "lucide-react"
 
-const HYPERAGENT_URL = process.env.NEXT_PUBLIC_HYPERAGENT_URL || "http://localhost:8000"
+const HYPERAGENT_URL = "/hyperagent/"
 
 export default function HyperAgentPage() {
   const [loading, setLoading] = useState(true)

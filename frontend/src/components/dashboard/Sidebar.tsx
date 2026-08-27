@@ -34,7 +34,7 @@ const navItems = [
   { name: 'Leads', href: '/dashboard/leads', icon: Users },
   { name: 'Lead Manager', href: '/dashboard/pipeline', icon: Kanban },
   { name: 'Team', href: '/dashboard/team', icon: UsersRound },
-  { name: 'Hyper Agent', href: '/dashboard/hyper-agent', icon: Zap },
+  { name: 'Hyper Agent', href: '/dashboard/hyper-agent/chat', icon: Zap },
   { name: 'History', href: '/dashboard/history', icon: History },
   { name: 'Export', href: '/dashboard/export', icon: Download },
   { name: 'Billing', href: '/dashboard/billing', icon: CreditCard },

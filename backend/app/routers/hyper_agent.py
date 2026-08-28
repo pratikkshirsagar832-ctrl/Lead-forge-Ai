@@ -12,14 +12,14 @@ Endpoints:
 import logging
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 
 from app.middleware.auth_middleware import get_current_user
 from app.middleware.usage_middleware import check_search_limit
 from app.services.hyper_agent import HyperAgentService
 from app.database import get_supabase_admin
-from app.services.plans import resolve_effective_subscription, get_plan_row
+from app.services.plans import resolve_effective_subscription, get_plan_row, get_used_today
 from app.services.apify_service import ApifyError
 
 logger = logging.getLogger(__name__)
@@ -46,11 +46,70 @@ class ScrapeRequest(BaseModel):
 
 
 class ScrapeResponse(BaseModel):
-    leads: list[dict]
-    total: int
-    qualified: int
     search_id: str
+    status: str
     message: str
+
+
+def run_hyper_agent_job(search_id: str, user_id: str, context: dict) -> None:
+    """Background job: scrape LinkedIn → AI qualify → save leads → update search."""
+    supabase = get_supabase_admin()
+
+    def _mark(status_val: str, message: str, extra: dict | None = None) -> None:
+        try:
+            payload = {"status": status_val, "message": message}
+            if extra:
+                payload.update(extra)
+            supabase.table("searches").update(payload).eq("id", search_id).execute()
+        except Exception as e:
+            logger.warning(f"[HyperAgent] Status update failed: {e}")
+
+    try:
+        _mark("scraping", f"Searching for {context.get('niche', '')} in {context.get('location', '')}")
+
+        service = HyperAgentService()
+
+        # Scrape LinkedIn
+        raw_items = service.scrape_leads(context)
+        logger.info(f"[HyperAgent] Scraped {len(raw_items)} raw items")
+
+        if not raw_items:
+            _mark("failed", "No results found on LinkedIn for this search")
+            return
+
+        # Qualify with AI
+        _mark("qualifying", "Analyzing and scoring leads with AI")
+        qualified = service.qualify_leads(raw_items, context)
+        logger.info(f"[HyperAgent] Qualified {len(qualified)} leads")
+
+        # Save to database
+        saved = service.save_leads(qualified, user_id, search_id)
+
+        # Update search record
+        _mark("completed", f"Found {len(qualified)} high-quality leads from {len(raw_items)} results", {
+            "total_results": saved,
+            "hot_leads": len([l for l in qualified if l.get("score", 0) >= 75]),
+            "warm_leads": len([l for l in qualified if 40 <= l.get("score", 0) < 75]),
+            "skipped": max(0, len(raw_items) - saved),
+            "completed_at": datetime.now(timezone.utc).isoformat(),
+        })
+
+        # Update daily usage (DB trigger already counts leads_generated, so only increment searches)
+        try:
+            supabase.rpc("increment_daily_usage", {
+                "p_user_id": user_id,
+                "p_leads": 0,
+                "p_searches": 1,
+            }).execute()
+        except Exception as e:
+            logger.warning(f"[HyperAgent] Usage increment failed: {e}")
+
+    except ApifyError as e:
+        logger.error(f"[HyperAgent] Apify error: {e}")
+        _mark("failed", f"LinkedIn scraping failed: {str(e)}")
+    except Exception as e:
+        logger.error(f"[HyperAgent] Scrape error: {e}", exc_info=True)
+        _mark("failed", f"Search failed: {str(e)}")
 
 
 def _check_plan_access(current_user: dict) -> dict:
@@ -102,9 +161,14 @@ async def hyper_agent_chat(
 @router.post("/scrape", response_model=ScrapeResponse)
 async def hyper_agent_scrape(
     request: ScrapeRequest,
+    background_tasks: BackgroundTasks,
     current_user: dict = Depends(get_current_user),
 ):
-    """Execute LinkedIn scrape with confirmed ICP context."""
+    """Queue a LinkedIn scrape job — returns immediately with a search_id.
+
+    The actual scrape runs in the background. Frontend polls
+    GET /api/hyper-agent/results/{search_id} for status and leads.
+    """
     # Plan check
     _check_plan_access(current_user)
 
@@ -116,10 +180,24 @@ async def hyper_agent_scrape(
         )
 
     supabase = get_supabase_admin()
-    search_id = None
 
     try:
-        service = HyperAgentService()
+        # Daily limit pre-check: fail fast before spending Apify/OpenAI credits
+        eff = resolve_effective_subscription(supabase, current_user["id"])
+        plan = get_plan_row(supabase, eff.get("plan_id", "free"))
+        used_searches, used_leads = get_used_today(supabase, current_user["id"])
+        search_limit = plan.get("searches_per_day", 3) or 3
+        lead_limit = plan.get("leads_per_day", 30) or 30
+        if used_searches >= search_limit:
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail=f"Daily search limit reached ({search_limit}/day). Upgrade your plan for more.",
+            )
+        if used_leads >= lead_limit:
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail=f"Daily lead limit reached ({lead_limit}/day). Upgrade your plan for more.",
+            )
 
         # Create search record
         search_result = supabase.table("searches").insert({
@@ -127,80 +205,32 @@ async def hyper_agent_scrape(
             "niche": f"HyperAgent: {context.get('niche', '')}",
             "location": context.get("location", ""),
             "source": "hyper_agent",
-            "status": "scraping",
+            "status": "queued",
             "message": f"Searching for {context.get('niche', '')} in {context.get('location', '')}",
             "max_results": min(context.get("count", 20), 50),
         }).execute()
 
         search_id = search_result.data[0]["id"]
 
-        # Scrape LinkedIn
-        raw_items = service.scrape_leads(context)
-        logger.info(f"[HyperAgent] Scraped {len(raw_items)} raw items")
-
-        # Qualify with AI
-        qualified = service.qualify_leads(raw_items, context)
-        logger.info(f"[HyperAgent] Qualified {len(qualified)} leads")
-
-        # Save to database
-        saved = service.save_leads(qualified, current_user["id"], search_id)
-
-        # Update search record
-        supabase.table("searches").update({
-            "status": "completed",
-            "total_results": saved,
-            "hot_leads": len([l for l in qualified if l.get("score", 0) >= 75]),
-            "warm_leads": len([l for l in qualified if 40 <= l.get("score", 0) < 75]),
-            "skipped": len(raw_items) - saved,
-            "completed_at": datetime.now(timezone.utc).isoformat(),
-        }).eq("id", search_id).execute()
-
-        # Update daily usage (DB trigger already counts leads_generated, so only increment searches)
-        try:
-            supabase.rpc("increment_daily_usage", {
-                "p_user_id": current_user["id"],
-                "p_leads": 0,
-                "p_searches": 1,
-            }).execute()
-        except Exception as e:
-            logger.warning(f"[HyperAgent] Usage increment failed: {e}")
+        # Run in background so the HTTP request returns instantly
+        background_tasks.add_task(
+            run_hyper_agent_job,
+            search_id=search_id,
+            user_id=current_user["id"],
+            context=context,
+        )
 
         return ScrapeResponse(
-            leads=qualified,
-            total=len(raw_items),
-            qualified=len(qualified),
             search_id=search_id,
-            message=f"Found {len(qualified)} high-quality leads from {len(raw_items)} results",
+            status="queued",
+            message="Search queued — results will be ready shortly",
         )
 
-    except ApifyError as e:
-        logger.error(f"[HyperAgent] Apify error: {e}")
-        if search_id:
-            try:
-                supabase.table("searches").update({
-                    "status": "failed",
-                    "error_message": str(e),
-                }).eq("id", search_id).execute()
-            except Exception:
-                pass
-
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail=f"LinkedIn scraping failed: {str(e)}",
-        )
     except Exception as e:
-        logger.error(f"[HyperAgent] Scrape error: {e}", exc_info=True)
-        if search_id:
-            try:
-                supabase.table("searches").update({
-                    "status": "failed",
-                    "error_message": str(e),
-                }).eq("id", search_id).execute()
-            except Exception:
-                pass
+        logger.error(f"[HyperAgent] Failed to queue search: {e}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to execute search",
+            detail="Failed to start search",
         )
 
 

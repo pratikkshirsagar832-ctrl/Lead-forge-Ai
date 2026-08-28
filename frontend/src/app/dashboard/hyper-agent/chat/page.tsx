@@ -114,32 +114,58 @@ I'll understand your needs, confirm the details, then scrape LinkedIn and qualif
         setSearchStep("🔍 Connecting to LinkedIn...")
         await new Promise((r) => setTimeout(r, 800))
 
-        setSearchStep("🔎 Searching for matching posts and profiles...")
-        await new Promise((r) => setTimeout(r, 1500))
-
-        setSearchStep("📊 Analyzing and scoring leads with AI...")
-        await new Promise((r) => setTimeout(r, 1000))
-
-        setSearchStep("✅ Qualifying top leads...")
-        await new Promise((r) => setTimeout(r, 500))
-
         try {
+          // Queue the scrape job — returns instantly with a search_id
           const scrapeRes = await api.post("/api/hyper-agent/scrape", { context: data.data })
 
           if (scrapeRes.status !== 200) {
-            throw new Error("Scrape failed")
+            throw new Error("Failed to start search")
           }
 
-          const scrapeData = scrapeRes.data
-          setLeads(scrapeData.leads)
-          setSearchId(scrapeData.search_id)
+          const { search_id } = scrapeRes.data
+
+          // Poll results until the background job completes
+          let status = "queued"
+          let pollData: any = null
+          for (let attempt = 0; attempt < 100; attempt++) {
+            await new Promise((r) => setTimeout(r, 3000))
+
+            const res = await api.get(`/api/hyper-agent/results/${search_id}`)
+            if (res.status !== 200) continue
+
+            pollData = res.data
+            status = pollData?.search?.status || "queued"
+
+            if (status === "scraping") setSearchStep("🔎 Searching for matching posts and profiles...")
+            else if (status === "qualifying") setSearchStep("📊 Analyzing and scoring leads with AI...")
+            else if (status === "completed" || status === "failed") break
+          }
+
+          if (status === "failed") {
+            const errMsg = pollData?.search?.message || "Search failed"
+            setSearchStep(null)
+            const errMessage: Message = {
+              role: "assistant",
+              content: `❌ ${errMsg}`,
+              timestamp: new Date(),
+            }
+            setMessages((prev) => [...prev, errMessage])
+            return
+          }
+
+          setSearchStep("✅ Qualifying top leads...")
+          await new Promise((r) => setTimeout(r, 500))
+
+          const leads = pollData?.leads || []
+          setLeads(leads)
+          setSearchId(search_id)
           setSearchStep(null)
 
           const resultMessage: Message = {
             role: "assistant",
             content: `✅ **Search Complete!**
 
-Found **${scrapeData.qualified}** qualified leads from **${scrapeData.total}** results.
+Found **${leads.length}** qualified leads.
 
 Here are your top leads (scored 0-100):`,
             timestamp: new Date(),

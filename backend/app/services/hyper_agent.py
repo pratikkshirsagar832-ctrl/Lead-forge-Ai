@@ -340,6 +340,7 @@ Return ONLY valid JSON array:
     "company": "Company Name",
     "location": "City, Country",
     "linkedin_url": "LinkedIn profile URL",
+    "post_url": "the EXACT LinkedIn POST URL from the input (copy it unchanged; if missing, use empty string)",
     "is_lead": true,
     "score": 85,
     "tier": "HOT",
@@ -707,7 +708,7 @@ If a field is not mentioned, use null.""",
                 "country_code": country_code,
                 "location_match": loc_match,
                 "linkedin_url": author_url,
-                "post_url": item.get("postUrl") or item.get("url") or "",
+                "post_url": item.get("url") or item.get("linkedinUrl") or item.get("postUrl") or "",
                 "profile_picture_url": self._extract_avatar(author),
                 "post_content": post_content[:200],
                 "engagement": {
@@ -841,6 +842,23 @@ Return ONLY a JSON array of indices of KEEP posts, e.g. [0, 3, 5]. If none, retu
             end = result_text.rfind("]") + 1
             if start >= 0 and end > start:
                 leads = json.loads(result_text[start:end])
+                # Re-attach author-only fields the AI doesn't return:
+                # post_url, profile_picture_url, location, country_code,
+                # location_match — matched by linkedin_url or name.
+                by_url = {}
+                for a in batch:
+                    url = (a.get("linkedin_url") or "").strip().lower()
+                    if url:
+                        by_url[url] = a
+                    elif a.get("name"):
+                        by_url.setdefault(("name:" + a["name"].lower()), a)
+                for l in leads:
+                    url = (l.get("linkedin_url") or "").strip().lower()
+                    src = by_url.get(url) or by_url.get("name:" + (l.get("name") or "").lower())
+                    if src:
+                        for field in ("post_url", "profile_picture_url", "location", "country_code", "location_match"):
+                            if not l.get(field):
+                                l[field] = src.get(field) or ""
                 # Filter: accept leads with score >= 40 (V3 threshold)
                 return [l for l in leads if l.get("score", 0) >= 40 and l.get("is_lead", True)]
         except json.JSONDecodeError:

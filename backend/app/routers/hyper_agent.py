@@ -20,6 +20,7 @@ from app.middleware.usage_middleware import check_search_limit
 from app.services.hyper_agent import HyperAgentService
 from app.database import get_supabase_admin
 from app.services.plans import resolve_effective_subscription, get_plan_row
+from app.services.apify_service import ApifyError
 
 logger = logging.getLogger(__name__)
 
@@ -114,9 +115,11 @@ async def hyper_agent_scrape(
             detail="Context must include 'niche' and 'location'",
         )
 
+    supabase = get_supabase_admin()
+    search_id = None
+
     try:
         service = HyperAgentService()
-        supabase = get_supabase_admin()
 
         # Create search record
         search_result = supabase.table("searches").insert({
@@ -156,8 +159,8 @@ async def hyper_agent_scrape(
         try:
             supabase.rpc("increment_daily_usage", {
                 "p_user_id": current_user["id"],
-                "p_field": "leads_generated",
-                "p_amount": saved,
+                "p_leads": saved,
+                "p_searches": 1,
             }).execute()
         except Exception as e:
             logger.warning(f"[HyperAgent] Usage increment failed: {e}")
@@ -172,14 +175,14 @@ async def hyper_agent_scrape(
 
     except ApifyError as e:
         logger.error(f"[HyperAgent] Apify error: {e}")
-        # Update search status on failure
-        try:
-            supabase.table("searches").update({
-                "status": "failed",
-                "error_message": str(e),
-            }).eq("id", search_id).execute()
-        except Exception:
-            pass
+        if search_id:
+            try:
+                supabase.table("searches").update({
+                    "status": "failed",
+                    "error_message": str(e),
+                }).eq("id", search_id).execute()
+            except Exception:
+                pass
 
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
@@ -187,6 +190,14 @@ async def hyper_agent_scrape(
         )
     except Exception as e:
         logger.error(f"[HyperAgent] Scrape error: {e}", exc_info=True)
+        if search_id:
+            try:
+                supabase.table("searches").update({
+                    "status": "failed",
+                    "error_message": str(e),
+                }).eq("id", search_id).execute()
+            except Exception:
+                pass
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to execute search",

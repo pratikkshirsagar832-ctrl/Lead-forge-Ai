@@ -8,7 +8,7 @@ const apiBaseUrl = isBrowser ? '' : (envApiUrl || 'http://localhost:8000');
 const api = axios.create({
   baseURL: apiBaseUrl,
   headers: { 'Content-Type': 'application/json' },
-  timeout: 30000,
+  timeout: 330000,
 });
 
 let refreshPromise: Promise<any> | null = null;

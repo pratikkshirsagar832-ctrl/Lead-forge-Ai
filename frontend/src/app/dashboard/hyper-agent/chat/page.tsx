@@ -4,6 +4,7 @@ import { useState, useRef, useEffect } from "react"
 import { Card } from "@/components/ui/card"
 import { Zap, Send, Loader2, Check, ArrowLeft, Bot, User } from "lucide-react"
 import Link from "next/link"
+import api from "@/lib/api"
 
 interface Message {
   role: "user" | "assistant"
@@ -77,18 +78,13 @@ I'll understand your needs, confirm the details, then scrape LinkedIn and qualif
         content: m.content,
       }))
 
-      const res = await fetch("/api/hyper-agent/chat", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message: input, history }),
-      })
+      const res = await api.post("/api/hyper-agent/chat", { message: input, history })
 
-      if (!res.ok) {
-        const err = await res.json()
-        throw new Error(err.detail || "Failed to get response")
+      if (res.status !== 200) {
+        throw new Error("Failed to get response")
       }
 
-      const data = await res.json()
+      const data = res.data
 
       const assistantMessage: Message = {
         role: "assistant",
@@ -100,18 +96,13 @@ I'll understand your needs, confirm the details, then scrape LinkedIn and qualif
       // If action is scrape, execute the search
       if (data.action === "scrape" && data.data) {
         setLoading(true)
-        const scrapeRes = await fetch("/api/hyper-agent/scrape", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ context: data.data }),
-        })
+        const scrapeRes = await api.post("/api/hyper-agent/scrape", { context: data.data })
 
-        if (!scrapeRes.ok) {
-          const err = await scrapeRes.json()
-          throw new Error(err.detail || "Scrape failed")
+        if (scrapeRes.status !== 200) {
+          throw new Error("Scrape failed")
         }
 
-        const scrapeData = await scrapeRes.json()
+        const scrapeData = scrapeRes.data
         setLeads(scrapeData.leads)
         setSearchId(scrapeData.search_id)
 
@@ -127,12 +118,13 @@ Here are your top leads (scored 0-100):`,
         setMessages((prev) => [...prev, resultMessage])
       }
     } catch (err: any) {
-      const errorMessage: Message = {
+      const errorMessage = err?.response?.data?.detail || err?.message || "An error occurred"
+      const msg: Message = {
         role: "assistant",
-        content: `❌ Error: ${err.message}. Please try again.`,
+        content: `❌ Error: ${errorMessage}. Please try again.`,
         timestamp: new Date(),
       }
-      setMessages((prev) => [...prev, errorMessage])
+      setMessages((prev) => [...prev, msg])
     } finally {
       setLoading(false)
     }

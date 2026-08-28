@@ -75,6 +75,10 @@ function PipelineCard({ lead, isDragOverlay }: { lead: LeadListItem; isDragOverl
     : null;
 
   const isLinkedinSource = lead.source === 'linkedin' || lead.source === 'hyper_agent';
+  const aiScore = lead.ai_confidence_score != null ? Math.round(lead.ai_confidence_score * 100) : null;
+  const workMatch = lead.headline?.match(/^(🌍 Remote|📄 Contract|⏱️ Part-time|🏢 On-site)\s*—?\s*(.*)$/);
+  const workLabel = workMatch?.[1];
+  const cleanHeadline = workMatch?.[2] || lead.headline || '';
 
   return (
     <div
@@ -93,12 +97,16 @@ function PipelineCard({ lead, isDragOverlay }: { lead: LeadListItem; isDragOverl
           className="mt-0.5 text-ice/30 hover:text-ice/60 transition-colors cursor-grab active:cursor-grabbing shrink-0"
           aria-label="Drag to reorder"
         >
-          <GripVertical className="w-4 h-4" />
+          <GripVertical className="w-3.5 h-3.5" />
         </button>
 
-        <div className="flex-1 min-w-0">
+        <Link
+          href={`/dashboard/leads/${lead.id}`}
+          onClick={(e) => e.stopPropagation()}
+          className="flex-1 min-w-0 block"
+        >
           <div className="flex items-center gap-2 mb-1">
-            <span className="text-sm font-semibold text-offwhite truncate">
+            <span className="text-sm font-semibold text-offwhite truncate hover:text-steel transition-colors">
               {lead.business_name}
             </span>
             {lead.lead_category && (
@@ -125,61 +133,108 @@ function PipelineCard({ lead, isDragOverlay }: { lead: LeadListItem; isDragOverl
               </span>
             )}
             {isLinkedinSource && <PostTypeBadge postType={lead.post_type} />}
+            {aiScore != null && (
+              <span
+                className={cn(
+                  'text-[10px] font-bold px-1.5 py-0.5 rounded-full shrink-0 border',
+                  aiScore >= 85
+                    ? 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30'
+                    : aiScore >= 40
+                    ? 'bg-cyan-500/15 text-cyan-400 border-cyan-500/30'
+                    : 'bg-orange-500/15 text-orange-400 border-orange-500/30'
+                )}
+                title="AI lead score (0-100)"
+              >
+                {aiScore}
+              </span>
+            )}
           </div>
 
           {lead.category && (
             <p className="text-[11px] text-ice/50 mb-2 truncate">{lead.category}</p>
           )}
 
-          <div className="flex items-center gap-3 flex-wrap">
-            {ratingStars && (
-              <span className="flex items-center gap-0.5">
-                {ratingStars.map((filled, i) => (
-                  <Star
-                    key={i}
-                    className={cn('w-3 h-3', filled ? 'text-amber-400 fill-amber-400' : 'text-ice/20')}
-                  />
-                ))}
-                <span className="text-[10px] text-ice/40 ml-0.5">({lead.total_reviews})</span>
-              </span>
-            )}
+          {isLinkedinSource ? (
+            <div className="flex items-center gap-3 flex-wrap">
+              {workLabel && (
+                <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-ocean/30 text-ice/70">
+                  {workLabel}
+                </span>
+              )}
+              {lead.connections_count != null && (
+                <span className="text-[11px] text-ice/40">
+                  {lead.connections_count.toLocaleString()} connections
+                </span>
+              )}
+            </div>
+          ) : (
+            <div className="flex items-center gap-3 flex-wrap">
+              {ratingStars && (
+                <span className="flex items-center gap-0.5">
+                  {ratingStars.map((filled, i) => (
+                    <Star
+                      key={i}
+                      className={cn('w-3 h-3', filled ? 'text-amber-400 fill-amber-400' : 'text-ice/20')}
+                    />
+                  ))}
+                  <span className="text-[10px] text-ice/40 ml-0.5">({lead.total_reviews})</span>
+                </span>
+              )}
 
-            {lead.website_health_score !== null && lead.website_health_score !== undefined && (
-              <span
-                className={cn(
-                  'text-[10px] font-bold px-1.5 py-0.5 rounded',
-                  lead.website_health_score >= 70
-                    ? 'bg-emerald-500/15 text-emerald-400'
-                    : lead.website_health_score >= 40
-                    ? 'bg-amber-500/15 text-amber-400'
-                    : 'bg-rose-500/15 text-rose-400'
-                )}
-              >
-                {lead.website_health_score}
-              </span>
-            )}
-          </div>
+              {lead.website_health_score !== null && lead.website_health_score !== undefined && (
+                <span
+                  className={cn(
+                    'text-[10px] font-bold px-1.5 py-0.5 rounded',
+                    lead.website_health_score >= 70
+                      ? 'bg-emerald-500/15 text-emerald-400'
+                      : lead.website_health_score >= 40
+                      ? 'bg-amber-500/15 text-amber-400'
+                      : 'bg-rose-500/15 text-rose-400'
+                  )}
+                >
+                  {lead.website_health_score}
+                </span>
+              )}
+            </div>
+          )}
 
           <div className="mt-2 space-y-1">
-            {lead.phone && (
-              <a
-                href={`tel:${lead.phone}`}
-                className="flex items-center gap-1.5 text-[11px] text-ice/40 hover:text-ice/70 transition-colors"
-              >
-                <Phone className="w-3 h-3" />
-                <span className="truncate">{lead.phone}</span>
-              </a>
-            )}
-            {lead.website_url && (
-              <a
-                href={lead.website_url}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="flex items-center gap-1.5 text-[11px] text-ice/40 hover:text-steel transition-colors"
-              >
-                <Globe className="w-3 h-3" />
-                <span className="truncate">{lead.website_url.replace(/^https?:\/\//, '')}</span>
-              </a>
+            {isLinkedinSource ? (
+              <>
+                {cleanHeadline && (
+                  <p className="text-[11px] text-ice/50 line-clamp-2">{cleanHeadline}</p>
+                )}
+                {lead.post_text && (
+                  <p className="text-[11px] text-ice/40 italic line-clamp-2 border-l-2 border-sky-500/30 pl-2">
+                    {lead.post_text}
+                  </p>
+                )}
+              </>
+            ) : (
+              <>
+                {lead.phone && (
+                  <a
+                    href={`tel:${lead.phone}`}
+                    onClick={(e) => e.stopPropagation()}
+                    className="flex items-center gap-1.5 text-[11px] text-ice/40 hover:text-ice/70 transition-colors"
+                  >
+                    <Phone className="w-3 h-3" />
+                    <span className="truncate">{lead.phone}</span>
+                  </a>
+                )}
+                {lead.website_url && (
+                  <a
+                    href={lead.website_url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    onClick={(e) => e.stopPropagation()}
+                    className="flex items-center gap-1.5 text-[11px] text-ice/40 hover:text-steel transition-colors"
+                  >
+                    <Globe className="w-3 h-3" />
+                    <span className="truncate">{lead.website_url.replace(/^https?:\/\//, '')}</span>
+                  </a>
+                )}
+              </>
             )}
             {isLinkedinSource && lead.post_url && (
               <a
@@ -201,7 +256,7 @@ function PipelineCard({ lead, isDragOverlay }: { lead: LeadListItem; isDragOverl
               </div>
             )}
           </div>
-        </div>
+        </Link>
       </div>
     </div>
   );
@@ -276,9 +331,9 @@ function KanbanColumn({
         </SortableContext>
 
         {/* Drop zone indicator when dragging over empty column */}
-        {leads.length === 0 && activeId && (
-          <div className="h-20 rounded-xl border-2 border-dashed border-steel/30 bg-steel/5 flex items-center justify-center">
-            <p className="text-xs text-ice/30">Drop here</p>
+        {leads.length === 0 && activeId && isOver && (
+          <div className="h-20 rounded-xl border-2 border-dashed border-violet/50 bg-violet/10 flex items-center justify-center">
+            <p className="text-xs text-violet">Drop here</p>
           </div>
         )}
       </div>
@@ -325,11 +380,26 @@ export default function PipelinePage() {
       let total = 0;
 
       const statuses = ['new', 'contacted', 'replied', 'converted', 'lost'];
+
+      // Fetch ALL pages per status (per_page is capped at 100 by the API —
+      // a stage with 250 leads would silently show only 100 without paging).
       const results = await Promise.all(
         statuses.map(async (status) => {
-          const params = new URLSearchParams({ user_status: status, per_page: '100' });
-          const { data } = await api.get(`${API_ROUTES.leads.list}?${params.toString()}`);
-          return { status, items: data.items || [] };
+          const allItems: LeadListItem[] = [];
+          let page = 1;
+          let totalPages = 1;
+          do {
+            const params = new URLSearchParams({
+              user_status: status,
+              per_page: '100',
+              page: String(page),
+            });
+            const { data } = await api.get(`${API_ROUTES.leads.list}?${params.toString()}`);
+            allItems.push(...(data.items || []));
+            totalPages = data.total_pages || 1;
+            page += 1;
+          } while (page <= totalPages && page <= 20); // safety cap 2000 per stage
+          return { status, items: allItems };
         })
       );
 

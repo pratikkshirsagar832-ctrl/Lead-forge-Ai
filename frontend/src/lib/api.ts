@@ -1,47 +1,34 @@
 "use client"
 
 /**
- * API client with local JWT Bearer token injection.
- * Token is stored in localStorage as 'leadforge_token'.
+ * API client — sends Supabase access_token as Bearer on every request.
+ * All data operations go through backend API which stores in local PostgreSQL.
  */
 
-import axios from "axios"
+import { supabase } from "./supabase"
 
 const isBrowser = typeof window !== "undefined"
 
-const api = axios.create({
-  baseURL: isBrowser ? "" : (process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"),
+const apiBaseUrl = isBrowser ? "" : (process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000")
+
+const api = axios_create({
+  baseURL: apiBaseUrl,
 })
 
-function getLocalToken(): string | null {
-  if (!isBrowser) return null
-  return localStorage.getItem("leadforge_token")
-}
+import axios_create from "axios"
 
-function setLocalToken(token: string) {
-  if (isBrowser) localStorage.setItem("leadforge_token", token)
-}
+let _refreshPromise: Promise<boolean> | null = null
 
-function clearLocalToken() {
-  if (isBrowser) localStorage.removeItem("leadforge_token")
-}
-
-function redirectToLogin() {
-  if (isBrowser && !window.location.pathname.startsWith("/login")) {
-    window.location.href = "/login"
-  }
-}
-
-// Request interceptor — attach Bearer token
 api.interceptors.request.use(async (config) => {
-  const token = getLocalToken()
-  if (token) {
-    config.headers.Authorization = `Bearer ${token}`
+  if (isBrowser) {
+    const { data: { session } } = await supabase.auth.getSession()
+    if (session?.access_token) {
+      config.headers.Authorization = `Bearer ${session.access_token}`
+    }
   }
   return config
 })
 
-// Response interceptor — on 401, try to refresh token once
 api.interceptors.response.use(
   (response) => response,
   async (error) => {
@@ -50,20 +37,37 @@ api.interceptors.response.use(
     if (error.response?.status === 401 && isBrowser && !originalRequest._retry) {
       originalRequest._retry = true
 
-      const token = getLocalToken()
-      if (!token) {
-        redirectToLogin()
-        return Promise.reject(error)
+      try {
+        if (!_refreshPromise) {
+          _refreshPromise = (async () => {
+            const { data: { session } } = await supabase.auth.getSession()
+            if (!session) return false
+
+            const { data, error: refreshError } = await supabase.auth.refreshSession()
+            if (refreshError || !data?.session) return false
+
+            originalRequest.headers.Authorization = `Bearer ${data.session.access_token}`
+            return true
+          })()
+        }
+
+        const refreshed = await _refreshPromise
+        _refreshPromise = null
+
+        if (refreshed) {
+          return api(originalRequest)
+        }
+      } catch {
+        _refreshPromise = null
       }
 
-      // Token is invalid/expired — clear and redirect to login
-      clearLocalToken()
-      redirectToLogin()
+      if (isBrowser && !window.location.pathname.startsWith("/login")) {
+        window.location.href = "/login"
+      }
     }
 
     return Promise.reject(error)
   },
 )
 
-export { getLocalToken, setLocalToken, clearLocalToken }
 export default api

@@ -2,8 +2,8 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { useRouter, usePathname } from 'next/navigation';
+import { supabase } from '@/lib/supabase';
 import { Loader2 } from 'lucide-react';
-import { getLocalToken } from '@/lib/api';
 
 function isGuestSession(): boolean {
   if (typeof window === 'undefined') return false;
@@ -36,24 +36,67 @@ export function AuthGuard({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     mountedRef.current = true;
 
-    // Check for local JWT token
-    const token = getLocalToken();
-    if (token || isGuestSession()) {
-      setIsAuthenticated(true);
-      setIsLoading(false);
-      return;
-    }
+    const checkSession = async () => {
+      try {
+        if (isGuestSession()) {
+          setIsAuthenticated(true);
+          setIsLoading(false);
+          return;
+        }
 
-    // No token — redirect to login
-    redirectTimerRef.current = setTimeout(() => {
-      if (mountedRef.current) {
-        router.replace(`/login?redirect=${encodeURIComponent(pathname)}`);
+        const { data: { session } } = await supabase.auth.getSession();
+        if (!mountedRef.current) return;
+
+        if (session) {
+          setIsAuthenticated(true);
+          setIsLoading(false);
+          return;
+        }
+
+        redirectTimerRef.current = setTimeout(async () => {
+          if (!mountedRef.current) return;
+          try {
+            const { data: { session: retrySession } } = await supabase.auth.getSession();
+            if (retrySession) {
+              setIsAuthenticated(true);
+              setIsLoading(false);
+              return;
+            }
+          } catch {}
+          if (mountedRef.current) {
+            router.replace(`/login?redirect=${encodeURIComponent(pathname)}`);
+          }
+        }, 3000);
+      } catch (err: any) {
+        console.error('AuthGuard: session check failed', err);
+        if (err?.message?.includes('Invalid API key') || err?.status === 401) {
+          router.replace('/login?error=auth_config');
+        } else {
+          safeRedirect('/login');
+        }
       }
-    }, 500);
+    };
+
+    checkSession();
+
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(
+      (event, session) => {
+        if (!mountedRef.current) return;
+        if (event === 'SIGNED_OUT') {
+          clearGuestSession();
+          safeRedirect('/login');
+        } else if (session) {
+          if (redirectTimerRef.current) clearTimeout(redirectTimerRef.current);
+          setIsAuthenticated(true);
+          setIsLoading(false);
+        }
+      }
+    );
 
     return () => {
       mountedRef.current = false;
       if (redirectTimerRef.current) clearTimeout(redirectTimerRef.current);
+      subscription.unsubscribe();
     };
   }, [router, pathname]);
 

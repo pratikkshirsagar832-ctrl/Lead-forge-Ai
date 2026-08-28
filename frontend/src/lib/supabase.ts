@@ -1,8 +1,8 @@
 "use client"
 
 /**
- * Supabase client — ONLY used for Google OAuth sign-in.
- * All other auth goes through local JWT (stored in localStorage).
+ * Supabase client — used for ALL auth (login, signup, Google OAuth, session).
+ * Data storage goes through local PostgreSQL via backend API.
  */
 
 import { createClient, SupabaseClient } from "@supabase/supabase-js"
@@ -12,7 +12,6 @@ const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || ""
 
 function createSupabaseClient(): SupabaseClient {
   if (!supabaseUrl || !supabaseAnonKey) {
-    // Return stub client when env vars missing
     return {
       auth: {
         getSession: async () => ({ data: { session: null }, error: null }),
@@ -29,8 +28,8 @@ function createSupabaseClient(): SupabaseClient {
   }
   return createClient(supabaseUrl, supabaseAnonKey, {
     auth: {
-      persistSession: false,
-      autoRefreshToken: false,
+      persistSession: true,
+      autoRefreshToken: true,
       detectSessionInUrl: false,
     },
   })

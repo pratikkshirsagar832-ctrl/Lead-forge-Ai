@@ -7,8 +7,8 @@ import { useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import Image from 'next/image';
 import { supabase } from '@/lib/supabase';
-import api, { setLocalToken, getLocalToken } from '@/lib/api';
-import { Mail, Lock, Eye, EyeOff, Loader2, User } from 'lucide-react';
+import api from '@/lib/api';
+import { Mail, Lock, Eye, EyeOff, Loader2, WifiOff, User } from 'lucide-react';
 import { GlassCard } from '@/components/shared/GlassCard';
 import { LoadingButton } from '@/components/shared/LoadingButton';
 import { Footer } from '@/components/landing/Footer';
@@ -26,12 +26,18 @@ function LoginContent() {
   const [successMessage, setSuccessMessage] = useState('');
   const [mode, setMode] = useState<'login' | 'signup'>('login');
 
+  const authConfigError = searchParams.get('error') === 'auth_config';
+
   useEffect(() => {
-    // If already logged in via local JWT, redirect to dashboard
-    if (getLocalToken()) {
-      router.replace('/dashboard');
-    }
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      if (session) router.replace('/dashboard');
+    });
   }, [router]);
+
+  const enterGuestMode = () => {
+    localStorage.setItem('hyperclients_guest', 'true');
+    router.replace('/dashboard');
+  };
 
   const handleEmailAuth = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -40,19 +46,34 @@ function LoginContent() {
     setSuccessMessage('');
 
     try {
-      const endpoint = mode === 'signup' ? '/api/auth/signup' : '/api/auth/login';
-      const res = await api.post(endpoint, { email, password });
-      const data = res.data;
+      if (mode === 'signup') {
+        const { error: signUpError } = await supabase.auth.signUp({
+          email,
+          password,
+          options: { emailRedirectTo: `${window.location.origin}/auth/callback` },
+        });
+        if (signUpError) throw signUpError;
+        setSuccessMessage('Check your email for the confirmation link!');
+        setIsLoading(false);
+        return;
+      }
 
-      if (data.token) {
-        setLocalToken(data.token);
+      let loginEmail = email;
+      if (!email.includes('@')) {
+        const { data: resolved } = await api.post('/api/auth/team-resolve', { username: email.trim().toLowerCase() });
+        loginEmail = resolved.email;
+      }
+
+      const { data, error: signInError } = await supabase.auth.signInWithPassword({
+        email: loginEmail,
+        password,
+      });
+      if (signInError) throw signInError;
+      if (data?.session) {
         router.replace('/dashboard');
-      } else {
-        throw new Error('No token received');
       }
     } catch (err: any) {
-      const msg = err?.response?.data?.detail?.message || err?.response?.data?.detail || err.message || 'Authentication failed';
-      setError(msg);
+      setError(err.message || 'Authentication failed');
     } finally {
       setIsLoading(false);
     }
@@ -110,15 +131,17 @@ function LoginContent() {
         <form onSubmit={handleEmailAuth} className="space-y-4">
           <div>
             <label className="block text-xs font-semibold uppercase tracking-wider text-ice/60 mb-1.5">
-              {mode === 'login' ? 'Email' : 'Email'}
+              {mode === 'login' ? 'Username or Email' : 'Email'}
             </label>
             <div className="relative">
-              <Mail className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-ice/40" />
+              {mode === 'login'
+                ? <User className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-ice/40" />
+                : <Mail className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-ice/40" />}
               <input
-                type="email"
+                type={mode === 'login' ? 'text' : 'email'}
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
-                placeholder="you@example.com"
+                placeholder={mode === 'login' ? 'username or you@example.com' : 'you@example.com'}
                 required
                 className="w-full pl-10 pr-4 py-2.5 rounded-lg bg-ocean/20 border border-ocean/40 text-ice placeholder-ice/30 text-sm focus:outline-none focus:border-steel focus:ring-1 focus:ring-steel/50 transition-all"
               />
@@ -179,6 +202,26 @@ function LoginContent() {
           <svg className="w-5 h-5 mr-2" viewBox="0 0 24 24"><path fill="currentColor" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92a5.06 5.06 0 0 1-2.2 3.32v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.1z" /><path fill="currentColor" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" /><path fill="currentColor" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z" /><path fill="currentColor" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" /></svg>
           Google
         </LoadingButton>
+
+        {authConfigError && (
+          <div className="mt-6 p-4 rounded-xl bg-amber-500/10 border border-amber-500/30">
+            <div className="flex items-start gap-3">
+              <WifiOff className="w-5 h-5 text-amber-400 shrink-0 mt-0.5" />
+              <div>
+                <p className="text-sm font-semibold text-amber-300">Auth service unavailable</p>
+                <p className="text-xs text-amber-400/70 mt-1 mb-3">
+                  Authentication service is temporarily down. Continue as guest to explore the dashboard.
+                </p>
+                <button
+                  onClick={enterGuestMode}
+                  className="text-sm font-bold text-offwhite bg-amber-500/20 hover:bg-amber-500/30 border border-amber-500/40 px-4 py-2 rounded-lg transition-all"
+                >
+                  Continue as Guest
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
 
         <p className="text-xs text-center text-ice/40 mt-6">
           By continuing, you agree to our Terms of Service and Privacy Policy.

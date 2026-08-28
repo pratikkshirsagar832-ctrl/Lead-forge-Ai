@@ -1,26 +1,18 @@
 """
-LeadForge — Auth Router (Local DB)
+Hyperclients — Auth Router
 
-Handles:
-  - POST /api/auth/signup       — Email + password registration
-  - POST /api/auth/login        — Email + password login
-  - POST /api/auth/google       — Google OAuth token exchange (uses Supabase)
-  - POST /api/auth/logout       — Logout
-  - GET  /api/auth/me           — Current user + subscription
-  - Team management endpoints
+Auth via Supabase. Data via local PostgreSQL.
 """
 
-import hashlib
 import logging
 import re
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, timezone
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Body
 
 from app.config import get_settings
-from app.db import query_one, query_all, execute, execute_returning
-from app.jwt_auth import create_token
+from app.database import get_supabase_admin
 from app.middleware.auth_middleware import get_current_user
 
 logger = logging.getLogger(__name__)
@@ -32,273 +24,30 @@ MEMBER_EMAIL_DOMAIN = "members.hyperclients.online"
 USERNAME_RE = re.compile(r"^[a-z0-9_]{3,20}$")
 
 
-def _hash_password(password: str) -> str:
-    salt = "leadforge-salt-2026"
-    return hashlib.sha256(f"{salt}{password}".encode()).hexdigest()
+def _get_owner_plan(supabase, user_id: str) -> tuple[str, str]:
+    from app.services.plans import resolve_effective_subscription
+    eff = resolve_effective_subscription(supabase, user_id)
+    return eff["plan_id"], eff["status"]
 
-
-# ── Signup ──────────────────────────────────────────────────────
-
-@router.post("/signup")
-async def signup(payload: dict = Body(...)):
-    email = (payload.get("email") or "").strip().lower()
-    password = payload.get("password") or ""
-    name = (payload.get("name") or "").strip()
-
-    if not email or not password:
-        raise HTTPException(status_code=400, detail={"message": "Email and password required"})
-    if len(password) < 6:
-        raise HTTPException(status_code=400, detail={"message": "Password must be at least 6 characters"})
-    if "@" not in email:
-        raise HTTPException(status_code=400, detail={"message": "Invalid email"})
-
-    # Check if user exists
-    existing = query_one("SELECT id FROM users WHERE email = %s", (email,))
-    if existing:
-        raise HTTPException(status_code=409, detail={"message": "Email already registered"})
-
-    # Create user
-    password_hash = _hash_password(password)
-    user = execute_returning(
-        """INSERT INTO users (email, full_name, password_hash, auth_provider)
-           VALUES (%s, %s, %s, 'email') RETURNING id, email, full_name""",
-        (email, name or email.split("@")[0], password_hash),
-    )
-    if not user:
-        raise HTTPException(status_code=500, detail={"message": "Failed to create user"})
-
-    user_id = str(user["id"])
-    now = datetime.now(timezone.utc)
-
-    # Create free trial subscription
-    execute(
-        """INSERT INTO user_subscriptions (user_id, plan_id, status, trial_end, current_period_end)
-           VALUES (%s, 'free', 'trial', %s, %s)""",
-        (user_id, (now + timedelta(days=3)).isoformat(), (now + timedelta(days=3)).isoformat()),
-    )
-
-    token = create_token(user_id, email, name or email.split("@")[0])
-
-    return {
-        "token": token,
-        "user": {
-            "id": user_id,
-            "email": email,
-            "name": name or email.split("@")[0],
-        },
-    }
-
-
-# ── Login ───────────────────────────────────────────────────────
-
-@router.post("/login")
-async def login(payload: dict = Body(...)):
-    email = (payload.get("email") or "").strip().lower()
-    password = payload.get("password") or ""
-
-    if not email or not password:
-        raise HTTPException(status_code=400, detail={"message": "Email and password required"})
-
-    user = query_one(
-        "SELECT id, email, full_name, password_hash FROM users WHERE email = %s",
-        (email,),
-    )
-    if not user:
-        raise HTTPException(status_code=401, detail={"message": "Invalid credentials"})
-
-    if user["password_hash"] and user["password_hash"] != _hash_password(password):
-        raise HTTPException(status_code=401, detail={"message": "Invalid credentials"})
-
-    token = create_token(str(user["id"]), user["email"], user["full_name"])
-
-    return {
-        "token": token,
-        "user": {
-            "id": str(user["id"]),
-            "email": user["email"],
-            "name": user["full_name"],
-        },
-    }
-
-
-# ── Google OAuth (uses Supabase) ───────────────────────────────
-
-@router.post("/google")
-async def google_auth(payload: dict = Body(...)):
-    """Exchange a Supabase Google OAuth token for a local JWT."""
-    supabase_token = payload.get("access_token") or payload.get("token")
-    if not supabase_token:
-        raise HTTPException(status_code=400, detail={"message": "Missing Google token"})
-
-    settings = get_settings()
-
-    # Verify token with Supabase and get user info
-    async with httpx.AsyncClient(timeout=15) as client:
-        resp = await client.get(
-            f"{settings.supabase_url}/auth/v1/user",
-            headers={
-                "apikey": settings.supabase_anon_key,
-                "Authorization": f"Bearer {supabase_token}",
-            },
-        )
-
-    if resp.status_code != 200:
-        raise HTTPException(status_code=401, detail={"message": "Invalid Google token"})
-
-    google_user = resp.json()
-    email = (google_user.get("email") or "").strip().lower()
-    full_name = google_user.get("user_metadata", {}).get("full_name", "") or google_user.get("user_metadata", {}).get("name", "")
-    avatar_url = google_user.get("user_metadata", {}).get("avatar_url", "")
-    google_id = google_user.get("id", "")
-
-    if not email:
-        raise HTTPException(status_code=400, detail={"message": "No email from Google"})
-
-    # Find or create user
-    user = query_one("SELECT id, email, full_name FROM users WHERE email = %s", (email,))
-    if user:
-        # Update name/avatar if changed
-        execute(
-            "UPDATE users SET full_name = COALESCE(NULLIF(%s, ''), full_name), avatar_url = COALESCE(NULLIF(%s, ''), avatar_url) WHERE id = %s",
-            (full_name, avatar_url, user["id"]),
-        )
-        user_id = str(user["id"])
-    else:
-        new_user = execute_returning(
-            """INSERT INTO users (email, full_name, avatar_url, auth_provider, google_id)
-               VALUES (%s, %s, %s, 'google', %s)
-               RETURNING id""",
-            (email, full_name, avatar_url, google_id),
-        )
-        user_id = str(new_user["id"])
-
-        # Create free trial subscription
-        now = datetime.now(timezone.utc)
-        execute(
-            """INSERT INTO user_subscriptions (user_id, plan_id, status, trial_end, current_period_end)
-               VALUES (%s, 'free', 'trial', %s, %s)""",
-            (user_id, (now + timedelta(days=3)).isoformat(), (now + timedelta(days=3)).isoformat()),
-        )
-
-    token = create_token(user_id, email, full_name)
-
-    return {
-        "token": token,
-        "user": {
-            "id": user_id,
-            "email": email,
-            "name": full_name,
-        },
-    }
-
-
-# ── Logout ──────────────────────────────────────────────────────
-
-@router.post("/logout")
-async def logout():
-    return {"ok": True}
-
-
-# ── Current User ────────────────────────────────────────────────
-
-@router.get("/me")
-async def get_me(current_user: dict = Depends(get_current_user)):
-    user_id = current_user["id"]
-    today_str = date.today().isoformat()
-
-    # Get usage
-    used = query_one(
-        "SELECT searches_run, leads_generated FROM daily_usage WHERE user_id = %s AND date = %s",
-        (user_id, today_str),
-    )
-    used_searches = (used or {}).get("searches_run", 0) or 0
-    used_leads = (used or {}).get("leads_generated", 0) or 0
-
-    # Get subscription via RPC function
-    subscription = None
-    try:
-        sub = call_fn_one(
-            "SELECT * FROM get_user_subscription(%s)",
-            (user_id,),
-        )
-        if sub:
-            subscription = sub
-            searches_per_day = sub.get("searches_per_day", 3)
-            leads_per_day = sub.get("leads_per_day", 30)
-            subscription["remaining_searches"] = max(0, searches_per_day - used_searches)
-            subscription["remaining_leads"] = max(0, leads_per_day - used_leads)
-    except Exception as e:
-        logger.warning(f"get_user_subscription failed: {e}")
-
-    # Fallback: direct table query
-    if not subscription:
-        sub_row = query_one(
-            """SELECT us.plan_id, us.status, us.current_period_start, us.current_period_end,
-                      us.trial_end, us.is_trial_expired,
-                      p.name as plan_name, p.searches_per_day, p.leads_per_day
-               FROM user_subscriptions us
-               JOIN plans p ON p.id = us.plan_id
-               WHERE us.user_id = %s
-               ORDER BY us.created_at DESC LIMIT 1""",
-            (user_id,),
-        )
-        if sub_row:
-            subscription = dict(sub_row)
-            searches_per_day = sub_row.get("searches_per_day", 3) or 3
-            leads_per_day = sub_row.get("leads_per_day", 30) or 30
-            subscription["remaining_searches"] = max(0, searches_per_day - used_searches)
-            subscription["remaining_leads"] = max(0, leads_per_day - used_leads)
-
-    if not subscription:
-        subscription = {
-            "plan_id": "free",
-            "plan_name": "Free",
-            "status": "trial",
-            "searches_per_day": 3,
-            "leads_per_day": 30,
-            "remaining_searches": 3,
-            "remaining_leads": 30,
-        }
-
-    return {
-        "id": user_id,
-        "email": current_user["email"],
-        "name": current_user["name"],
-        "subscription": subscription,
-    }
-
-
-def call_fn_one(sql: str, params: tuple = None):
-    """Helper to call a function and return one row."""
-    return query_one(sql, params)
-
-
-# ── Team Endpoints ──────────────────────────────────────────────
 
 @router.get("/team")
 async def get_team(current_user: dict = Depends(get_current_user)):
-    user_id = current_user["id"]
-    sub = query_one(
-        """SELECT us.plan_id FROM user_subscriptions us
-           WHERE us.user_id = %s ORDER BY us.created_at DESC LIMIT 1""",
-        (user_id,),
-    )
-    plan_id = (sub or {}).get("plan_id", "free")
+    supabase = get_supabase_admin()
+    plan_id, _status = _get_owner_plan(supabase, current_user["id"])
     seats_allowed = PLAN_SEATS.get(plan_id, 0)
 
-    rows = query_all(
-        """SELECT us.user_id, us.razorpay_order_id, us.created_at
-           FROM user_subscriptions us
-           WHERE us.razorpay_order_id LIKE %s
-           ORDER BY us.created_at""",
-        (f"team:{user_id}:%",),
-    )
+    rows = supabase.table("user_subscriptions") \
+        .select("user_id, razorpay_order_id, created_at") \
+        .like("razorpay_order_id", f"team:{current_user['id']}:%") \
+        .order("created_at") \
+        .execute()
+
     members = []
-    for r in rows:
+    for r in (rows.data or []):
         parts = (r.get("razorpay_order_id") or "").split(":", 2)
         if len(parts) == 3:
             members.append({
-                "id": str(r["user_id"]),
+                "id": r["user_id"],
                 "username": parts[2],
                 "email": f"{parts[2]}@{MEMBER_EMAIL_DOMAIN}",
                 "created_at": r.get("created_at"),
@@ -313,73 +62,120 @@ async def get_team(current_user: dict = Depends(get_current_user)):
 
 
 @router.post("/team")
-async def add_team_member(payload: dict = Body(...), current_user: dict = Depends(get_current_user)):
+async def add_team_member(
+    payload: dict = Body(...),
+    current_user: dict = Depends(get_current_user),
+):
     username = (payload.get("username") or "").strip().lower()
     password = payload.get("password") or ""
 
     if not USERNAME_RE.match(username):
-        raise HTTPException(status_code=400, detail={"message": "Username must be 3-20 chars: lowercase, numbers, underscores"})
+        raise HTTPException(status_code=400, detail={
+            "message": "Username must be 3-20 chars: lowercase letters, numbers, underscores",
+        })
     if len(password) < 6:
         raise HTTPException(status_code=400, detail={"message": "Password must be at least 6 characters"})
 
-    user_id = current_user["id"]
-    sub = query_one(
-        "SELECT plan_id, status FROM user_subscriptions WHERE user_id = %s ORDER BY created_at DESC LIMIT 1",
-        (user_id,),
-    )
-    plan_id = (sub or {}).get("plan_id", "free")
-    sub_status = (sub or {}).get("status", "trial")
+    supabase = get_supabase_admin()
+    owner_id = current_user["id"]
+    plan_id, status = _get_owner_plan(supabase, owner_id)
 
-    if sub_status not in ("active", "trial"):
+    if status not in ("active", "trial"):
         raise HTTPException(status_code=403, detail={"message": "Subscription is not active"})
 
     seats_allowed = PLAN_SEATS.get(plan_id, 0)
     if seats_allowed == 0:
-        raise HTTPException(status_code=403, detail={"message": "Team seats available on Pro/Agency plans only", "upgrade_url": "/pricing"})
+        raise HTTPException(status_code=403, detail={
+            "message": "Team seats are available on Pro and Agency plans only",
+            "upgrade_url": "/pricing",
+        })
 
-    count_row = query_one(
-        "SELECT COUNT(*) as cnt FROM user_subscriptions WHERE razorpay_order_id LIKE %s",
-        (f"team:{user_id}:%",),
-    )
-    if (count_row or {}).get("cnt", 0) >= seats_allowed:
-        raise HTTPException(status_code=400, detail={"message": f"All {seats_allowed} seats are in use"})
+    count_resp = supabase.table("user_subscriptions") \
+        .select("user_id", count="exact") \
+        .like("razorpay_order_id", f"team:{owner_id}:%") \
+        .execute()
+    if (count_resp.count or 0) >= seats_allowed:
+        raise HTTPException(status_code=400, detail={
+            "message": f"All {seats_allowed} seats of your plan are in use",
+        })
 
+    settings = get_settings()
     member_email = f"{username}@{MEMBER_EMAIL_DOMAIN}"
-    member = execute_returning(
-        """INSERT INTO users (email, full_name, password_hash, auth_provider)
-           VALUES (%s, %s, %s, 'team') RETURNING id""",
-        (member_email, username, _hash_password(password)),
-    )
-    member_uid = str(member["id"])
+    async with httpx.AsyncClient(timeout=20) as client:
+        resp = await client.post(
+            f"{settings.supabase_url}/auth/v1/admin/users",
+            headers={
+                "apikey": settings.supabase_service_role_key,
+                "Authorization": f"Bearer {settings.supabase_service_role_key}",
+                "Content-Type": "application/json",
+            },
+            json={
+                "email": member_email,
+                "password": password,
+                "email_confirm": True,
+                "user_metadata": {
+                    "role": "team_member",
+                    "username": username,
+                    "team_owner": owner_id,
+                },
+            },
+        )
+    if resp.status_code == 422:
+        raise HTTPException(status_code=409, detail={"message": "Username already taken"})
+    if resp.status_code not in (200, 201):
+        logger.error(f"Team member auth create failed: {resp.status_code} {resp.text[:300]}")
+        raise HTTPException(status_code=500, detail={"message": "Failed to create team account"})
 
-    # Mirror owner's plan
-    owner_sub = query_one(
-        "SELECT current_period_end FROM user_subscriptions WHERE user_id = %s ORDER BY created_at DESC LIMIT 1",
-        (user_id,),
-    )
-    period_end = (owner_sub or {}).get("current_period_end")
+    member_uid = resp.json().get("id")
 
-    execute(
-        """INSERT INTO user_subscriptions (user_id, plan_id, status, current_period_start, current_period_end, razorpay_order_id)
-           VALUES (%s, %s, 'active', %s, %s, %s)""",
-        (member_uid, plan_id, datetime.now(timezone.utc).isoformat(), period_end, f"team:{user_id}:{username}"),
-    )
+    owner_sub = supabase.table("user_subscriptions") \
+        .select("current_period_end") \
+        .eq("user_id", owner_id) \
+        .order("created_at", desc=True) \
+        .limit(1) \
+        .execute()
+    period_end = owner_sub.data[0].get("current_period_end") if owner_sub.data else None
+
+    supabase.table("user_subscriptions").insert({
+        "user_id": member_uid,
+        "plan_id": plan_id,
+        "status": "active",
+        "current_period_start": datetime.now(timezone.utc).isoformat(),
+        "current_period_end": period_end,
+        "razorpay_order_id": f"team:{owner_id}:{username}",
+    }).execute()
 
     return {"id": member_uid, "username": username, "email": member_email}
 
 
 @router.delete("/team/{member_id}")
 async def remove_team_member(member_id: str, current_user: dict = Depends(get_current_user)):
-    user_id = current_user["id"]
-    row = query_one(
-        "SELECT id FROM user_subscriptions WHERE user_id = %s AND razorpay_order_id LIKE %s LIMIT 1",
-        (member_id, f"team:{user_id}:%"),
-    )
-    if not row:
-        raise HTTPException(status_code=404, detail={"message": "Team member not found"})
+    supabase = get_supabase_admin()
+    owner_id = current_user["id"]
 
-    execute("DELETE FROM user_subscriptions WHERE id = %s", (row["id"],))
-    execute("DELETE FROM users WHERE id = %s", (member_id,))
+    rows = supabase.table("user_subscriptions") \
+        .select("id") \
+        .eq("user_id", member_id) \
+        .like("razorpay_order_id", f"team:{owner_id}:%") \
+        .limit(1) \
+        .execute()
+    if not rows.data:
+        raise HTTPException(status_code=404, detail={"message": "Team member not found"})
+    registry_row_id = rows.data[0]["id"]
+
+    settings = get_settings()
+    async with httpx.AsyncClient(timeout=20) as client:
+        resp = await client.delete(
+            f"{settings.supabase_url}/auth/v1/admin/users/{member_id}",
+            headers={
+                "apikey": settings.supabase_service_role_key,
+                "Authorization": f"Bearer {settings.supabase_service_role_key}",
+            },
+        )
+    if resp.status_code not in (200, 204):
+        logger.warning(f"Team member auth delete returned {resp.status_code} — cleaning registry anyway")
+
+    supabase.table("user_subscriptions").delete().eq("id", registry_row_id).execute()
     return {"ok": True}
 
 
@@ -387,5 +183,131 @@ async def remove_team_member(member_id: str, current_user: dict = Depends(get_cu
 async def resolve_team_username(payload: dict = Body(...)):
     username = (payload.get("username") or "").strip().lower()
     if not USERNAME_RE.match(username):
-        raise HTTPException(status_code=400, detail={"message": "Invalid username"})
+        raise HTTPException(status_code=400, detail={"message": "Invalid username format"})
     return {"email": f"{username}@{MEMBER_EMAIL_DOMAIN}"}
+
+
+@router.get("/me")
+async def get_me(current_user: dict = Depends(get_current_user)):
+    supabase = get_supabase_admin()
+    subscription = None
+
+    today_str = date.today().isoformat()
+    usage_resp = supabase.table("daily_usage") \
+        .select("searches_run, leads_generated") \
+        .eq("user_id", current_user["id"]) \
+        .eq("date", today_str) \
+        .execute()
+    used = usage_resp.data[0] if usage_resp.data and len(usage_resp.data) > 0 else {}
+    used_searches = used.get("searches_run", 0) or 0
+    used_leads = used.get("leads_generated", 0) or 0
+
+    try:
+        sub_resp = supabase.rpc(
+            "get_user_subscription",
+            {"p_user_id": current_user["id"]},
+        ).execute()
+        if sub_resp and sub_resp.data:
+            subscription = sub_resp.data
+            searches_per_day = subscription.get("searches_per_day", 3)
+            leads_per_day = subscription.get("leads_per_day", 30)
+            subscription["remaining_searches"] = max(0, searches_per_day - used_searches)
+            subscription["remaining_leads"] = max(0, leads_per_day - used_leads)
+
+        try:
+            from app.services.plans import get_plan_row, resolve_effective_subscription, get_used_today
+            eff = resolve_effective_subscription(supabase, current_user["id"])
+
+            if eff["status"] not in ("active", "trial"):
+                if eff.get("team_owner_id") and (
+                    not subscription or subscription.get("plan_id") != "free"
+                ):
+                    subscription = {
+                        "plan_id": "free",
+                        "plan_name": "Free",
+                        "status": "inactive",
+                        "searches_per_day": 0,
+                        "leads_per_day": 0,
+                        "remaining_searches": 0,
+                        "remaining_leads": 0,
+                        "current_period_start": None,
+                        "current_period_end": None,
+                        "trial_end": None,
+                        "is_trial_expired": True,
+                        "is_team_seat": True,
+                    }
+            elif not subscription or subscription.get("plan_id") != eff["plan_id"]:
+                plan = get_plan_row(supabase, eff["plan_id"])
+                used_s, used_l = get_used_today(supabase, current_user["id"])
+                subscription = {
+                    "plan_id": eff["plan_id"],
+                    "plan_name": plan.get("name", eff["plan_id"]),
+                    "status": "active",
+                    "searches_per_day": plan.get("searches_per_day", 3),
+                    "leads_per_day": plan.get("leads_per_day", 30),
+                    "remaining_searches": max(0, plan.get("searches_per_day", 3) - used_s),
+                    "remaining_leads": max(0, plan.get("leads_per_day", 30) - used_l),
+                    "current_period_start": None,
+                    "current_period_end": (eff.get("source_row") or {}).get("current_period_end"),
+                    "trial_end": None,
+                    "is_trial_expired": False,
+                    "is_team_seat": eff.get("team_owner_id") is not None,
+                }
+        except Exception as tbl_err:
+            logger.warning(f"Effective-plan resolution failed: {tbl_err}")
+    except Exception as e:
+        logger.warning(f"RPC get_user_subscription failed: {e}")
+
+    if not subscription:
+        try:
+            sub_resp = supabase.table("user_subscriptions") \
+                .select("*") \
+                .eq("user_id", current_user["id"]) \
+                .order("created_at", desc=True) \
+                .limit(1) \
+                .execute()
+
+            if sub_resp.data and len(sub_resp.data) > 0:
+                sub = sub_resp.data[0]
+                plan_id = sub.get("plan_id", "free")
+
+                plan_resp = supabase.table("plans") \
+                    .select("*") \
+                    .eq("id", plan_id) \
+                    .limit(1) \
+                    .execute()
+
+                plan = plan_resp.data[0] if plan_resp.data and len(plan_resp.data) > 0 else {}
+
+                usage_resp = supabase.table("daily_usage") \
+                    .select("searches_run, leads_generated") \
+                    .eq("user_id", current_user["id"]) \
+                    .eq("date", today_str) \
+                    .execute()
+
+                used = usage_resp.data[0] if usage_resp.data else {}
+                searches_per_day = plan.get("searches_per_day", 1)
+                leads_per_day = plan.get("leads_per_day", 10)
+
+                subscription = {
+                    "plan_id": plan_id,
+                    "plan_name": plan.get("name", "Free"),
+                    "status": sub.get("status", "active"),
+                    "searches_per_day": searches_per_day,
+                    "leads_per_day": leads_per_day,
+                    "remaining_searches": max(0, searches_per_day - (used.get("searches_run", 0) or 0)),
+                    "remaining_leads": max(0, leads_per_day - (used.get("leads_generated", 0) or 0)),
+                    "current_period_start": sub.get("current_period_start"),
+                    "current_period_end": sub.get("current_period_end"),
+                    "trial_end": sub.get("trial_end"),
+                    "is_trial_expired": sub.get("is_trial_expired", False),
+                }
+        except Exception as e:
+            logger.error(f"Failed to fetch subscription directly: {e}")
+
+    return {
+        "id": current_user["id"],
+        "email": current_user["email"],
+        "name": current_user["name"],
+        "subscription": subscription,
+    }

@@ -10,6 +10,7 @@ Usage:
     result = db.table("users").select("*").eq("id", user_id).execute()
 """
 
+import os
 import json
 import logging
 from datetime import datetime, date
@@ -294,7 +295,7 @@ class QueryResult:
 
 
 class SupabaseClient:
-    """Supabase-compatible client using local PostgreSQL."""
+    """Supabase-compatible client using local PostgreSQL for data operations."""
 
     def table(self, name: str) -> QueryBuilder:
         return QueryBuilder(name)
@@ -305,27 +306,37 @@ class SupabaseClient:
         qb._rpc_params = list(params.values()) if params else []
         return qb
 
-    class _AuthStub:
-        """Minimal auth stub — actual auth goes through /api/auth endpoints."""
-        def get_user(self, token=None):
-            return None
-        def sign_in_with_password(self, **kw):
-            return None
-        def sign_up(self, **kw):
-            return None
-        def sign_out(self):
-            return None
+
+class _SupabaseAuthClient:
+    """Real Supabase client used ONLY for auth token verification."""
+    _client = None
+
+    def __init__(self):
+        if _SupabaseAuthClient._client is None:
+            from supabase import create_client
+            _SupabaseAuthClient._client = create_client(
+                os.getenv("SUPABASE_URL", ""),
+                os.getenv("SUPABASE_SERVICE_ROLE_KEY", ""),
+            )
+
+    def get_user(self, token: str):
+        return _SupabaseAuthClient._client.auth.get_user(token)
 
     @property
     def auth(self):
-        return self._AuthStub()
+        return self
 
 
-def get_supabase_admin() -> SupabaseClient:
-    """Drop-in replacement for the old Supabase admin client."""
-    return SupabaseClient()
+def get_supabase_admin():
+    """Returns a dual-purpose client:
+    - .table() / .rpc() → local PostgreSQL (via QueryBuilder)
+    - .auth.get_user() → real Supabase (for token verification)
+    """
+    client = SupabaseClient()
+    client.auth = _SupabaseAuthClient()
+    return client
 
 
-def get_supabase_client() -> SupabaseClient:
+def get_supabase_client():
     """Drop-in replacement for the old Supabase client."""
-    return SupabaseClient()
+    return get_supabase_admin()

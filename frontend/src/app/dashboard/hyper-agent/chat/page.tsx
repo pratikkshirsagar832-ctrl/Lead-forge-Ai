@@ -2,7 +2,7 @@
 
 import { useState, useRef, useEffect } from "react"
 import { Card } from "@/components/ui/card"
-import { Zap, Send, Loader2, Check, ArrowLeft, Bot, User } from "lucide-react"
+import { Zap, Send, Loader2, Check, ArrowLeft, Bot, User, History } from "lucide-react"
 import Link from "next/link"
 import api from "@/lib/api"
 import PlanGuard from "@/components/dashboard/PlanGuard"
@@ -63,6 +63,12 @@ I'll understand your needs, confirm the details, then scrape LinkedIn and qualif
   const [searchStep, setSearchStep] = useState<string | null>(null)
   const [leads, setLeads] = useState<Lead[]>([])
   const [searchId, setSearchId] = useState<string | null>(null)
+  const [leadTypePrompt, setLeadTypePrompt] = useState<any>(null)
+  const [selectedLeadTypes, setSelectedLeadTypes] = useState<string[]>([])
+  const [pendingContext, setPendingContext] = useState<any>(null)
+  const [showHistory, setShowHistory] = useState(false)
+  const [history, setHistory] = useState<any[]>([])
+  const [historyLoading, setHistoryLoading] = useState(false)
   const messagesEndRef = useRef<HTMLDivElement>(null)
 
   const scrollToBottom = () => {
@@ -73,12 +79,82 @@ I'll understand your needs, confirm the details, then scrape LinkedIn and qualif
     scrollToBottom()
   }, [messages, leads, searchStep])
 
-  const sendMessage = async () => {
-    if (!input.trim() || loading) return
+  const loadHistory = async () => {
+    setShowHistory(true)
+    setHistoryLoading(true)
+    try {
+      const res = await api.get("/api/searches", { params: { per_page: 30 } })
+      const items = res.data?.items || []
+      setHistory(items.filter((s: any) => s.source === "hyper_agent"))
+    } catch {
+      setHistory([])
+    } finally {
+      setHistoryLoading(false)
+    }
+  }
+
+  const loadHistorySearch = async (id: string) => {
+    try {
+      setLoading(true)
+      setSearchStep("📂 Loading previous search...")
+      const res = await api.get(`/api/hyper-agent/results/${id}`)
+      const search = res.data?.search
+      const rawLeads = res.data?.leads || []
+      const normLeads = rawLeads.map((l: any) => {
+        const score = l.ai_confidence_score != null ? Math.round(l.ai_confidence_score * 100) : 0
+        const workMatch = (l.headline || "").match(/^(🌍 Remote|📄 Contract|⏱️ Part-time|🏢 On-site)\s*—?\s*(.*)$/)
+        const workMap: Record<string, string> = {
+          "🌍 Remote": "remote",
+          "📄 Contract": "contract",
+          "⏱️ Part-time": "part_time",
+          "🏢 On-site": "full_time_onsite",
+        }
+        return {
+          id: l.id,
+          name: l.business_name || "Unknown",
+          headline: workMatch ? workMatch[2] : (l.headline || ""),
+          company: l.category || "",
+          location: l.full_address || "",
+          linkedin_url: l.linkedin_url || "",
+          post_url: l.post_url || "",
+          score,
+          tier: score >= 85 ? "HOT" : "WARM",
+          lead_type: l.post_type || "buyer",
+          work_type: workMatch ? workMap[workMatch[1]] : "unknown",
+          reason: l.ai_reason || "",
+          outreach_angle: l.ai_pitch || "",
+          post_content: l.post_text || "",
+        }
+      })
+      setLeads(normLeads)
+      setSearchId(id)
+      setSearchStep(null)
+      const msg: Message = {
+        role: "assistant",
+        content: `📂 **Loaded previous search** — ${search?.niche || "Search"} (${search?.location || "—"}). Found **${normLeads.length}** leads.`,
+        timestamp: new Date(),
+      }
+      setMessages((prev) => [...prev, msg])
+    } catch (e: any) {
+      setSearchStep(null)
+      const msg: Message = {
+        role: "assistant",
+        content: `❌ Failed to load search: ${e?.response?.data?.detail || e?.message || "unknown error"}`,
+        timestamp: new Date(),
+      }
+      setMessages((prev) => [...prev, msg])
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const sendMessage = async (overrideMsg?: string) => {
+    const content = overrideMsg !== undefined ? overrideMsg : input
+    if (!content.trim() || loading) return
 
     const userMessage: Message = {
       role: "user",
-      content: input,
+      content,
       timestamp: new Date(),
     }
 
@@ -92,7 +168,11 @@ I'll understand your needs, confirm the details, then scrape LinkedIn and qualif
         content: m.content,
       }))
 
-      const res = await api.post("/api/hyper-agent/chat", { message: input, history })
+      const res = await api.post("/api/hyper-agent/chat", {
+        message: content,
+        history,
+        lead_types: selectedLeadTypes.length > 0 ? selectedLeadTypes : [],
+      })
 
       if (res.status !== 200) {
         throw new Error("Failed to get response")
@@ -107,6 +187,14 @@ I'll understand your needs, confirm the details, then scrape LinkedIn and qualif
       }
       setMessages((prev) => [...prev, assistantMessage])
 
+      // Lead-type question → show checkbox modal
+      if (data.action === "lead_types") {
+        setLeadTypePrompt(data.data || { options: [] })
+        setPendingContext(data.data?.context || null)
+        setSelectedLeadTypes([])
+        return
+      }
+
       // If action is scrape, execute the search with progress steps
       if (data.action === "scrape" && data.data) {
         setLoading(true)
@@ -116,7 +204,11 @@ I'll understand your needs, confirm the details, then scrape LinkedIn and qualif
 
         try {
           // Queue the scrape job — returns instantly with a search_id
-          const scrapeRes = await api.post("/api/hyper-agent/scrape", { context: data.data })
+          const contextData = { ...data.data }
+          if (selectedLeadTypes.length > 0) {
+            contextData.lead_types = selectedLeadTypes
+          }
+          const scrapeRes = await api.post("/api/hyper-agent/scrape", { context: contextData })
 
           if (scrapeRes.status !== 200) {
             throw new Error("Failed to start search")
@@ -245,15 +337,60 @@ Here are your top leads (scored 0-100):`,
             <p className="text-xs text-ice/50">AI-Powered Lead Discovery</p>
           </div>
         </div>
-        {searchId && (
-          <Link
-            href="/dashboard/leads"
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium text-violet hover:bg-violet/10 border border-violet/30 transition-colors"
+        <div className="flex items-center gap-2">
+          <button
+            onClick={loadHistory}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium text-ice/70 hover:bg-ocean/30 hover:text-offwhite border border-steel/20 transition-colors"
           >
-            View All Leads →
-          </Link>
-        )}
+            <History className="w-3.5 h-3.5" />
+            History
+          </button>
+          {searchId && (
+            <Link
+              href="/dashboard/leads"
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium text-violet hover:bg-violet/10 border border-violet/30 transition-colors"
+            >
+              View All Leads →
+            </Link>
+          )}
+        </div>
       </div>
+
+      {/* History Panel */}
+      {showHistory && (
+        <div className="border border-steel/20 bg-navy/80 rounded-xl p-4 mb-4 flex-shrink-0 max-h-72 overflow-y-auto">
+          <div className="flex items-center justify-between mb-3">
+            <h3 className="text-sm font-semibold text-offwhite">📂 Previous Searches</h3>
+            <button onClick={() => setShowHistory(false)} className="text-ice/50 hover:text-offwhite text-xs">✕ Close</button>
+          </div>
+          {historyLoading ? (
+            <div className="text-sm text-steel">Loading history...</div>
+          ) : history.length === 0 ? (
+            <div className="text-sm text-steel">No previous HyperAgent searches yet.</div>
+          ) : (
+            <div className="space-y-2">
+              {history.map((s) => (
+                <button
+                  key={s.id}
+                  onClick={() => { setShowHistory(false); loadHistorySearch(s.id) }}
+                  className="w-full flex items-center justify-between gap-3 bg-ocean/40 hover:bg-ocean/70 border border-steel/15 rounded-lg px-3 py-2 text-left transition-colors"
+                >
+                  <div className="min-w-0">
+                    <p className="text-xs font-medium text-offwhite truncate">{s.niche}</p>
+                    <p className="text-[10px] text-ice/50 truncate">{s.location} • {new Date(s.created_at).toLocaleDateString()}</p>
+                  </div>
+                  <div className="flex items-center gap-2 shrink-0">
+                    <span className={`text-[10px] px-1.5 py-0.5 rounded ${s.status === 'completed' ? 'bg-emerald/20 text-emerald' : s.status === 'failed' ? 'bg-rose/20 text-rose-400' : 'bg-amber/20 text-amber'}`}>
+                      {s.status}
+                    </span>
+                    <span className="text-[10px] text-ice/60">{s.total_results || 0} leads</span>
+                  </div>
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Chat Area */}
       <Card className="flex-1 bg-ocean border-ocean/20 overflow-hidden flex flex-col">
@@ -415,7 +552,7 @@ Here are your top leads (scored 0-100):`,
               style={{ minHeight: "44px", maxHeight: "120px" }}
             />
             <button
-              onClick={sendMessage}
+              onClick={() => sendMessage()}
               disabled={!input.trim() || loading}
               className="w-10 h-10 rounded-xl bg-violet hover:bg-violet/80 disabled:opacity-30 disabled:cursor-not-allowed flex items-center justify-center transition-colors"
             >
@@ -424,6 +561,74 @@ Here are your top leads (scored 0-100):`,
           </div>
         </div>
       </Card>
+
+      {/* Lead Type Checkbox Modal */}
+      {leadTypePrompt && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+          <div className="absolute inset-0 bg-navy/70 backdrop-blur-sm" onClick={() => setLeadTypePrompt(null)} />
+          <div className="relative w-full max-w-md bg-ocean border border-violet/30 rounded-2xl p-6 shadow-2xl animate-in fade-in zoom-in-95 duration-200">
+            <h3 className="text-lg font-bold text-offwhite mb-1">Which kind of leads would you want?</h3>
+            <p className="text-xs text-ice/60 mb-4">Select one or more. This decides what we search for on LinkedIn.</p>
+
+            <div className="space-y-2.5 mb-5">
+              {(leadTypePrompt.options || []).map((opt: any) => {
+                const checked = selectedLeadTypes.includes(opt.id)
+                return (
+                  <button
+                    key={opt.id}
+                    onClick={() => {
+                      setSelectedLeadTypes((prev) =>
+                        checked ? prev.filter((x) => x !== opt.id) : [...prev, opt.id]
+                      )
+                    }}
+                    className={`w-full flex items-start gap-3 p-3.5 rounded-xl border transition-all text-left ${
+                      checked
+                        ? "border-violet/60 bg-violet/10"
+                        : "border-steel/20 bg-navy/60 hover:border-steel/40"
+                    }`}
+                  >
+                    <div className={`mt-0.5 w-4 h-4 shrink-0 rounded border flex items-center justify-center transition-colors ${
+                      checked ? "bg-violet border-violet" : "border-steel/50"
+                    }`}>
+                      {checked && <Check className="w-3 h-3 text-white" />}
+                    </div>
+                    <div>
+                      <p className="text-sm font-semibold text-offwhite">{opt.label}</p>
+                      <p className="text-[11px] text-ice/50 mt-0.5">{opt.description}</p>
+                    </div>
+                  </button>
+                )
+              })}
+            </div>
+
+            <div className="flex gap-2">
+              <button
+                onClick={() => setLeadTypePrompt(null)}
+                className="flex-1 py-2.5 rounded-xl text-sm font-medium text-ice/60 hover:text-offwhite border border-steel/20 hover:bg-steel/10 transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => {
+                  if (selectedLeadTypes.length === 0) {
+                    setLeadTypePrompt(null)
+                    return
+                  }
+                  const labels = selectedLeadTypes
+                    .map((id) => (leadTypePrompt.options || []).find((o: any) => o.id === id)?.label || id)
+                    .join(", ")
+                  // Send the selection back to the agent, which will confirm + start
+                  setLeadTypePrompt(null)
+                  sendMessage(`I want: ${labels} (lead_types: ${selectedLeadTypes.join(",")})`)
+                }}
+                className="flex-1 py-2.5 rounded-xl text-sm font-bold text-white bg-violet hover:bg-violet/80 transition-colors"
+              >
+                Confirm & Continue
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
     </PlanGuard>
   )

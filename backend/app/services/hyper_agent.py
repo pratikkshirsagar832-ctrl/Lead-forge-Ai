@@ -232,6 +232,29 @@ DEFAULTS:
 - If target industry missing → ask
 - If service unclear → ask
 
+==================================================
+LEAD TYPE QUESTION (ask BEFORE confirming search)
+==================================================
+
+Before presenting the final confirmation, ALWAYS ask which kind of leads they want. When you ask this question, start your message with the exact line:
+
+LEAD_TYPES_QUESTION
+
+Then ask:
+Which kind of leads would you want?
+1️⃣ Hiring posts — companies hiring freelancers/contractors
+2️⃣ People looking for Freelancers — "need a freelancer for X"
+3️⃣ People looking for Agencies — "looking for an X agency", "recommend a good agency"
+
+The user may pick one, several, or say "all". Record their answer as lead_types: "hiring", "freelancer", "agency".
+
+IMPORTANT BUSINESS RULE:
+- If the user IS an agency/company (they sell services as a business), they almost always want type 3 (people looking for Agencies) and possibly type 2 — NOT hiring posts. If they say they're an agency, recommend type 3 and confirm they don't want hiring posts.
+- If the user is a freelancer, they want type 2 (people looking for Freelancers), not hiring posts.
+- Hiring posts (type 1) are only for users who explicitly want to find companies hiring.
+
+Never scrape without asking this question first (unless the user already told you their preference or says "just start" / "no questions").
+
 When confirming, use this format:
 🔍 **Ready to Search**
 - **Service**: [service]
@@ -358,13 +381,14 @@ class HyperAgentService:
             return keys[0]
         raise ApifyError("No Apify keys available")
 
-    def chat(self, message: str, history: list[dict], user_id: str) -> dict:
+    def chat(self, message: str, history: list[dict], user_id: str, lead_types: list[str] | None = None) -> dict:
         """Process a chat message and return AI response.
 
         Args:
             message: User's message
             history: Conversation history [{role: "user"|"assistant", content: "..."}]
             user_id: Current user ID
+            lead_types: User-selected lead type preference (from checkboxes)
 
         Returns:
             {response: str, action: str, data: dict|None}
@@ -382,10 +406,29 @@ class HyperAgentService:
 
         ai_message = response.choices[0].message.content
 
+        # If the AI is asking the lead-type question, return a special action
+        # so the frontend can render checkbox options.
+        if "LEAD_TYPES_QUESTION" in (ai_message or ""):
+            clean = (ai_message or "").replace("LEAD_TYPES_QUESTION", "").strip()
+            return {
+                "response": clean,
+                "action": "lead_types",
+                "data": {
+                    "options": [
+                        {"id": "hiring", "label": "Hiring posts", "description": "Companies hiring freelancers/contractors"},
+                        {"id": "freelancer", "label": "People looking for Freelancers", "description": "\"Need a freelancer for X\""},
+                        {"id": "agency", "label": "People looking for Agencies", "description": "\"Looking for an X agency\", \"recommend a good agency\""},
+                    ],
+                    "context": self._extract_context(history + [{"role": "user", "content": message}]),
+                },
+            }
+
         # Check if user confirmed (YES/CONFIRM/START)
         if self._is_confirmation(message):
             # Check if we have enough info from history
             context = self._extract_context(history + [{"role": "user", "content": message}])
+            if lead_types:
+                context["lead_types"] = lead_types
             if context.get("niche") and context.get("location"):
                 return {
                     "response": ai_message,
@@ -440,7 +483,12 @@ Return ONLY a JSON object with these fields:
   "location": "city, country (e.g., San Francisco, USA)",
   "company_size": "company size range (e.g., 10-50 employees)",
   "count": number of leads needed (default 20),
-  "posted_within": "timeframe (e.g., week, month)"
+  "posted_within": "timeframe (e.g., week, month)",
+  "lead_types": ["hiring", "freelancer", "agency"] — which kinds of leads the user wants. 
+    "hiring" = companies hiring freelancers/contractors (hiring posts)
+    "freelancer" = people looking FOR freelancers ("need a freelancer")
+    "agency" = people looking FOR agencies ("looking for an X agency")
+    If the user picked options, extract from their answer. If the user said they are an agency/company, default to ["agency"]. If freelancer, default to ["freelancer"]. If "all" or unspecified, use null.
 }
 If a field is not mentioned, use null.""",
                 },
@@ -469,9 +517,10 @@ If a field is not mentioned, use null.""",
         roles = context.get("roles", "")
         location = context.get("location", "")
         count = min(context.get("count", 20), 50)
+        lead_types = context.get("lead_types") or []
 
         # Build search queries from context
-        queries = self._build_queries(niche, roles, location)
+        queries = self._build_queries(niche, roles, location, lead_types)
         logger.info(f"[HyperAgent] Queries: {queries}")
 
         key = self._get_harvest_key()
@@ -496,12 +545,17 @@ If a field is not mentioned, use null.""",
         logger.info(f"[HyperAgent] HarvestAPI returned {len(items)} items")
         return items
 
-    def _build_queries(self, niche: str, roles: str, location: str) -> list[str]:
+    def _build_queries(self, niche: str, roles: str, location: str, lead_types: list[str] | None = None) -> list[str]:
         """Build targeted LinkedIn search queries using BUYER-INTENT phrases.
 
         Mirrors the search section's approach: real buying intent rarely looks
         like "I need X" — it looks like "looking for a freelance web developer",
         "hiring a designer for our project", "website developer required".
+
+        lead_types (optional) restricts query phrasing:
+          ["agency"]      → "looking for an X agency", "recommend an X agency"
+          ["freelancer"]  → "looking for a freelance X"
+          ["hiring"]      → "hiring X", "we are hiring X"
         """
         queries = []
         seen: set[str] = set()
@@ -512,6 +566,11 @@ If a field is not mentioned, use null.""",
             if key and key not in seen and len(queries) < 12:
                 seen.add(key)
                 queries.append(q)
+
+        lead_types = lead_types or []
+        want_hiring = (not lead_types) or "hiring" in lead_types
+        want_freelancer = (not lead_types) or "freelancer" in lead_types
+        want_agency = (not lead_types) or "agency" in lead_types
 
         role_list = [r.strip() for r in roles.split(",") if r.strip()] if roles else []
         niche_terms = [n.strip() for n in niche.split(",") if n.strip()] if niche else []
@@ -535,17 +594,35 @@ If a field is not mentioned, use null.""",
             role_variants.add(f"{niche.replace(' website', '').replace('website', 'web').strip()} designer")
         all_roles = list(dict.fromkeys(role_list + list(role_variants)))
 
-        # BUYER-INTENT phrases first (highest priority - attract companies hiring)
-        for role in all_roles:
-            _add(f"looking for a freelance {role}")
-            _add(f"looking for freelance {role}")
-            _add(f"hiring {role}")
-            _add(f"need a {role} for our")
-            _add(f"looking for {role} for our")
-            _add(f"need {role} for our")
-            _add(f"recommend a {role}")
+        # AGENCY-seekers first (highest value: people asking FOR an agency)
+        if want_agency:
+            for role in all_roles:
+                _add(f"looking for an {role} agency")
+                _add(f"recommend an {role} agency")
+                _add(f"need an {role} agency")
+                _add(f"looking for {role} agency")
+                _add(f"best {role} agency")
+            for n in niche_terms:
+                _add(f"looking for an {n} agency")
+                _add(f"recommend a good {n} agency")
 
-        # Niche-level intent phrases
+        # FREELANCER-seekers
+        if want_freelancer:
+            for role in all_roles:
+                _add(f"looking for a freelance {role}")
+                _add(f"looking for freelance {role}")
+                _add(f"need a freelance {role}")
+                _add(f"freelance {role} needed")
+
+        # HIRING posts
+        if want_hiring:
+            for role in all_roles:
+                _add(f"hiring {role}")
+                _add(f"need a {role} for our")
+                _add(f"looking for {role} for our")
+                _add(f"we are hiring {role}")
+
+        # Generic niche-level intent phrases
         for n in niche_terms:
             _add(f"looking for {n}")
             _add(f"need {n}")
@@ -672,6 +749,31 @@ If a field is not mentioned, use null.""",
                 },
             })
 
+        # Relevance gate: the post MUST mention the service/niche or a
+        # target role keyword, otherwise it's not relevant to what the user
+        # sells. This fixes "leads are not related to my service".
+        niche = context.get("niche", "")
+        roles = context.get("roles", "")
+        relevance_kws: set[str] = set()
+        for kw in (niche + "," + roles).split(","):
+            kw = kw.strip().lower()
+            if len(kw) >= 3:
+                relevance_kws.add(kw)
+        # Derived role keywords: "website development" -> "web developer" etc.
+        if "development" in niche.lower():
+            relevance_kws.add(niche.lower().replace("development", "developer").strip())
+        if "design" in niche.lower():
+            relevance_kws.add(niche.lower().replace("design", "designer").strip())
+
+        authors_filtered = []
+        if relevance_kws:
+            for a in authors:
+                text = ((a.get("post_content") or "") + " " + (a.get("headline") or "")).lower()
+                if any(kw in text for kw in relevance_kws):
+                    authors_filtered.append(a)
+            authors = authors_filtered
+            logger.info(f"[HyperAgent] Relevance gate kept {len(authors)}/{len(authors_filtered) if authors_filtered else 0}")
+
         if not authors:
             return []
 
@@ -687,6 +789,26 @@ If a field is not mentioned, use null.""",
             q for q in qualified
             if not ((q.get("lead_type") == "hiring") and (q.get("work_type") == "full_time_onsite"))
         ]
+
+        # Lead-type preference gate: if the user only wants certain kinds of
+        # leads (hiring / freelancer-seekers / agency-seekers), filter here.
+        # This fixes: an agency user should NEVER get hiring posts.
+        lead_types = context.get("lead_types") or []
+        if lead_types:
+            want_hiring = "hiring" in lead_types
+            want_freelancer = "freelancer" in lead_types
+            want_agency = "agency" in lead_types
+
+            def _type_ok(q: dict) -> bool:
+                lt = (q.get("lead_type") or "").lower()
+                if lt == "hiring":
+                    return want_hiring
+                if lt == "agency":
+                    return want_agency
+                # explicit_need / problem_awareness / research — seekers
+                return want_freelancer or want_agency
+
+            qualified = [q for q in qualified if _type_ok(q)]
 
         # Sort by score
         qualified.sort(key=lambda x: x.get("score", 0), reverse=True)
@@ -717,7 +839,7 @@ If a field is not mentioned, use null.""",
                 qualified.extend(batch_qualified)
             qualified.sort(key=lambda x: (x.get("location_match") or False, x.get("score", 0)), reverse=True)
 
-        return qualified[:max(requested_count, 50)]
+        return qualified[:min(requested_count, 50)]
 
     def _ai_triage_batch(self, batch: list[dict], context: dict) -> list[dict]:
         """Cheap single-question screen for remaining authors (mirrors triage in

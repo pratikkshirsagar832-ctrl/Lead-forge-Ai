@@ -33,6 +33,7 @@ ALLOWED_PLANS = {"pro", "agency"}
 class ChatRequest(BaseModel):
     message: str = Field(..., min_length=1, max_length=2000)
     history: list[dict] = Field(default_factory=list)
+    lead_types: list[str] = Field(default_factory=list)
 
 
 class ChatResponse(BaseModel):
@@ -148,6 +149,7 @@ async def hyper_agent_chat(
             message=request.message,
             history=request.history,
             user_id=current_user["id"],
+            lead_types=request.lead_types,
         )
         return ChatResponse(**result)
     except Exception as e:

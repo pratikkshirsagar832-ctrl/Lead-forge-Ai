@@ -40,7 +40,7 @@ def _increment_ai_usage(user_id: str) -> None:
         else:
             supabase.table("daily_usage").insert({
                 "user_id": user_id,
-                "date": today.isoformat(),
+                "date": today,
                 "searches_run": 0,
                 "leads_generated": 0,
                 "ai_calls": 1,

@@ -36,10 +36,12 @@ api.interceptors.response.use(
           });
         }
       }
-      const { data } = await refreshPromise!;
-      if (data?.session) {
-        error.config.headers.Authorization = `Bearer ${data.session.access_token}`;
-        return api(error.config);
+      if (refreshPromise) {
+        const { data } = await refreshPromise;
+        if (data?.session) {
+          error.config.headers.Authorization = `Bearer ${data.session.access_token}`;
+          return api(error.config);
+        }
       }
       window.location.href = '/login';
     }

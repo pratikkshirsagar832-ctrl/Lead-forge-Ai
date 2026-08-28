@@ -155,11 +155,11 @@ async def hyper_agent_scrape(
             "completed_at": datetime.now(timezone.utc).isoformat(),
         }).eq("id", search_id).execute()
 
-        # Update daily usage
+        # Update daily usage (DB trigger already counts leads_generated, so only increment searches)
         try:
             supabase.rpc("increment_daily_usage", {
                 "p_user_id": current_user["id"],
-                "p_leads": saved,
+                "p_leads": 0,
                 "p_searches": 1,
             }).execute()
         except Exception as e:

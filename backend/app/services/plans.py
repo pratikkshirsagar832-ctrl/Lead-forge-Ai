@@ -39,7 +39,9 @@ def _row_is_active(row: dict) -> bool:
         # Trial rows may rely on trial_end instead
         te = _parse_dt(row.get("trial_end"))
         if te is not None:
-            return te.replace(tzinfo=None) >= datetime.utcnow()
+            if te.tzinfo is None:
+                te = te.replace(tzinfo=timezone.utc)
+            return te >= datetime.now(timezone.utc)
         return True
     return pe > datetime.now(timezone.utc)
 

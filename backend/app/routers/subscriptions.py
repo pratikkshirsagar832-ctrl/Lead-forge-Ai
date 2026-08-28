@@ -276,30 +276,50 @@ async def razorpay_webhook(request: Request):
             payment_id = payload.get("payment", {}).get("entity", {}).get("id", "")
             if order_id and payment_id:
                 # Idempotency check: skip if payment already processed
-                existing = supabase.table("user_subscriptions").select("id, user_id").eq("razorpay_order_id", order_id).limit(1).execute()
+                existing = supabase.table("user_subscriptions").select("id, user_id, plan_id").eq("razorpay_order_id", order_id).limit(1).execute()
                 sub_data = existing.data[0] if existing.data and len(existing.data) > 0 else None
                 if sub_data:
-                    supabase.table("user_subscriptions").update({
+                    # Look up plan to get billing cycle for period dates
+                    now = datetime.now(timezone.utc)
+                    update_fields = {
                         "status": "active",
                         "razorpay_payment_id": payment_id,
-                    }).eq("id", sub_data["id"]).execute()
+                    }
+                    # Only set plan_id and period dates if not already set (verify endpoint may have done this)
+                    if not sub_data.get("plan_id") or sub_data["plan_id"] == "free":
+                        plan_resp = supabase.table("plans").select("billing_cycle_days").eq("id", sub_data.get("plan_id", "free")).limit(1).execute()
+                        cycle_days = 30
+                        if plan_resp.data and len(plan_resp.data) > 0:
+                            cycle_days = plan_resp.data[0].get("billing_cycle_days", 30)
+                        update_fields["current_period_start"] = now.isoformat()
+                        update_fields["current_period_end"] = (now + timedelta(days=cycle_days)).isoformat()
+
+                    supabase.table("user_subscriptions").update(update_fields).eq("id", sub_data["id"]).execute()
 
                     # Reset daily usage so user gets full plan limits
-                    today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+                    today_str = now.strftime("%Y-%m-%d")
                     supabase.table("daily_usage").delete().eq("user_id", sub_data["user_id"]).eq("date", today_str).execute()
 
         elif event_type == "subscription.charged":
             sub_id = payload.get("subscription", {}).get("entity", {}).get("id", "")
             if sub_id:
-                existing = supabase.table("user_subscriptions").select("id, user_id").eq("razorpay_subscription_id", sub_id).limit(1).execute()
+                existing = supabase.table("user_subscriptions").select("id, user_id, plan_id, current_period_end").eq("razorpay_subscription_id", sub_id).limit(1).execute()
                 if existing.data and len(existing.data) > 0:
                     sub_row = existing.data[0]
+                    now = datetime.now(timezone.utc)
+                    # Extend current_period_end from now (renewal)
+                    plan_resp = supabase.table("plans").select("billing_cycle_days").eq("id", sub_row.get("plan_id", "solo")).limit(1).execute()
+                    cycle_days = 30
+                    if plan_resp.data and len(plan_resp.data) > 0:
+                        cycle_days = plan_resp.data[0].get("billing_cycle_days", 30)
                     supabase.table("user_subscriptions").update({
                         "status": "active",
+                        "current_period_start": now.isoformat(),
+                        "current_period_end": (now + timedelta(days=cycle_days)).isoformat(),
                     }).eq("id", sub_row["id"]).execute()
 
                     # Reset daily usage
-                    today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+                    today_str = now.strftime("%Y-%m-%d")
                     supabase.table("daily_usage").delete().eq("user_id", sub_row["user_id"]).eq("date", today_str).execute()
 
         return {"status": "ok"}
@@ -307,7 +327,7 @@ async def razorpay_webhook(request: Request):
         raise
     except Exception as e:
         logger.error(f"Webhook error: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail="Webhook processing failed")
+        return {"status": "error", "detail": str(e)}
 
 
 @router.post("/cancel")

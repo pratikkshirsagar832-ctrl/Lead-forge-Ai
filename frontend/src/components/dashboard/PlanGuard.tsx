@@ -15,7 +15,7 @@ export default function PlanGuard({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     api
-      .get("/subscriptions/current")
+      .get("/api/subscriptions/current")
       .then((r) => {
         const plan = (r.data?.plan_name || "").toLowerCase()
         if (!PRO_OR_AGENCY.includes(plan)) {

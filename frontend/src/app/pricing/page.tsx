@@ -111,7 +111,7 @@ export default function PricingPage() {
                     ))}
                   </ul>
                   <Link href={session ? '/dashboard/billing' : '/login'}>
-                    <LoadingButton fullWidth variant={isCurrent ? 'outline' : 'default'}>
+                    <LoadingButton fullWidth variant={isCurrent ? 'outline' : 'primary'}>
                       {isCurrent ? 'Current Plan' : session ? 'Upgrade' : 'Get Started'}
                       {!isCurrent && <ArrowRight className="w-4 h-4 ml-2" />}
                     </LoadingButton>

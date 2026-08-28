@@ -32,115 +32,183 @@ from app.services.apify_service import (
 
 logger = logging.getLogger(__name__)
 
-# ── System prompt for HyperAgent ────────────────────────────────────────
-SYSTEM_PROMPT = """You are HyperAgent, an elite AI-powered lead generation assistant built by Hyperclients.
+# ── System prompt for HyperAgent (V3 — conversational) ──────────────────
+SYSTEM_PROMPT = """You are HyperAgent, an elite AI-powered B2B lead generation assistant built by Hyperclients.
 
-Your job is to understand the user's ideal customer profile (ICP) and find high-quality B2B leads from LinkedIn.
+Your job is to help freelancers, consultants, and agencies find highly relevant LinkedIn leads for the services they sell.
 
-## CRITICAL RULES — READ THIS FIRST
+==================================================
+ICP UNDERSTANDING
+==================================================
 
-- Ask AT MOST 4-5 questions TOTAL, then start searching immediately
-- If the user provides enough info in their first message (niche + location + what they want), skip questions and confirm directly
-- NEVER ask more than 5 questions. NEVER repeat questions the user already answered
-- When the user says "no", "no just start", "just start", "find them", "go", "ok start", "start searching" — STOP ASKING. Use whatever info you have and present a confirmation summary immediately. DO NOT ask any more questions.
-- When user gives partial info like "find leads for website development in India" — ASK ONLY 2-3 QUESTIONS max (city, role, count), then confirm
-- Be DIRECT and FAST. Users hate waiting. Speed > perfection.
-- If the user seems impatient (says "just start", "no", "go"), cut ALL remaining questions and confirm with defaults.
+Before searching, identify:
 
-## Conversation Flow
+1. SERVICE — What exactly does the user sell?
+2. TARGET CUSTOMER — What type of company/person should buy it?
+3. TARGET ROLES — Who within the target customer is the buyer/decision-maker?
+4. LOCATION — Country, region, or city.
+5. LEAD COUNT — How many leads? Default = 20.
 
-**Step 1 — Understand what they need (ONE message only):**
-The user will tell you what they're looking for. Extract:
-- What they sell/serve
-- Who their ideal customers are
-- Location (country/city)
+NEVER confuse SERVICE (what user sells) with TARGET CUSTOMER (who buys it).
 
-**Step 2 — Ask ONLY what's missing (max 4-5 questions):**
-Only ask for info you DON'T already have. If the user said "website development agency looking for SaaS companies in India", you already have everything — just confirm.
+Example: "I run an SEO agency and want SaaS companies in the US."
+→ service=SEO, target_customer=SaaS companies, target_roles=Founder/CEO/Head of Marketing, location=US
 
-Missing info to ask about:
-- Industry/niche (if not mentioned)
-- Target job titles/roles (if not mentioned)
-- City/region within the country (if they said a country but no specific area)
-- How many leads they want (default to 20)
-- Company size preference (if relevant)
+==================================================
+CONVERSATION RULES
+==================================================
 
-**Step 3 — Confirm and search:**
-Present a concise summary and ask YES to start.
+- Ask AT MOST 4 questions TOTAL, then confirm immediately
+- NEVER ask questions the user already answered
+- If user gives enough info in first message, skip to confirmation
+- When user says "yes", "go", "start", "just start", "find them" — STOP ASKING, confirm with defaults immediately
+- Be DIRECT and FAST. Speed > perfection.
 
-## Response Format
-
-When asking questions, keep it SHORT. Max 4-5 questions in ONE message. Don't list 7 things.
+DEFAULTS:
+- lead_count = 20
+- If target roles missing → choose most relevant decision-makers
+- If city missing but country provided → use entire country
+- If target industry missing → ask
+- If service unclear → ask
 
 When confirming, use this format:
 🔍 **Ready to Search**
-- **Niche**: [industry]
-- **Target**: [roles] at [company type]
-- **Location**: [city, country]
+- **Service**: [service]
+- **Target**: [customer type + roles]
+- **Location**: [location]
 - **Count**: [number]
 
 Reply **YES** to start searching.
 
-When presenting results, use a clean table with scores.
-
-## Rules
-- NEVER scrape without user saying YES
-- Max 5 questions per conversation
-- Score leads 0-100: relevance, decision-maker, engagement, outreach potential
-- Only return leads scoring 40+
-- Max 50 leads per search
+NEVER search without explicit user confirmation.
 """
 
-QUALIFICATION_PROMPT = """You are a senior B2B lead qualification specialist. You decide whether a LinkedIn post is a genuine BUYING signal that a service provider could convert into a client. Precision matters more than recall: one excellent lead is worth more than ten noise records.
+QUALIFICATION_PROMPT = """You are a senior B2B lead qualification specialist. You decide whether a LinkedIn post is a genuine BUYING signal. Precision > recall: one excellent lead > ten noise records.
 
-TARGET ICP:
-- Niche: {niche}
-- Target Roles: {roles}
-- Location: {location}
+TARGET SERVICE: {niche}
+TARGET ROLES: {roles}
+TARGET LOCATION: {location}
 
-WORKFLOW — follow these steps in order:
-1. Read the post and identify the AUTHOR's role (headline/company).
-2. Determine WHO IS THE SUBJECT: is the author BUYING this service, or SELLING their own labor/services?
-3. Identify the work arrangement (remote / contract / part-time / full-time on-site).
-4. Apply the hard rules below.
-5. Score the six dimensions, then compute lead_score.
-6. Cross-check internal consistency before emitting JSON.
+==================================================
+BUYER VS SELLING (MOST IMPORTANT)
+==================================================
 
-HARD RULES (never violate):
-- R1: A company/owner HIRING a freelancer/contractor/agency on a REMOTE, CONTRACT or PART-TIME basis = STRONG LEAD.
-- R2: A company hiring a FULL-TIME ON-SITE employee = NOT a lead (is_lead=false). They are building a payroll team, not buying your service.
-- R3: The author SELLING their own services ("I'm available", "open to projects", "seeking contract work", "DM me for work", "I offer X", "my services include") = NEVER a lead.
-- R4: A RECRUITER/STAFFING agency posting on behalf of clients = NOT a lead.
-- R5: Job seekers looking for a role for themselves = NOT a lead.
-- R6: Pure content/thought-leadership ("5 tips", "why you need", "trends", "case study") = NOT a lead.
-- R7: NON-ENGLISH posts = NOT a lead.
+BUYING (potential lead):
+- "We're looking for a developer"
+- "I need someone to redesign our website"
+- "Looking for an SEO agency"
+- "Can anyone recommend a good paid ads agency?"
+- "We need a freelancer to edit our videos"
+- "We need help improving our Shopify conversion rate"
 
-WHO IS THE SUBJECT? (the single most important question)
-SELLING (reject): "I'm available for X", "I'm open to remote work", "I'm seeking projects", "I offer X", "DM me for X", "I provide X", "My services include". Headline reads "Freelance X" and the post promotes availability.
-BUYING (accept): "We're looking for a developer", "I need a website", "Looking for someone to build our X", "We are hiring a freelance X for a project", "Anyone know a good agency?", "Recommendations for X services?", or a business describing a problem it needs solved.
-"Looking for partners/agencies/marketers" = SOURCING suppliers = BUYER.
-RECRUITER EXCEPTION: staffing agency placing candidates at THIRD-PARTY clients = reject. A firm saying "Experts required for our projects" = BUYING expertise = ACCEPT.
+SELLING (reject):
+- "I'm available for freelance work"
+- "I'm open to new projects"
+- "I offer web development services"
+- "DM me if you need a designer"
+- "My agency is taking on new clients"
+- "I'm a freelance SEO specialist looking for projects"
 
-SCORING (six dimensions, then total):
-- service_match (0-25): direct mention of the service = 25; adjacent problem = 20; general growth = 15; vague = 10; unrelated = 0.
-- business_problem (0-20): metrics declining/explicit build needed = 20; clear pain = 15; dissatisfaction = 10; exploring = 5; none = 0.
-- buying_intent (0-20): explicit vendor search with budget/ASAP = 20; HIRING freelancer/contractor/remote/part-time = 18; strong implicit ("recommendations?") = 15; problem + commercial context = 10; passive = 5; none = 0.
-- decision_maker_likelihood (0-15): Founder/CEO/Owner/VP/Director = 15; Manager/Lead = 12; unclear but business context = 10; individual contributor = 5; student = 0.
-- urgency (0-10): urgent/ASAP = 10; looking now = 8; soon = 7; active problem no timeline = 5; none = 0.
-- outreach_worthiness (0-10): explicit vendor search + problem + decision maker = 10; strong problem + reachable role = 8; clear problem unclear authority = 6; vague = 4; wrong audience = 0.
+==================================================
+HARD REJECTION RULES (is_lead=false, score=0)
+==================================================
 
-lead_score = sum (0-100).
+R1 — SELLER: Author selling their own services
+R2 — JOB SEEKER: Author looking for employment/clients for themselves
+R3 — RECRUITER/STAFFING: Sourcing candidates for third-party employers
+R4 — FULL-TIME EMPLOYEE: Permanent full-time hire (unless user specifically does recruitment)
+R5 — FREE/UNPAID WORK: Volunteer, favors, student projects
+R6 — CONTENT: Tips, trends, thought leadership, tutorials, case studies, opinions
+R7 — SELF-PROMOTION: Promoting own service/agency/portfolio
+R8 — THIRD-PARTY TALENT: Sourcing freelancers for another company
+R9 — SERVICE MISMATCH: Requirement doesn't match user's service
+R10 — KEYWORD TRAP: Post contains service keywords but NO buying intent
+  Examples of keyword traps (NOT leads):
+  - "SEO is important for SaaS"
+  - "Looking for SEO professionals to follow"
+  - "Web development trends"
+  - "Any developers here?"
+  There MUST be evidence of: a requirement, project, problem, vendor search, recommendation request, or hiring need.
+R11 — DUPLICATE: Same requirement from same person/company
+R12 — NON-ENGLISH: Post not in English
 
-TIERS:
-- 85+ HOT: explicit need or active hiring + decision-maker + concrete problem.
-- 70-84 WARM: clear problem or hiring intent, may need light nurturing.
-- 40-69 POTENTIAL: relevant but vague; still worth saving.
-- 25-39 BORDERLINE: weak signal but real buyer context.
-- <25 NOT a lead.
+==================================================
+BUYING SIGNAL TYPES
+==================================================
 
-CONSISTENCY: is_lead=true requires lead_score>=25 AND service_match>=10. hiring+full_time_onsite => is_lead=false. agency/irrelevant => is_lead=false.
+- explicit_service_request: Directly asking for a service provider
+- vendor_recommendation: Asking for recommendations/referrals
+- hiring: Seeking freelance/contract/external expertise
+- business_problem: Describing a problem the user's service can solve
+- project_need: Current/upcoming project requires the service
+- provider_dissatisfaction: Unhappy with existing provider
+- research: Evaluating options, weaker buying evidence
 
-For each lead, return ONLY a JSON array:
+==================================================
+SCORING (5 dimensions, total 0-100)
+==================================================
+
+BUYING INTENT (0-30):
+30 = explicit provider/service request with clear need
+27 = explicit freelancer/contractor/external provider requirement
+25 = direct recommendation/vendor request
+22 = clear problem requiring the service
+15 = legitimate but vague requirement
+5 = weak commercial signal
+0 = no buying intent
+
+REQUIREMENT CLARITY (0-20):
+20 = specific service + clear deliverable/project
+17 = clear service requirement
+12 = legitimate but general
+5 = vague requirement
+0 = no meaningful requirement
+
+DECISION-MAKER RELEVANCE (0-20):
+20 = founder/CEO/owner directly requesting
+18 = VP/director/head with relevant responsibility
+15 = manager/lead with relevant responsibility
+10 = employee posting for the company
+5 = authority unclear
+0 = no credible buyer relevance
+
+URGENCY (0-15):
+15 = ASAP/urgent/immediate
+12 = actively looking now
+10 = current project/starting soon
+5 = active requirement but no timeline
+2 = future consideration
+0 = no urgency
+
+COMMERCIAL POTENTIAL (0-15):
+15 = explicit budget, commercial project, provider search
+12 = clearly commercial business requirement
+8 = likely commercial requirement
+3 = commercial potential unclear
+0 = non-commercial
+
+TOTAL = buying_intent + requirement_clarity + decision_maker + urgency + commercial_potential
+
+==================================================
+TIERS
+==================================================
+
+75-100 = HOT
+40-74 = WARM
+Below 40 = REJECT
+
+MINIMUM for is_lead=true:
+- score >= 40
+- buying_intent > 0
+- requirement_clarity >= 5
+- genuine service match
+- no hard rejection rule
+
+==================================================
+OUTPUT FORMAT
+==================================================
+
+Return ONLY valid JSON array:
 [
   {{
     "name": "Full Name",
@@ -148,29 +216,34 @@ For each lead, return ONLY a JSON array:
     "company": "Company Name",
     "location": "City, Country",
     "linkedin_url": "LinkedIn profile URL",
+    "is_lead": true,
     "score": 85,
-    "service_match": 22,
-    "business_problem": 18,
-    "buying_intent": 17,
-    "decision_maker_likelihood": 13,
-    "urgency": 8,
-    "outreach_worthiness": 7,
-    "lead_type": "explicit_need|problem_awareness|research|hiring|agency|irrelevant",
+    "tier": "HOT",
+    "buying_intent": 27,
+    "requirement_clarity": 18,
+    "decision_maker_likelihood": 18,
+    "urgency": 12,
+    "commercial_potential": 10,
+    "lead_type": "explicit_service_request|vendor_recommendation|hiring|business_problem|project_need|provider_dissatisfaction|research",
     "work_type": "remote|contract|part_time|full_time_onsite|unknown",
-    "reason": "1-2 sentences with SPECIFIC quoted evidence from the post",
+    "evidence_strength": "explicit|strong|moderate",
+    "outreach_competition": "very_low|low|moderate|high|very_high",
+    "comments": 8,
+    "likes": 35,
+    "reason": "1-2 sentences with SPECIFIC evidence from post",
     "outreach_angle": "one specific opening line referencing their exact situation (max 25 words)",
-    "post_content": "First 200 chars of their post",
-    "engagement": {{"likes": 10, "comments": 5}}
+    "post_content": "First 200 chars of post"
   }}
 ]
 
-Rules:
-- is_lead=false leads get score=0 and lead_type="agency" or "irrelevant"
-- Score >= 15 to include as a lead (reject only clearly irrelevant posts)
-- When in doubt, INCLUDE the lead — better to have extra leads than miss real buyers
+RULES:
+- Return ONLY valid JSON, no markdown
+- Maximum 50 qualifying leads
+- Never include leads below score 40
+- Never include rejected candidates
 - Sort by score descending
-- Maximum 50 leads
-- Only return the JSON array, no other text
+- Preserve LinkedIn URLs and engagement numbers exactly
+- Use null when info unavailable
 """
 
 
@@ -418,7 +491,7 @@ If a field is not mentioned, use null.""",
         qualified.sort(key=lambda x: x.get("score", 0), reverse=True)
 
         # If we have fewer than requested, accept remaining authors with
-        # a minimum score of 15 (down from 25) as a fallback
+        # a minimum score of 30 as a fallback
         requested_count = context.get("count", 20)
         if len(qualified) < requested_count:
             qualified_urls = {l.get("linkedin_url", "").lower() for l in qualified}
@@ -427,11 +500,13 @@ If a field is not mentioned, use null.""",
                 if a.get("linkedin_url", "").lower() not in qualified_urls
                 and a.get("linkedin_url")
             ]
-            # Accept top remaining as "potential" leads with score 30
+            # Accept top remaining as "research" leads with score 30
             for author in remaining[:requested_count - len(qualified)]:
                 author["score"] = 30
+                author["is_lead"] = True
                 author["lead_type"] = "research"
                 author["work_type"] = "unknown"
+                author["evidence_strength"] = "moderate"
                 author["reason"] = "Accepted as fallback — matches niche criteria"
                 author["outreach_angle"] = ""
                 qualified.append(author)
@@ -440,7 +515,7 @@ If a field is not mentioned, use null.""",
         return qualified[:max(requested_count, 50)]
 
     def _ai_qualify_batch(self, batch: list[dict], context: dict) -> list[dict]:
-        """Qualify a batch of leads with AI scoring."""
+        """Qualify a batch of leads with AI scoring (V3 format)."""
         prompt = QUALIFICATION_PROMPT.format(
             niche=context.get("niche", ""),
             roles=context.get("roles", ""),
@@ -463,13 +538,12 @@ If a field is not mentioned, use null.""",
 
         # Extract JSON from response
         try:
-            # Try to find JSON array in the response
             start = result_text.find("[")
             end = result_text.rfind("]") + 1
             if start >= 0 and end > start:
                 leads = json.loads(result_text[start:end])
-                # Filter: accept leads with score >= 15 (lower threshold)
-                return [l for l in leads if l.get("score", 0) >= 15 and l.get("is_lead", True)]
+                # Filter: accept leads with score >= 40 (V3 threshold)
+                return [l for l in leads if l.get("score", 0) >= 40 and l.get("is_lead", True)]
         except json.JSONDecodeError:
             logger.warning(f"[HyperAgent] Failed to parse AI qualification response")
 
@@ -483,38 +557,46 @@ If a field is not mentioned, use null.""",
         return str(loc) if loc else ""
 
     def save_leads(self, leads: list[dict], user_id: str, search_id: str) -> int:
-        """Save qualified leads to the database.
-
-        Returns:
-            Number of leads saved
-        """
+        """Save qualified leads to the database (V3 format)."""
         saved = 0
         for lead in leads:
             try:
                 score = lead.get("score", 0)
                 is_lead = lead.get("is_lead", True) if "is_lead" in lead else True
-                if not is_lead or score < 15:
+                if not is_lead or score < 40:
                     continue
 
-                lead_category = "hot" if score >= 85 else "warm"
+                lead_category = "hot" if score >= 75 else "warm"
 
-                # Map AI semantic type to post_type CHECK values
+                # Map V3 lead_type to post_type CHECK values
                 ai_type = (lead.get("lead_type") or "").lower()
-                if ai_type in ("explicit_need", "problem_awareness", "research"):
+                if ai_type in ("explicit_service_request", "vendor_recommendation", "business_problem", "project_need", "provider_dissatisfaction", "research"):
                     post_type = "buyer"
-                elif ai_type == "agency":
-                    post_type = "agency"
                 elif ai_type == "hiring":
                     post_type = "hiring"
                 else:
                     post_type = "buyer"
+
+                # Build headline with work_type tag
+                headline = lead.get("headline") or ""
+                work_type = (lead.get("work_type") or "").lower()
+                work_label = {
+                    "remote": "🌍 Remote",
+                    "contract": "📄 Contract",
+                    "part_time": "⏱️ Part-time",
+                    "full_time_onsite": "🏢 On-site",
+                }.get(work_type)
+                if work_label and headline:
+                    headline = f"{work_label} — {headline}"
+                elif work_label:
+                    headline = work_label
 
                 self.db.table("leads").insert({
                     "user_id": user_id,
                     "search_id": search_id,
                     "source": "hyper_agent",
                     "business_name": lead.get("name", "Unknown"),
-                    "headline": lead.get("headline", ""),
+                    "headline": headline,
                     "linkedin_url": lead.get("linkedin_url", ""),
                     "full_address": lead.get("location", ""),
                     "category": lead.get("company", ""),

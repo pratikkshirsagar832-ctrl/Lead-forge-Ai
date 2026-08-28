@@ -19,6 +19,7 @@ interface Lead {
   company: string
   location: string
   linkedin_url: string
+  post_url: string
   score: number
   tier: string
   lead_type: string
@@ -322,14 +323,14 @@ Here are your top leads (scored 0-100):`,
                         </span>
                       </td>
                       <td className="py-2 px-2">
-                        {lead.linkedin_url && (
+                        {lead.post_url && (
                           <a
-                            href={lead.linkedin_url}
+                            href={lead.post_url}
                             target="_blank"
                             rel="noopener noreferrer"
                             className="text-violet hover:underline"
                           >
-                            View →
+                            View Post →
                           </a>
                         )}
                       </td>

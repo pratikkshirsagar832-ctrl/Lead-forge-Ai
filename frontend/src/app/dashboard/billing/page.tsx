@@ -117,7 +117,7 @@ function BillingContent() {
       };
 
       const rzp = new Razorpay(options);
-      rzp.on('payment.failed', (response: { error?: { description?: string } }) => {
+      rzp.on('payment.failed', (response: any) => {
         setError(response.error?.description || 'Payment failed');
         setIsProcessing(false);
       });

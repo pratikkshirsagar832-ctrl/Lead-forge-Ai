@@ -1,96 +1,99 @@
-'use client';
+'use client'
 
-export const dynamic = 'force-dynamic';
+import { useEffect, useState } from 'react'
+import { useRouter, useSearchParams } from 'next/navigation'
+import { supabase } from '@/lib/supabase'
+import api, { setLocalToken } from '@/lib/api'
+import { Loader2 } from 'lucide-react'
 
-import { useEffect, useState, useRef } from 'react';
-import { useRouter } from 'next/navigation';
-import { supabase } from '@/lib/supabase';
-import { Loader2 } from 'lucide-react';
-
-function hasGuestSession(): boolean {
-  if (typeof window === 'undefined') return false;
-  return localStorage.getItem('hyperclients_guest') === 'true';
-}
-
-export default function AuthCallbackPage() {
-  const router = useRouter();
-  const [error, setError] = useState('');
-  const mountedRef = useRef(true);
+export default function AuthCallback() {
+  const router = useRouter()
+  const searchParams = useSearchParams()
+  const [error, setError] = useState('')
+  const [processing, setProcessing] = useState(true)
 
   useEffect(() => {
-    mountedRef.current = true;
-
-    const redirectToLogin = () => {
-      if (mountedRef.current) router.replace('/login?error=auth_config');
-    };
-
     const handleCallback = async () => {
       try {
-        if (hasGuestSession()) {
-          router.replace('/dashboard');
-          return;
-        }
-
-        const hashParams = new URLSearchParams(window.location.hash.replace('#', '?'));
-        const queryParams = new URLSearchParams(window.location.search);
-
-        const code = queryParams.get('code');
+        // Exchange code for Supabase session
+        const code = searchParams.get('code')
         if (code) {
-          await supabase.auth.exchangeCodeForSession(code);
-          if (mountedRef.current) router.replace('/dashboard');
-          return;
+          const { data, error: exchangeError } = await supabase.auth.exchangeCodeForSession(code)
+          if (exchangeError) throw exchangeError
+
+          if (data?.session?.access_token) {
+            // Exchange Supabase token for local JWT
+            const res = await api.post('/api/auth/google', {
+              access_token: data.session.access_token,
+            })
+
+            if (res.data?.token) {
+              setLocalToken(res.data.token)
+              router.replace('/dashboard')
+              return
+            }
+          }
         }
 
-        const accessToken = hashParams.get('access_token');
-        const refreshToken = hashParams.get('refresh_token');
+        // Try hash-based tokens (implicit OAuth flow)
+        const hashParams = new URLSearchParams(window.location.hash.substring(1))
+        const accessToken = hashParams.get('access_token')
+        const refreshToken = hashParams.get('refresh_token')
+
         if (accessToken && refreshToken) {
           const { error: sessionError } = await supabase.auth.setSession({
             access_token: accessToken,
             refresh_token: refreshToken,
-          } as { access_token: string; refresh_token: string });
-          if (!sessionError && mountedRef.current) router.replace('/dashboard');
-          else redirectToLogin();
-          return;
+          })
+          if (sessionError) throw sessionError
+
+          // Exchange Supabase token for local JWT
+          const res = await api.post('/api/auth/google', {
+            access_token: accessToken,
+          })
+
+          if (res.data?.token) {
+            setLocalToken(res.data.token)
+            router.replace('/dashboard')
+            return
+          }
         }
 
-        const { data: { session } } = await supabase.auth.getSession();
-        if (mountedRef.current && session) {
-          router.replace('/dashboard');
-          return;
+        // Check if session already exists
+        const { data: { session } } = await supabase.auth.getSession()
+        if (session?.access_token) {
+          const res = await api.post('/api/auth/google', {
+            access_token: session.access_token,
+          })
+
+          if (res.data?.token) {
+            setLocalToken(res.data.token)
+            router.replace('/dashboard')
+            return
+          }
         }
 
-        redirectToLogin();
-      } catch (err) {
-        console.error('Auth callback error:', err);
-        redirectToLogin();
+        throw new Error('No authentication data found')
+      } catch (err: any) {
+        console.error('Auth callback error:', err)
+        setError(err.message || 'Authentication failed')
+        setProcessing(false)
+        setTimeout(() => {
+          router.replace('/login?error=auth_config')
+        }, 2000)
       }
-    };
+    }
 
-    handleCallback();
-  }, [router]);
-
-  if (error) {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-navy font-sans">
-        <div className="text-center">
-           <p className="text-rose-400 mb-4">{String(error)}</p>
-          <button
-            onClick={() => router.push('/login?error=auth_config')}
-            className="px-6 py-2 rounded-lg bg-steel text-offwhite font-semibold hover:opacity-90 transition-opacity"
-          >
-            Back to Login
-          </button>
-        </div>
-      </div>
-    );
-  }
+    handleCallback()
+  }, [searchParams, router])
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-navy font-sans">
-      <div className="flex items-center gap-3">
+      <div className="flex flex-col items-center gap-3">
         <Loader2 className="w-6 h-6 text-steel animate-spin" />
         <p className="text-ice/60">Completing sign in...</p>
+        {error && <p className="text-rose-400 text-sm">{error}</p>}
       </div>
     </div>
-  );
+  )
 }

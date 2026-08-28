@@ -1,50 +1,69 @@
-import axios from 'axios';
-import { supabase } from './supabase';
+"use client"
 
-const envApiUrl = process.env.NEXT_PUBLIC_API_URL?.trim();
-const isBrowser = typeof window !== 'undefined';
-const apiBaseUrl = isBrowser ? '' : (envApiUrl || 'http://localhost:8000');
+/**
+ * API client with local JWT Bearer token injection.
+ * Token is stored in localStorage as 'leadforge_token'.
+ */
+
+import axios from "axios"
+
+const isBrowser = typeof window !== "undefined"
 
 const api = axios.create({
-  baseURL: apiBaseUrl,
-  headers: { 'Content-Type': 'application/json' },
-  timeout: 30000,
-});
+  baseURL: isBrowser ? "" : (process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"),
+})
 
-let refreshPromise: Promise<any> | null = null;
+function getLocalToken(): string | null {
+  if (!isBrowser) return null
+  return localStorage.getItem("leadforge_token")
+}
 
-api.interceptors.request.use(async (config) => {
-  if (isBrowser) {
-    const { data: { session } } = await supabase.auth.getSession();
-    if (session?.access_token) {
-      config.headers.Authorization = `Bearer ${session.access_token}`;
-    }
+function setLocalToken(token: string) {
+  if (isBrowser) localStorage.setItem("leadforge_token", token)
+}
+
+function clearLocalToken() {
+  if (isBrowser) localStorage.removeItem("leadforge_token")
+}
+
+function redirectToLogin() {
+  if (isBrowser && !window.location.pathname.startsWith("/login")) {
+    window.location.href = "/login"
   }
-  return config;
-});
+}
 
+// Request interceptor — attach Bearer token
+api.interceptors.request.use(async (config) => {
+  const token = getLocalToken()
+  if (token) {
+    config.headers.Authorization = `Bearer ${token}`
+  }
+  return config
+})
+
+// Response interceptor — on 401, try to refresh token once
 api.interceptors.response.use(
   (response) => response,
   async (error) => {
-    if (error.response?.status === 401 && isBrowser && !error.config._retry) {
-      error.config._retry = true;
-      if (!refreshPromise) {
-        const { data: { session } } = await supabase.auth.getSession();
-        if (session) {
-          refreshPromise = supabase.auth.refreshSession().finally(() => {
-            refreshPromise = null;
-          });
-        }
-      }
-      const { data } = await refreshPromise!;
-      if (data?.session) {
-        error.config.headers.Authorization = `Bearer ${data.session.access_token}`;
-        return api(error.config);
-      }
-      window.location.href = '/login';
-    }
-    return Promise.reject(error);
-  }
-);
+    const originalRequest = error.config
 
-export default api;
+    if (error.response?.status === 401 && isBrowser && !originalRequest._retry) {
+      originalRequest._retry = true
+
+      const token = getLocalToken()
+      if (!token) {
+        redirectToLogin()
+        return Promise.reject(error)
+      }
+
+      // Token is invalid/expired — clear and redirect to login
+      clearLocalToken()
+      redirectToLogin()
+    }
+
+    return Promise.reject(error)
+  },
+)
+
+export { getLocalToken, setLocalToken, clearLocalToken }
+export default api

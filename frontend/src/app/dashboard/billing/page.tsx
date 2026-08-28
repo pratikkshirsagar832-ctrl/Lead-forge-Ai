@@ -4,7 +4,6 @@ export const dynamic = 'force-dynamic';
 
 import { Suspense, useEffect, useState, useRef, type ElementType } from 'react';
 import { useSearchParams } from 'next/navigation';
-import { supabase } from '@/lib/supabase';
 import api from '@/lib/api';
 import { GlassCard } from '@/components/shared/GlassCard';
 import { LoadingButton } from '@/components/shared/LoadingButton';
@@ -94,7 +93,7 @@ function BillingContent() {
         name: 'Hyperclients',
         description: `${order.plan_name} Plan`,
         order_id: order.order_id,
-        prefill: { email: (await supabase.auth.getUser()).data.user?.email },
+        prefill: { email: (await api.get('/api/auth/me')).data?.email },
         theme: { color: '#6366f1' },
         handler: async (response: unknown) => {
           const r = response as RazorpayResponse;

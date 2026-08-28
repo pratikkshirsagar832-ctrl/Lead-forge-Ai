@@ -5,8 +5,7 @@ import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import Image from 'next/image';
 import { cn } from '@/lib/utils';
-import { supabase } from '@/lib/supabase';
-import api from '@/lib/api';
+import api, { clearLocalToken } from '@/lib/api';
 import {
   LayoutDashboard,
   Search,
@@ -48,23 +47,23 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
 
   useEffect(() => {
     const fetchUser = async () => {
-      const { data: { user: u } } = await supabase.auth.getUser();
-      if (u) setUser(u);
-
       try {
         const resp = await api.get('/api/auth/me');
-        if (resp.data?.subscription) {
-          setSubscription(resp.data.subscription);
+        if (resp.data) {
+          setUser({ email: resp.data.email, name: resp.data.name });
+          if (resp.data.subscription) {
+            setSubscription(resp.data.subscription);
+          }
         }
       } catch (e) {
-        console.error('Failed to fetch subscription:', e);
+        console.error('Failed to fetch user:', e);
       }
     };
     fetchUser();
   }, []);
 
-  const handleLogout = async () => {
-    await supabase.auth.signOut();
+  const handleLogout = () => {
+    clearLocalToken();
     window.location.href = '/login';
   };
 

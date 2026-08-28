@@ -4,8 +4,7 @@ export const dynamic = 'force-dynamic';
 
 import { useState, useEffect } from 'react';
 import Link from 'next/link';
-import { supabase } from '@/lib/supabase';
-import api from '@/lib/api';
+import api, { getLocalToken } from '@/lib/api';
 import { GlassCard } from '@/components/shared/GlassCard';
 import { LoadingButton } from '@/components/shared/LoadingButton';
 import { Footer } from '@/components/landing/Footer';
@@ -46,10 +45,10 @@ export default function PricingPage() {
 
   useEffect(() => {
     const init = async () => {
-      const { data: { session: s } } = await supabase.auth.getSession();
-      setSession(s);
+      const token = getLocalToken();
+      setSession(token ? { access_token: token } : null);
 
-      if (s) {
+      if (token) {
         try {
           const resp = await api.get('/api/auth/me');
           if (resp.data?.subscription) {

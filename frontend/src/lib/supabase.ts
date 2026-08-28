@@ -1,59 +1,50 @@
-import { createClient, type SupabaseClient } from '@supabase/supabase-js';
+"use client"
 
-let _supabase: SupabaseClient | null = null;
+/**
+ * Supabase client — ONLY used for Google OAuth sign-in.
+ * All other auth goes through local JWT (stored in localStorage).
+ */
 
-function getOrCreateClient(): SupabaseClient {
-  if (!_supabase) {
-    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL?.trim();
-    const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY?.trim();
+import { createClient, SupabaseClient } from "@supabase/supabase-js"
 
-    if (!supabaseUrl || !supabaseAnonKey) {
-      console.error(
-        '[supabase] Not configured: set NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_ANON_KEY. Auth features will fail.'
-      );
-      return createUnconfiguredClient();
-    }
+const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || ""
+const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || ""
 
-    _supabase = createClient(supabaseUrl, supabaseAnonKey, {
+function createSupabaseClient(): SupabaseClient {
+  if (!supabaseUrl || !supabaseAnonKey) {
+    // Return stub client when env vars missing
+    return {
       auth: {
-        persistSession: true,
-        autoRefreshToken: true,
-        detectSessionInUrl: false,
+        getSession: async () => ({ data: { session: null }, error: null }),
+        getUser: async () => ({ data: { user: null }, error: null }),
+        signOut: async () => ({ error: null }),
+        signInWithPassword: async () => ({ data: null, error: new Error("Supabase not configured") }),
+        signUp: async () => ({ data: null, error: new Error("Supabase not configured") }),
+        signInWithOAuth: async () => ({ data: null, error: new Error("Supabase not configured") }),
+        exchangeCodeForSession: async () => ({ data: null, error: new Error("Supabase not configured") }),
+        setSession: async () => ({ data: null, error: new Error("Supabase not configured") }),
+        onAuthStateChange: () => ({ data: { subscription: { unsubscribe: () => {} } } }),
       },
-    });
+    } as unknown as SupabaseClient
   }
-  return _supabase;
+  return createClient(supabaseUrl, supabaseAnonKey, {
+    auth: {
+      persistSession: false,
+      autoRefreshToken: false,
+      detectSessionInUrl: false,
+    },
+  })
 }
 
-function createUnconfiguredClient(): SupabaseClient {
-  const notConfigured = () =>
-    new Error(
-      'Supabase is not configured. Set NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_ANON_KEY environment variables.'
-    );
-  const methods: Record<string, () => Promise<unknown>> = {
-    getSession: async () => ({ data: { session: null }, error: null }),
-    getUser: async () => ({ data: { user: null }, error: null }),
-    signOut: async () => ({ error: null }),
-    signUp: async () => ({ data: null, error: notConfigured() }),
-    signInWithPassword: async () => ({ data: null, error: notConfigured() }),
-    signInWithOAuth: async () => ({ data: null, error: notConfigured() }),
-    exchangeCodeForSession: async () => ({ data: null, error: notConfigured() }),
-    setSession: async () => ({ data: null, error: notConfigured() }),
-  };
-  const namespace = () =>
-    new Proxy({} as Record<string, unknown>, {
-      get: (_t, key) =>
-        key === 'onAuthStateChange'
-          ? () => ({ data: { subscription: { unsubscribe() {} } }, error: null })
-          : (methods[key as string] ?? (async () => ({ data: null, error: notConfigured() }))),
-    });
-  return new Proxy({} as SupabaseClient, {
-    get: () => namespace(),
-  });
+let _client: SupabaseClient | null = null
+
+function getClient(): SupabaseClient {
+  if (!_client) _client = createSupabaseClient()
+  return _client
 }
 
-export const supabase = new Proxy<SupabaseClient>({} as SupabaseClient, {
-  get(_, prop) {
-    return getOrCreateClient()[prop as keyof SupabaseClient];
+export const supabase = new Proxy({} as SupabaseClient, {
+  get(_, prop: string) {
+    return (getClient() as any)[prop]
   },
-});
+})

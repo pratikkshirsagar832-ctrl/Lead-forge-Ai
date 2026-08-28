@@ -4,7 +4,7 @@ export const dynamic = 'force-dynamic';
 
 import { useEffect, useState } from 'react';
 import { GlassCard } from '@/components/shared/GlassCard';
-import { supabase } from '@/lib/supabase';
+import api from '@/lib/api';
 import { User, Mail, Loader2 } from 'lucide-react';
 
 export default function SettingsPage() {
@@ -13,8 +13,12 @@ export default function SettingsPage() {
 
   useEffect(() => {
     const fetchUser = async () => {
-      const { data: { user: u } } = await supabase.auth.getUser();
-      setUser(u);
+      try {
+        const resp = await api.get('/api/auth/me');
+        if (resp.data) setUser({ email: resp.data.email });
+      } catch (e) {
+        console.error('Failed to fetch user:', e);
+      }
       setIsLoading(false);
     };
     fetchUser();

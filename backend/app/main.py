@@ -8,7 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.config import get_settings
 from app.database import get_supabase_admin
 
-from app.routers import search, leads, dashboard, ai, auth, subscriptions
+from app.routers import search, leads, dashboard, ai, auth, subscriptions, hyper_agent
 
 logging.basicConfig(
     level=logging.INFO,
@@ -75,6 +75,7 @@ def create_app() -> FastAPI:
     app.include_router(leads.router)
     app.include_router(dashboard.router)
     app.include_router(ai.router)
+    app.include_router(hyper_agent.router)
 
     @app.get("/", tags=["Root"])
     async def root():

@@ -156,7 +156,33 @@ I'll understand your needs, confirm the details, then scrape LinkedIn and qualif
           setSearchStep("✅ Qualifying top leads...")
           await new Promise((r) => setTimeout(r, 500))
 
-          const leads = pollData?.leads || []
+          // Normalize DB rows to the display format used by the table below
+          const leads = (pollData?.leads || []).map((l: any) => {
+            const score = l.ai_confidence_score != null ? Math.round(l.ai_confidence_score * 100) : 0
+            const workMatch = (l.headline || "").match(/^(🌍 Remote|📄 Contract|⏱️ Part-time|🏢 On-site)\s*—?\s*(.*)$/)
+            const workMap: Record<string, string> = {
+              "🌍 Remote": "remote",
+              "📄 Contract": "contract",
+              "⏱️ Part-time": "part_time",
+              "🏢 On-site": "full_time_onsite",
+            }
+            return {
+              id: l.id,
+              name: l.business_name || "Unknown",
+              headline: workMatch ? workMatch[2] : (l.headline || ""),
+              company: l.category || "",
+              location: l.full_address || "",
+              linkedin_url: l.linkedin_url || "",
+              post_url: l.post_url || "",
+              score,
+              tier: score >= 75 ? "HOT" : "WARM",
+              lead_type: l.post_type || "buyer",
+              work_type: workMatch ? workMap[workMatch[1]] : "unknown",
+              reason: l.ai_reason || "",
+              outreach_angle: l.ai_pitch || "",
+              post_content: l.post_text || "",
+            }
+          })
           setLeads(leads)
           setSearchId(search_id)
           setSearchStep(null)

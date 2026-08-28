@@ -166,6 +166,8 @@ export default function LeadDetailPage() {
   const categoryConfig = LEAD_CATEGORIES[leadCatKey as keyof typeof LEAD_CATEGORIES]
     || { label: leadCatKey, color: '#94a3b8', bg: '#f1f5f9' };
 
+  const isLinkedinSource = lead.source === 'linkedin' || lead.source === 'hyper_agent';
+
   return (
     <div className="space-y-6 animate-in fade-in duration-500 pb-12">
       <button
@@ -190,16 +192,16 @@ export default function LeadDetailPage() {
                   {lead.source && (
                     <Badge
                       variant="outline"
-                      className={lead.source === 'linkedin'
+                      className={isLinkedinSource
                         ? 'border-sky-500/30 text-sky-400 bg-sky-500/5'
                         : 'border-emerald-500/30 text-emerald-400 bg-emerald-500/5'}
                     >
-                      {lead.source === 'linkedin'
+                      {isLinkedinSource
                         ? <><Linkedin className="w-3 h-3 mr-1" />LinkedIn</>
                         : <><MapPin className="w-3 h-3 mr-1" />Google Maps</>}
                     </Badge>
                   )}
-                  {lead.source === 'linkedin' && <PostTypeBadge postType={lead.post_type} />}
+                  {isLinkedinSource && <PostTypeBadge postType={lead.post_type} />}
                   {lead.ai_confidence_score != null && (
                     <Badge
                       variant="outline"
@@ -222,7 +224,7 @@ export default function LeadDetailPage() {
                 </div>
                 <h1 className="text-3xl font-bold text-offwhite mb-2">{lead.business_name}</h1>
                 <div className="flex items-center gap-4 text-ice/70">
-                  {lead.source === 'linkedin' ? (
+                  {isLinkedinSource ? (
                     <div className="flex items-center gap-1.5">
                       <Users className="w-5 h-5 text-steel" />
                       <span className="font-semibold text-offwhite">{formatNumber(lead.connections_count || 0)}</span>
@@ -268,7 +270,7 @@ export default function LeadDetailPage() {
             </div>
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 py-6 border-y border-ocean/30">
-              {lead.source === 'linkedin' ? (
+              {isLinkedinSource ? (
                 <>
                   <div className="flex items-start gap-3">
                     <div className="p-2.5 rounded-lg bg-steel/20 text-steel shrink-0">

@@ -166,7 +166,8 @@ For each lead, return ONLY a JSON array:
 
 Rules:
 - is_lead=false leads get score=0 and lead_type="agency" or "irrelevant"
-- Score >= 25 to include as a lead (reject others)
+- Score >= 15 to include as a lead (reject only clearly irrelevant posts)
+- When in doubt, INCLUDE the lead — better to have extra leads than miss real buyers
 - Sort by score descending
 - Maximum 50 leads
 - Only return the JSON array, no other text
@@ -321,7 +322,7 @@ If a field is not mentioned, use null.""",
         logger.info(f"[HyperAgent] Queries: {queries}")
 
         key = self._get_harvest_key()
-        max_posts = count * 3  # Get 3x to have enough for qualification
+        max_posts = count * 5  # Get 5x to have enough after qualification filtering
 
         payload = {
             "searchQueries": queries,
@@ -415,7 +416,28 @@ If a field is not mentioned, use null.""",
 
         # Sort by score and return top leads
         qualified.sort(key=lambda x: x.get("score", 0), reverse=True)
-        return qualified[:50]
+
+        # If we have fewer than requested, accept remaining authors with
+        # a minimum score of 15 (down from 25) as a fallback
+        requested_count = context.get("count", 20)
+        if len(qualified) < requested_count:
+            qualified_urls = {l.get("linkedin_url", "").lower() for l in qualified}
+            remaining = [
+                a for a in authors
+                if a.get("linkedin_url", "").lower() not in qualified_urls
+                and a.get("linkedin_url")
+            ]
+            # Accept top remaining as "potential" leads with score 30
+            for author in remaining[:requested_count - len(qualified)]:
+                author["score"] = 30
+                author["lead_type"] = "research"
+                author["work_type"] = "unknown"
+                author["reason"] = "Accepted as fallback — matches niche criteria"
+                author["outreach_angle"] = ""
+                qualified.append(author)
+            qualified.sort(key=lambda x: x.get("score", 0), reverse=True)
+
+        return qualified[:max(requested_count, 50)]
 
     def _ai_qualify_batch(self, batch: list[dict], context: dict) -> list[dict]:
         """Qualify a batch of leads with AI scoring."""
@@ -445,7 +467,9 @@ If a field is not mentioned, use null.""",
             start = result_text.find("[")
             end = result_text.rfind("]") + 1
             if start >= 0 and end > start:
-                return json.loads(result_text[start:end])
+                leads = json.loads(result_text[start:end])
+                # Filter: accept leads with score >= 15 (lower threshold)
+                return [l for l in leads if l.get("score", 0) >= 15 and l.get("is_lead", True)]
         except json.JSONDecodeError:
             logger.warning(f"[HyperAgent] Failed to parse AI qualification response")
 
@@ -469,7 +493,7 @@ If a field is not mentioned, use null.""",
             try:
                 score = lead.get("score", 0)
                 is_lead = lead.get("is_lead", True) if "is_lead" in lead else True
-                if not is_lead or score < 25:
+                if not is_lead or score < 15:
                     continue
 
                 lead_category = "hot" if score >= 85 else "warm"

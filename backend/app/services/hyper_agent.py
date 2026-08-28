@@ -775,9 +775,9 @@ If a field is not mentioned, use null.""",
                 },
             })
 
-        # Relevance gate: the post MUST mention the service/niche or a
-        # target role keyword, otherwise it's not relevant to what the user
-        # sells. This fixes "leads are not related to my service".
+        # Relevance gate: posts SHOULD mention the service/niche keyword, but
+        # never hard-drop everything — if too few posts match, keep the rest
+        # and let the AI judge with service_match instead (avoids 0 results).
         niche = context.get("niche", "")
         roles = context.get("roles", "")
         relevance_kws: set[str] = set()
@@ -791,14 +791,22 @@ If a field is not mentioned, use null.""",
         if "design" in niche.lower():
             relevance_kws.add(niche.lower().replace("design", "designer").strip())
 
-        authors_filtered = []
         if relevance_kws:
+            authors_filtered = []
             for a in authors:
                 text = ((a.get("post_content") or "") + " " + (a.get("headline") or "")).lower()
                 if any(kw in text for kw in relevance_kws):
                     authors_filtered.append(a)
-            authors = authors_filtered
-            logger.info(f"[HyperAgent] Relevance gate kept {len(authors)}/{len(authors_filtered) if authors_filtered else 0}")
+            logger.info(f"[HyperAgent] Relevance gate: {len(authors_filtered)}/{len(authors)} matched keywords")
+            # Only hard-filter when we still have at least 2x requested count;
+            # otherwise keep everyone and rely on AI service_match scoring.
+            requested_count_hint = 20
+            try:
+                requested_count_hint = int(context.get("count") or 20)
+            except (TypeError, ValueError):
+                pass
+            if len(authors_filtered) >= max(requested_count_hint * 2, 10):
+                authors = authors_filtered
 
         if not authors:
             return []
@@ -816,16 +824,16 @@ If a field is not mentioned, use null.""",
             if not ((q.get("lead_type") == "hiring") and (q.get("work_type") == "full_time_onsite"))
         ]
 
-        # Code-level SELLER gate: reject any lead whose headline/company clearly
-        # indicates a service PROVIDER (freelancer/agency/studio/consultant),
-        # even if the AI misclassified them. We only want real BUYERS.
-        SELLER_HEADLINE_MARKERS = (
-            "freelance", "freelancer", "agency", "agencies", "studio",
-            "consultant", "consulting", "solutions", " services", "llc",
-            " ltd", "marketing co", "digital agency", "web agency",
-            "design agency", "seo agency", "helping businesses",
-            "helping companies", "i help", "we help", "we build",
-            "we provide services", "service provider",
+        # Code-level SELLER gate: reject service PROVIDERS (freelancers,
+        # agencies, studios selling their work). Only strong signals —
+        # company names like "ABC Services LLC" alone must NOT reject a
+        # genuine buyer, otherwise we return 0 results.
+        SELLER_PROVIDER_HEADLINE = (
+            "freelance", "freelancer", "digital agency", "web agency",
+            "design agency", "seo agency", "marketing agency", "social media agency",
+            "i help businesses", "i help companies", "we help businesses",
+            "we help companies", "we build websites", "we build apps",
+            "service provider",
         )
         SELLER_POST_MARKERS = (
             "i offer", "we offer", "i provide", "we provide", "my services",
@@ -834,21 +842,26 @@ If a field is not mentioned, use null.""",
             "taking new clients", "need clients", "i specialize",
             "we specialize", "check out my", "portfolio", "case studies",
             "i'm a freelance", "im a freelance", "i am a freelance",
+            "i am a web developer", "i am a designer", "my agency",
         )
 
         def _is_seller(q: dict) -> bool:
             headline = (q.get("headline") or "").lower()
             company = (q.get("company") or "").lower()
             post = (q.get("post_content") or "").lower()
-            combined = f"{headline} {company}"
-            if any(m in combined for m in SELLER_HEADLINE_MARKERS):
-                # Strongest signal: headline claims to be a provider.
-                # Exception: a company that sells X might still BUY a
-                # complementary service — but the seller markers in the
-                # post tip it over. Default: reject providers.
-                return True
+            # Strong: post is clearly selling their own services
             if any(m in post for m in SELLER_POST_MARKERS):
                 return True
+            # Strong: headline explicitly claims to be a freelancer/provider
+            # AND the post does not clearly ask to BUY the service
+            if any(m in headline for m in SELLER_PROVIDER_HEADLINE):
+                buying_hints = (
+                    "looking for", "need a", "need help", "recommend",
+                    "hiring", "anyone know", "looking to hire", "for our project",
+                )
+                if not any(h in post for h in buying_hints):
+                    return True
+            # Company name alone ("ABC Services LLC") is NEVER enough to reject.
             return False
 
         qualified = [q for q in qualified if not _is_seller(q)]
@@ -902,6 +915,22 @@ If a field is not mentioned, use null.""",
                 batch_qualified = self._ai_triage_batch(batch, context)
                 qualified.extend(batch_qualified)
             qualified.sort(key=lambda x: (x.get("location_match") or False, x.get("score", 0)), reverse=True)
+
+        # Absolute last resort: if every gate combined still yields zero, return
+        # the top candidates that passed country + relevance as research leads
+        # so the user never sees an empty result for a valid query.
+        if not qualified and authors:
+            logger.warning(f"[HyperAgent] All gates produced 0 — falling back to {min(len(authors), requested_count)} top candidates")
+            for author in authors[:min(len(authors), requested_count)]:
+                author = dict(author)
+                author["score"] = 40
+                author["is_lead"] = True
+                author["lead_type"] = "research"
+                author["work_type"] = "unknown"
+                author["evidence_strength"] = "moderate"
+                author["reason"] = "Returned as research candidate after strict qualification found no buyers"
+                author["outreach_angle"] = ""
+                qualified.append(author)
 
         return qualified[:min(requested_count, 50)]
 

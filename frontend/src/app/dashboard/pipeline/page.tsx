@@ -285,6 +285,9 @@ export default function PipelinePage() {
   const [isUpdating, setIsUpdating] = useState(false);
   const [totalCount, setTotalCount] = useState(0);
   const dragSourceStageRef = useRef<StageKey | null>(null);
+  const currentStageRef = useRef<StageKey | null>(null);
+  const leadsByStageRef = useRef(leadsByStage);
+  leadsByStageRef.current = leadsByStage;
 
   const sensors = useSensors(
     useSensor(PointerSensor, {
@@ -335,16 +338,18 @@ export default function PipelinePage() {
   const handleDragStart = useCallback((event: DragStartEvent) => {
     const { active } = event;
     setActiveId(active.id as string);
+    currentStageRef.current = null;
 
+    const snapshot = leadsByStageRef.current;
     for (const stageKey of PIPELINE_STAGES.map((s) => s.key)) {
-      const found = leadsByStage[stageKey].find((l) => l.id === active.id);
+      const found = snapshot[stageKey].find((l) => l.id === active.id);
       if (found) {
         setActiveLead(found);
         dragSourceStageRef.current = stageKey;
         break;
       }
     }
-  }, [leadsByStage]);
+  }, []);
 
   const handleDragOver = useCallback((event: DragOverEvent) => {
     const { active, over } = event;
@@ -352,18 +357,19 @@ export default function PipelinePage() {
 
     const activeLeadId = active.id as string;
     const overId = over.id as string;
+    const snapshot = leadsByStageRef.current;
 
     let sourceStage: StageKey | null = null;
     let targetStage: StageKey | null = null;
 
     for (const stageKey of PIPELINE_STAGES.map((s) => s.key)) {
-      if (leadsByStage[stageKey].some((l) => l.id === activeLeadId)) {
+      if (snapshot[stageKey].some((l) => l.id === activeLeadId)) {
         sourceStage = stageKey;
         break;
       }
     }
     for (const stageKey of PIPELINE_STAGES.map((s) => s.key)) {
-      if (leadsByStage[stageKey].some((l) => l.id === overId)) {
+      if (snapshot[stageKey].some((l) => l.id === overId)) {
         targetStage = stageKey;
         break;
       }
@@ -375,6 +381,8 @@ export default function PipelinePage() {
 
     if (!sourceStage || !targetStage || sourceStage === targetStage) return;
 
+    currentStageRef.current = targetStage;
+
     setLeadsByStage((prev) => {
       const lead = prev[sourceStage!].find((l) => l.id === activeLeadId);
       if (!lead) return prev;
@@ -384,7 +392,7 @@ export default function PipelinePage() {
         [targetStage!]: [...prev[targetStage!], { ...lead, user_status: targetStage! }],
       };
     });
-  }, [leadsByStage]);
+  }, []);
 
   const handleDragEnd = useCallback(async (event: DragEndEvent) => {
     const { active } = event;
@@ -394,28 +402,25 @@ export default function PipelinePage() {
     if (!active) return;
 
     const activeLeadId = active.id as string;
+    const targetStage = currentStageRef.current;
+    const sourceStage = dragSourceStageRef.current;
 
-    let currentStage: StageKey | null = null;
-    for (const stageKey of PIPELINE_STAGES.map((s) => s.key)) {
-      if (leadsByStage[stageKey].some((l) => l.id === activeLeadId)) {
-        currentStage = stageKey;
-        break;
-      }
-    }
+    currentStageRef.current = null;
+    dragSourceStageRef.current = null;
 
-    if (!currentStage || currentStage === dragSourceStageRef.current) return;
+    if (!targetStage || !sourceStage || targetStage === sourceStage) return;
 
     setIsUpdating(true);
     try {
-      await api.patch(API_ROUTES.leads.status(activeLeadId), { user_status: currentStage });
-      showToast(`Moved to ${USER_STATUSES[currentStage].label}`, 'success');
+      await api.patch(API_ROUTES.leads.status(activeLeadId), { user_status: targetStage });
+      showToast(`Moved to ${USER_STATUSES[targetStage].label}`, 'success');
     } catch {
       fetchAllLeads();
       showToast('Failed to update status', 'error');
     } finally {
       setIsUpdating(false);
     }
-  }, [leadsByStage, showToast, fetchAllLeads]);
+  }, [showToast, fetchAllLeads]);
 
   const statCards = useMemo(() => {
     return PIPELINE_STAGES.map((stage) => ({

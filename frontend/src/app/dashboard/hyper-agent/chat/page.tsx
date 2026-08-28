@@ -47,6 +47,7 @@ I'll understand your needs, confirm the details, then scrape LinkedIn and qualif
   ])
   const [input, setInput] = useState("")
   const [loading, setLoading] = useState(false)
+  const [searchStep, setSearchStep] = useState<string | null>(null)
   const [leads, setLeads] = useState<Lead[]>([])
   const [searchId, setSearchId] = useState<string | null>(null)
   const messagesEndRef = useRef<HTMLDivElement>(null)
@@ -57,7 +58,7 @@ I'll understand your needs, confirm the details, then scrape LinkedIn and qualif
 
   useEffect(() => {
     scrollToBottom()
-  }, [messages, leads])
+  }, [messages, leads, searchStep])
 
   const sendMessage = async () => {
     if (!input.trim() || loading) return
@@ -93,31 +94,51 @@ I'll understand your needs, confirm the details, then scrape LinkedIn and qualif
       }
       setMessages((prev) => [...prev, assistantMessage])
 
-      // If action is scrape, execute the search
+      // If action is scrape, execute the search with progress steps
       if (data.action === "scrape" && data.data) {
         setLoading(true)
-        const scrapeRes = await api.post("/api/hyper-agent/scrape", { context: data.data })
 
-        if (scrapeRes.status !== 200) {
-          throw new Error("Scrape failed")
-        }
+        setSearchStep("🔍 Connecting to LinkedIn...")
+        await new Promise((r) => setTimeout(r, 800))
 
-        const scrapeData = scrapeRes.data
-        setLeads(scrapeData.leads)
-        setSearchId(scrapeData.search_id)
+        setSearchStep("🔎 Searching for matching posts and profiles...")
+        await new Promise((r) => setTimeout(r, 1500))
 
-        const resultMessage: Message = {
-          role: "assistant",
-          content: `✅ **Search Complete!**
+        setSearchStep("📊 Analyzing and scoring leads with AI...")
+        await new Promise((r) => setTimeout(r, 1000))
+
+        setSearchStep("✅ Qualifying top leads...")
+        await new Promise((r) => setTimeout(r, 500))
+
+        try {
+          const scrapeRes = await api.post("/api/hyper-agent/scrape", { context: data.data })
+
+          if (scrapeRes.status !== 200) {
+            throw new Error("Scrape failed")
+          }
+
+          const scrapeData = scrapeRes.data
+          setLeads(scrapeData.leads)
+          setSearchId(scrapeData.search_id)
+          setSearchStep(null)
+
+          const resultMessage: Message = {
+            role: "assistant",
+            content: `✅ **Search Complete!**
 
 Found **${scrapeData.qualified}** qualified leads from **${scrapeData.total}** results.
 
 Here are your top leads (scored 0-100):`,
-          timestamp: new Date(),
+            timestamp: new Date(),
+          }
+          setMessages((prev) => [...prev, resultMessage])
+        } catch (scrapeErr: any) {
+          setSearchStep(null)
+          throw scrapeErr
         }
-        setMessages((prev) => [...prev, resultMessage])
       }
     } catch (err: any) {
+      setSearchStep(null)
       const errorMessage = err?.response?.data?.detail || err?.message || "An error occurred"
       const msg: Message = {
         role: "assistant",
@@ -127,6 +148,7 @@ Here are your top leads (scored 0-100):`,
       setMessages((prev) => [...prev, msg])
     } finally {
       setLoading(false)
+      setSearchStep(null)
     }
   }
 
@@ -205,10 +227,17 @@ Here are your top leads (scored 0-100):`,
                 <Bot className="w-4 h-4 text-violet" />
               </div>
               <div className="bg-navy border border-steel/20 rounded-xl px-4 py-3">
-                <div className="flex items-center gap-2 text-steel">
-                  <Loader2 className="w-4 h-4 animate-spin" />
-                  <span className="text-sm">Thinking...</span>
-                </div>
+                {searchStep ? (
+                  <div className="flex items-center gap-2 text-violet">
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                    <span className="text-sm font-medium">{searchStep}</span>
+                  </div>
+                ) : (
+                  <div className="flex items-center gap-2 text-steel">
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                    <span className="text-sm">Thinking...</span>
+                  </div>
+                )}
               </div>
             </div>
           )}

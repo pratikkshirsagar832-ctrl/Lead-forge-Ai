@@ -128,7 +128,7 @@ def _run_with_key(actor_id: str, key: str, payload: dict) -> list[dict]:
         raise ApifyError(f"Invalid Apify input: {response.text[:500]}", 400)
     if response.status_code in RETRYABLE_STATUS_CODES:
         raise ApifyRetryableError(f"{response.text[:500]}", response.status_code)
-    if response.status_code != 201:
+    if response.status_code not in (200, 201):
         raise ApifyRetryableError(f"Unexpected status {response.status_code}: {response.text[:500]}", response.status_code)
 
     return response.json()

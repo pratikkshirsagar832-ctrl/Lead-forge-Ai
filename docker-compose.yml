@@ -1,24 +1,6 @@
-services:
-  postgres:
-    image: postgres:16-alpine
-    ports:
-      - "127.0.0.1:5432:5432"
-    environment:
-      POSTGRES_USER: leadforge
-      POSTGRES_PASSWORD: leadforge_secret_2026
-      POSTGRES_DB: leadforge
-    volumes:
-      - pgdata:/var/lib/postgresql/data
-      - ./backend/sql/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U leadforge -d leadforge"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-    restart: unless-stopped
-    networks:
-      - leadforge
+version: "3.8"
 
+services:
   backend:
     build:
       context: ./backend
@@ -39,9 +21,6 @@ services:
       retries: 3
       start_period: 30s
     restart: unless-stopped
-    depends_on:
-      postgres:
-        condition: service_healthy
     networks:
       - leadforge
 
@@ -62,9 +41,6 @@ services:
     restart: unless-stopped
     networks:
       - leadforge
-
-volumes:
-  pgdata:
 
 networks:
   leadforge:

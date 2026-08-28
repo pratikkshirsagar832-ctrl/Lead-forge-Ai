@@ -13,7 +13,7 @@ security = HTTPBearer(auto_error=False)
 _token_cache: dict[str, dict] = {}
 CACHE_TTL = 60
 _last_cache_cleanup = time.time()
-CACHE_CLEANUP_INTERVAL = 300
+CACHE_CLEANUP_INTERVAL = 300  # purge expired entries every 5 minutes
 
 
 async def get_current_user(
@@ -65,6 +65,7 @@ async def get_current_user(
         except Exception as sub_err:
             logger.warning(f"Subscription auto-creation failed (non-critical): {sub_err}")
 
+        # Periodic cleanup of expired cache entries
         global _last_cache_cleanup
         now = time.time()
         if now - _last_cache_cleanup > CACHE_CLEANUP_INTERVAL:

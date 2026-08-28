@@ -58,6 +58,8 @@ function LoginContent() {
         return;
       }
 
+      // Team members log in with a USERNAME (no email). Resolve it to the
+      // underlying account email first, then sign in with the password.
       let loginEmail = email;
       if (!email.includes('@')) {
         const { data: resolved } = await api.post('/api/auth/team-resolve', { username: email.trim().toLowerCase() });

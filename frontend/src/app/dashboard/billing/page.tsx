@@ -69,6 +69,10 @@ function BillingContent() {
     razorpay_signature: string;
   }
 
+  interface RazorpayError {
+    error?: { description?: string };
+  }
+
   const handleUpgrade = async (plan: Plan) => {
     if (plan.price_monthly <= 0) return;
     const Razorpay = (window as any).Razorpay as { new(options: Record<string, unknown>): { on: (event: string, handler: (response: unknown) => void) => void; open: () => void } } | undefined;
@@ -104,39 +108,28 @@ function BillingContent() {
             setSuccess(`Upgraded to ${plan.name} plan successfully!`);
             loadData();
           } catch (err) {
-            setError('Payment verification failed. Contact support.');
+            const detail = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
+            setError(typeof detail === 'string' ? detail : 'Payment verification failed');
           } finally {
             setIsProcessing(false);
           }
         },
         modal: {
-          ondismiss: () => {
-            setIsProcessing(false);
-          },
+          ondismiss: () => setIsProcessing(false),
         },
       };
 
       const rzp = new Razorpay(options);
-      rzp.on('payment.failed', (response: any) => {
-        setError(response.error?.description || 'Payment failed');
+      rzp.on('payment.failed', (response: unknown) => {
+        const errResp = response as RazorpayError;
+        setError(errResp.error?.description || 'Payment failed');
         setIsProcessing(false);
       });
       rzp.open();
     } catch (err) {
       const detail = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
-      setError(typeof detail === 'string' ? detail : 'Failed to create order');
+      setError(typeof detail === 'string' ? detail : 'Failed to start upgrade');
       setIsProcessing(false);
-    }
-  };
-
-  const handleCancel = async () => {
-    if (!confirm('Are you sure you want to cancel your subscription?')) return;
-    try {
-      await api.post('/api/subscriptions/cancel');
-      setSuccess('Subscription cancelled');
-      loadData();
-    } catch (err) {
-      setError('Failed to cancel subscription');
     }
   };
 
@@ -148,80 +141,143 @@ function BillingContent() {
     );
   }
 
-  const currentMeta = PLAN_META[subscription?.plan_id || 'free'];
+  const currentPlanId = subscription?.plan_id || 'free';
+  const currentMeta = PLAN_META[currentPlanId] || PLAN_META.free;
+  const CurrentIcon = currentMeta.icon;
+  const isTrialExpired = subscription?.is_trial_expired;
 
   return (
-    <div className="max-w-4xl mx-auto space-y-6">
+    <div className="space-y-6 animate-in fade-in duration-500">
       <div className="flex items-center gap-3">
-        <Link href="/dashboard" className="p-2 rounded-lg hover:bg-ocean/20 text-ice/40 hover:text-ice">
-          <ArrowLeft className="w-5 h-5" />
-        </Link>
-        <h1 className="text-2xl font-bold text-offwhite">Billing & Plans</h1>
+        <CreditCard className="w-6 h-6 text-steel" />
+        <h1 className="text-2xl font-bold text-offwhite">Billing & Plan</h1>
       </div>
 
       {error && (
-        <div className="p-4 rounded-xl bg-rose-500/10 border border-rose-500/30 flex items-center gap-3">
-          <AlertCircle className="w-5 h-5 text-rose-400 shrink-0" />
-          <p className="text-sm text-rose-300">{error}</p>
-        </div>
-      )}
-      {success && (
-        <div className="p-4 rounded-xl bg-emerald-500/10 border border-emerald-500/30">
-          <p className="text-sm text-emerald-300">{success}</p>
+        <div className="flex items-center gap-2 p-4 rounded-xl bg-rose-500/10 border border-rose-500/30 text-rose-400 text-sm">
+          <AlertCircle className="w-4 h-4 shrink-0" />
+          {error}
         </div>
       )}
 
+      {success && (
+        <div className="flex items-center gap-2 p-4 rounded-xl bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 text-sm">
+          <Check className="w-4 h-4 shrink-0" />
+          {success}
+        </div>
+      )}
+
+      {/* Current Plan */}
       <GlassCard className="p-6">
-        <h2 className="text-lg font-semibold text-offwhite mb-4">Current Plan</h2>
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            {currentMeta && <currentMeta.icon className={`w-6 h-6 ${currentMeta.color}`} />}
+        <div className="flex items-start justify-between gap-4">
+          <div className="flex items-center gap-4">
+            <div className={`p-3 rounded-xl ${currentMeta.bg}`}>
+              <CurrentIcon className={`w-6 h-6 ${currentMeta.color}`} />
+            </div>
             <div>
-              <p className="text-xl font-bold text-offwhite">{currentMeta?.name || 'Free'}</p>
-              <p className="text-sm text-ice/50">
-                {subscription?.status === 'active' ? 'Active' : subscription?.status === 'trial' ? 'Trial' : 'Inactive'}
-              </p>
+              <p className="text-xs text-ice/50 uppercase tracking-wider font-semibold">Current Plan</p>
+              <h2 className="text-2xl font-bold text-offwhite mt-0.5">{currentMeta.name}</h2>
+              {isTrialExpired && currentPlanId === 'free' && (
+                <p className="text-xs text-rose-400 mt-1">Trial expired — upgrade to continue searching</p>
+              )}
+              {subscription?.trial_end && currentPlanId === 'free' && !isTrialExpired && (
+                <p className="text-xs text-amber-400 mt-1">
+                  Trial ends {new Date(subscription.trial_end).toLocaleDateString()}
+                </p>
+              )}
+              {subscription?.current_period_end && currentPlanId !== 'free' && (
+                <p className="text-xs text-ice/40 mt-1">
+                  Next billing: {new Date(subscription.current_period_end).toLocaleDateString()}
+                </p>
+              )}
             </div>
           </div>
-          {subscription?.plan_id !== 'free' && (
-            <LoadingButton variant="outline" onClick={handleCancel} className="text-rose-400 border-rose-400/30">
-              Cancel Plan
-            </LoadingButton>
-          )}
+          <span className={`px-3 py-1 rounded-full text-xs font-semibold ${currentMeta.bg} ${currentMeta.color}`}>
+            {subscription?.status || 'active'}
+          </span>
         </div>
       </GlassCard>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-        {plans.map((plan) => {
-          const meta = PLAN_META[plan.id] || PLAN_META.free;
-          const isCurrent = plan.id === subscription?.plan_id;
-          return (
-            <GlassCard key={plan.id} className={`p-6 ${isCurrent ? 'ring-2 ring-violet' : ''}`}>
-              <meta.icon className={`w-8 h-8 ${meta.color} mb-3`} />
-              <h3 className="text-lg font-bold text-offwhite">{meta.name}</h3>
-              <p className="text-2xl font-bold text-offwhite mt-2">
-                ${Math.round(plan.price_monthly / 100)}<span className="text-sm font-normal text-ice/50">/mo</span>
-              </p>
-              <ul className="mt-4 space-y-2 text-sm text-ice/60">
-                <li className="flex items-center gap-2"><Check className="w-4 h-4 text-emerald-400" />{plan.searches_per_day} searches/day</li>
-                <li className="flex items-center gap-2"><Check className="w-4 h-4 text-emerald-400" />{plan.leads_per_day} leads/day</li>
-              </ul>
-              {!isCurrent && plan.price_monthly > 0 && (
-                <LoadingButton
-                  fullWidth
-                  className="mt-4"
-                  onClick={() => handleUpgrade(plan)}
-                  isLoading={isProcessing}
-                >
-                  Upgrade
-                </LoadingButton>
-              )}
-              {isCurrent && (
-                <div className="mt-4 text-center text-sm font-semibold text-violet">Current Plan</div>
-              )}
-            </GlassCard>
-          );
-        })}
+      {/* Usage */}
+      <GlassCard className="p-6">
+        <h3 className="text-sm font-semibold text-offwhite mb-4">Daily Usage</h3>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div>
+            <div className="flex justify-between text-xs text-ice/50 mb-1">
+              <span>Searches</span>
+              <span>{subscription?.searches_per_day ? (subscription.searches_per_day - (subscription.remaining_searches || 0)) : 0} / {subscription?.searches_per_day || 1}</span>
+            </div>
+            <div className="h-2 rounded-full bg-ocean/30 overflow-hidden">
+              <div
+                className="h-full rounded-full bg-steel transition-all"
+                style={{ width: `${subscription?.searches_per_day ? ((subscription.searches_per_day - (subscription.remaining_searches || 0)) / subscription.searches_per_day) * 100 : 0}%` }}
+              />
+            </div>
+          </div>
+          <div>
+            <div className="flex justify-between text-xs text-ice/50 mb-1">
+              <span>Leads / day limit</span>
+              <span>{subscription?.leads_per_day ? (subscription.leads_per_day - (subscription.remaining_leads || 0)) : 0} / {subscription?.leads_per_day || 30}</span>
+            </div>
+            <div className="h-2 rounded-full bg-ocean/30 overflow-hidden">
+              <div
+                className="h-full rounded-full bg-emerald-400 transition-all"
+                style={{ width: `${subscription?.leads_per_day ? ((subscription.leads_per_day - (subscription.remaining_leads || 0)) / subscription.leads_per_day) * 100 : 0}%` }}
+              />
+            </div>
+          </div>
+        </div>
+      </GlassCard>
+
+      {/* Available Plans */}
+      <GlassCard className="p-6">
+        <h3 className="text-sm font-semibold text-offwhite mb-4">Available Plans</h3>
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          {plans.filter((p) => p.id !== 'free').map((plan) => {
+            const meta = PLAN_META[plan.id];
+            const Icon = meta?.icon || Zap;
+            const isCurrent = plan.id === currentPlanId;
+            const priceUsd = (plan.price_monthly / 100);
+
+            return (
+              <div
+                key={plan.id}
+                className={`p-5 rounded-xl border transition-all ${isCurrent ? 'border-steel/50 bg-steel/10' : 'border-ocean/40 bg-ocean/10 hover:border-ocean/60'}`}
+              >
+                <div className="flex items-center gap-2 mb-3">
+                  <Icon className={`w-4 h-4 ${meta?.color || 'text-ice/60'}`} />
+                  <h4 className="font-bold text-offwhite">{plan.name}</h4>
+                </div>
+                <p className="text-2xl font-extrabold text-offwhite mb-1">
+                  ${priceUsd}<span className="text-sm font-normal text-ice/40">/mo</span>
+                </p>
+                <p className="text-xs text-ice/50 mb-4">{plan.leads_per_day} leads/day · {plan.searches_per_day} searches</p>
+                {isCurrent ? (
+                  <div className="w-full py-2 rounded-lg bg-steel/20 text-steel text-xs font-semibold text-center">
+                    Current Plan
+                  </div>
+                ) : (
+                  <LoadingButton
+                    fullWidth
+                    className="text-xs"
+                    onClick={() => handleUpgrade(plan)}
+                    isLoading={isProcessing}
+                    disabled={isProcessing}
+                  >
+                    Upgrade
+                  </LoadingButton>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      </GlassCard>
+
+      {/* Need help */}
+      <div className="text-center">
+        <p className="text-xs text-ice/40">
+          Need a custom plan? <Link href="mailto:contact@hyperclients.online" className="text-steel hover:underline">Contact us</Link>
+        </p>
       </div>
     </div>
   );
@@ -229,11 +285,7 @@ function BillingContent() {
 
 export default function BillingPage() {
   return (
-    <Suspense fallback={
-      <div className="flex items-center justify-center py-20">
-        <Loader2 className="w-6 h-6 text-steel animate-spin" />
-      </div>
-    }>
+    <Suspense fallback={<div className="flex items-center justify-center py-20"><Loader2 className="w-6 h-6 text-steel animate-spin" /></div>}>
       <BillingContent />
     </Suspense>
   );

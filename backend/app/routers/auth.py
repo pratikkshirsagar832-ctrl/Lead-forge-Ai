@@ -1,9 +1,3 @@
-"""
-Hyperclients — Auth Router
-
-Auth via Supabase. Data via local PostgreSQL.
-"""
-
 import logging
 import re
 from datetime import date, datetime, timezone
@@ -19,6 +13,7 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/auth", tags=["Auth"])
 
+# Team seats per plan — Free/Solo have none.
 PLAN_SEATS = {"pro": 2, "agency": 10}
 MEMBER_EMAIL_DOMAIN = "members.hyperclients.online"
 USERNAME_RE = re.compile(r"^[a-z0-9_]{3,20}$")
@@ -128,6 +123,8 @@ async def add_team_member(
 
     member_uid = resp.json().get("id")
 
+    # Mirror owner's plan onto the member + registry entry encoded in
+    # razorpay_order_id (no DDL needed for a dedicated table).
     owner_sub = supabase.table("user_subscriptions") \
         .select("current_period_end") \
         .eq("user_id", owner_id) \
@@ -181,6 +178,8 @@ async def remove_team_member(member_id: str, current_user: dict = Depends(get_cu
 
 @router.post("/team-resolve")
 async def resolve_team_username(payload: dict = Body(...)):
+    """Public: turn a team username into its login email so the standard
+    Supabase password sign-in works without exposing synthetic emails."""
     username = (payload.get("username") or "").strip().lower()
     if not USERNAME_RE.match(username):
         raise HTTPException(status_code=400, detail={"message": "Invalid username format"})
@@ -192,6 +191,7 @@ async def get_me(current_user: dict = Depends(get_current_user)):
     supabase = get_supabase_admin()
     subscription = None
 
+    # Compute correct remaining counts from actual table state
     today_str = date.today().isoformat()
     usage_resp = supabase.table("daily_usage") \
         .select("searches_run, leads_generated") \
@@ -214,11 +214,14 @@ async def get_me(current_user: dict = Depends(get_current_user)):
             subscription["remaining_searches"] = max(0, searches_per_day - used_searches)
             subscription["remaining_leads"] = max(0, leads_per_day - used_leads)
 
+        # Direct-table truth check: team members resolve their plan LIVE
+        # from the owner's subscription (upgrades/renewals propagate instantly).
         try:
             from app.services.plans import get_plan_row, resolve_effective_subscription, get_used_today
             eff = resolve_effective_subscription(supabase, current_user["id"])
 
             if eff["status"] not in ("active", "trial"):
+                # Owner lapsed/downgraded below seats → lock the seat down.
                 if eff.get("team_owner_id") and (
                     not subscription or subscription.get("plan_id") != "free"
                 ):
@@ -278,6 +281,7 @@ async def get_me(current_user: dict = Depends(get_current_user)):
                     .execute()
 
                 plan = plan_resp.data[0] if plan_resp.data and len(plan_resp.data) > 0 else {}
+                today_str = date.today().isoformat()
 
                 usage_resp = supabase.table("daily_usage") \
                     .select("searches_run, leads_generated") \

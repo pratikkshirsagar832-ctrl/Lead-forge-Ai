@@ -29,25 +29,39 @@ export default function SettingsPage() {
   }
 
   return (
-    <div className="max-w-2xl mx-auto space-y-6">
-      <h1 className="text-2xl font-bold text-offwhite">Settings</h1>
-      <GlassCard className="p-6">
-        <h2 className="text-lg font-semibold text-offwhite mb-4">Profile</h2>
-        <div className="space-y-4">
-          <div>
-            <label className="block text-xs font-semibold uppercase tracking-wider text-ice/60 mb-1.5">Email</label>
-            <div className="relative">
-              <Mail className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-ice/40" />
-              <input
-                type="email"
-                value={user?.email || ''}
-                readOnly
-                className="w-full pl-10 pr-4 py-2.5 rounded-lg bg-ocean/20 border border-ocean/40 text-ice/60 text-sm"
-              />
+    <div className="space-y-8 animate-in fade-in duration-500">
+      <div>
+        <h1 className="text-3xl font-bold text-offwhite tracking-tight">Settings</h1>
+        <p className="text-ice/60 mt-2">Manage your account preferences and profile details.</p>
+      </div>
+
+      <div className="max-w-3xl">
+        <div className="space-y-6">
+          <GlassCard className="p-8 bg-gradient-to-br from-ocean/30 to-navy border-ocean/40">
+            <h2 className="text-xl font-bold text-offwhite mb-6 flex items-center gap-2">
+              <User className="w-5 h-5 text-steel" />
+              Profile Information
+            </h2>
+
+            <div className="space-y-6">
+              <div>
+                <label className="block text-sm font-medium text-ice/70 mb-2">Email Address</label>
+                <div className="relative">
+                  <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                    <Mail className="h-5 w-5 text-steel" />
+                  </div>
+                  <input
+                    type="email"
+                    disabled
+                    value={user?.email || ''}
+                    className="w-full pl-10 pr-4 py-2.5 rounded-xl border border-ocean/50 bg-navy/80 text-ice/60 cursor-not-allowed"
+                  />
+                </div>
+              </div>
             </div>
-          </div>
+          </GlassCard>
         </div>
-      </GlassCard>
+      </div>
     </div>
   );
 }

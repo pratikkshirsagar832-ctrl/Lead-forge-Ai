@@ -10,4 +10,3 @@ lxml>=5.0.0
 razorpay==2.0.1
 openai>=1.0.0
 scrapling[all]>=0.4.2
-psycopg2-binary>=2.9.9

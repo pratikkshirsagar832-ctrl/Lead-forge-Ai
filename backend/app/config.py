@@ -59,16 +59,6 @@ class Settings(BaseSettings):
 
     environment: str = "development"
 
-    # Local PostgreSQL
-    pg_host: str = "postgres"
-    pg_port: int = 5432
-    pg_database: str = "leadforge"
-    pg_user: str = "leadforge"
-    pg_password: str = "leadforge_secret_2026"
-
-    # JWT
-    jwt_secret: str = "leadforge-jwt-secret-2026-change-in-production"
-
     @model_validator(mode="after")
     def _collect_apify_keys(self):
         self._apify_keys = [

@@ -281,19 +281,41 @@ WORKFLOW — always follow these steps in order:
 5. Score the six dimensions, then compute score.
 6. Cross-check internal consistency before emitting JSON.
 
-HARD RULES (never violate):
+==================================================
+🚨 SELLER REJECTION — READ THIS FIRST (MOST IMPORTANT)
+==================================================
+
+We ONLY want REAL BUYERS: people and companies that NEED a service and are looking to HIRE/PURCHASE it. We NEVER want service providers promoting themselves.
+
+AUTHOR IS A SELLER/PROVIDER (REJECT — is_lead=false, score=0) if ANY of these are true:
+- Their headline contains: "Freelance X", "Founder of X agency", "X Agency", "X Studio", "X Company", "X Consultant", "X Solutions", "X Services", "X Marketing", "Helping businesses with X", "I help businesses", "X agency helping"
+- Their company contains: agency, studio, solutions, services, consultancy, consulting, marketing, digital, media, tech solutions, "& co", "llc" that provides the same service as the target
+- The post promotes their OWN services: "I help", "we help", "we provide", "I provide", "our services", "my agency", "my team", "DM me", "book a call", "portfolio", "check my work", "case studies", "we specialize", "I specialize", "open for projects", "available for work", "taking new clients", "need clients", "clients in X", "I'm looking for clients"
+- They are sharing their work/achievements: "proud to announce", "launched a website for", "my new project", "I built", "we built", "client work", "success story", "case study of"
+
+AUTHOR IS A REAL BUYER (ACCEPT) if:
+- They explicitly need a service: "we're looking for", "I need someone to", "looking for someone who can", "need help with X"
+- They are sourcing: "looking for an agency", "recommend an agency", "who do you use for X?", "need a freelancer for X project", "hiring a designer/developer for our project"
+- They describe a BUSINESS PROBLEM their company has: "our website isn't converting", "our sales dropped", "we don't have a website", "launching a product, need X"
+- "Looking for partners/agencies/marketers/freelancers" = SOURCING suppliers = BUYER.
+
+THE #1 MISTAKE TO AVOID: Rejecting a post just because it mentions the service name. "I help companies with SEO" (seller) vs "our SEO isn't working, need help" (buyer). ALWAYS ask: does the author WANT to buy this service, or DO they provide it?
+
+==================================================
+HARD RULES (never violate)
+==================================================
 - R1: A company/owner HIRING a freelancer/contractor/agency on a REMOTE, CONTRACT or PART-TIME basis = STRONG LEAD.
 - R2: A company hiring a FULL-TIME ON-SITE employee = NOT a lead (is_lead=false). They are building a payroll team, not buying your service.
-- R3: The author SELLING their own services ("I'm available", "open to projects", "seeking contract work", "DM me for work", "I offer X", "my services include") = NEVER a lead, regardless of how well the post matches the niche.
+- R3: SELLER/PROVIDER (see above) = NEVER a lead, regardless of how well the post matches the niche.
 - R4: A RECRUITER/STAFFING agency posting on behalf of clients = NOT a lead.
 - R5: Job seekers looking for a role for themselves = NOT a lead.
 - R6: Pure content/thought-leadership ("5 tips", "why you need", "trends", "case study", "opinion") = NOT a lead even if it scores high on service_match.
 - R7: NON-ENGLISH posts (Spanish, German, French, Hindi, Arabic, etc.) = NOT a lead (is_lead=false). We only serve English-speaking markets.
+- R8: IF HEADLINE SAYS "FREELANCE X" OR "X AGENCY" AND THE POST DOES NOT EXPLICITLY REQUEST THE SERVICE → REJECT. Sellers rarely buy; when in doubt, REJECT.
 
 WHO IS THE SUBJECT? (the single most important question)
-SELLING (reject): "I'm available for X", "I'm open to remote work", "I'm seeking projects", "Looking to collaborate", "I offer X", "DM me for X", "I provide X", "My services include", "I build X". Headline reads "Freelance X" and the post promotes their availability.
+SELLING (reject): "I'm available for X", "I'm open to remote work", "I'm seeking projects", "Looking to collaborate", "I offer X", "DM me for X", "I provide X", "My services include", "I build X", "I help companies". Headline reads "Freelance X"/"X Agency"/"Founder of X Agency" and the post promotes their availability or work.
 BUYING (accept): "We're looking for a developer", "I need a website", "Looking for someone to build our X", "We are hiring a freelance X for a project", "Need a designer on contract", "Anyone know a good agency?", "Recommendations for X services?", or a business describing a problem it needs solved (traffic drop, no website, bad conversions, launching a product).
-"Looking for partners/agencies/marketers/freelancers" = SOURCING suppliers = BUYER.
 RECRUITER EXCEPTION: staffing agency placing candidates at THIRD-PARTY clients = reject. BUT a firm saying "Experts required for our projects" = BUYING expertise = ACCEPT (lead_type="hiring").
 
 SCORING (six dimensions, then total):
@@ -307,7 +329,7 @@ SCORING (six dimensions, then total):
 score = sum (0-100).
 TIERS: 85+ HOT, 70-84 WARM, 40-69 POTENTIAL, 25-39 BORDERLINE, <25 NOT a lead.
 
-CONSISTENCY: is_lead=true requires score>=25 AND service_match>=10. hiring+full_time_onsite => is_lead=false. agency/irrelevant => is_lead=false.
+CONSISTENCY: is_lead=true requires score>=25 AND service_match>=10. hiring+full_time_onsite => is_lead=false. agency/irrelevant => is_lead=false. SELLER (R3/R8) => is_lead=false.
 
 OUTREACH_ANGLE: reference a SPECIFIC detail from their post/company; never generic; 1 sentence under 25 words.
 
@@ -790,6 +812,44 @@ If a field is not mentioned, use null.""",
             if not ((q.get("lead_type") == "hiring") and (q.get("work_type") == "full_time_onsite"))
         ]
 
+        # Code-level SELLER gate: reject any lead whose headline/company clearly
+        # indicates a service PROVIDER (freelancer/agency/studio/consultant),
+        # even if the AI misclassified them. We only want real BUYERS.
+        SELLER_HEADLINE_MARKERS = (
+            "freelance", "freelancer", "agency", "agencies", "studio",
+            "consultant", "consulting", "solutions", " services", "llc",
+            " ltd", "marketing co", "digital agency", "web agency",
+            "design agency", "seo agency", "helping businesses",
+            "helping companies", "i help", "we help", "we build",
+            "we provide services", "service provider",
+        )
+        SELLER_POST_MARKERS = (
+            "i offer", "we offer", "i provide", "we provide", "my services",
+            "our services", "dm me", "book a call", "open to work",
+            "open for work", "available for hire", "available for work",
+            "taking new clients", "need clients", "i specialize",
+            "we specialize", "check out my", "portfolio", "case studies",
+            "i'm a freelance", "im a freelance", "i am a freelance",
+        )
+
+        def _is_seller(q: dict) -> bool:
+            headline = (q.get("headline") or "").lower()
+            company = (q.get("company") or "").lower()
+            post = (q.get("post_content") or "").lower()
+            combined = f"{headline} {company}"
+            if any(m in combined for m in SELLER_HEADLINE_MARKERS):
+                # Strongest signal: headline claims to be a provider.
+                # Exception: a company that sells X might still BUY a
+                # complementary service — but the seller markers in the
+                # post tip it over. Default: reject providers.
+                return True
+            if any(m in post for m in SELLER_POST_MARKERS):
+                return True
+            return False
+
+        qualified = [q for q in qualified if not _is_seller(q)]
+        logger.info(f"[HyperAgent] Seller gate kept {len(qualified)} non-provider leads")
+
         # Lead-type preference gate: if the user only wants certain kinds of
         # leads (hiring / freelancer-seekers / agency-seekers), filter here.
         # This fixes: an agency user should NEVER get hiring posts.
@@ -848,7 +908,16 @@ If a field is not mentioned, use null.""",
 
 For each post below, decide ONE thing: is the AUTHOR a genuine BUYER of this service (hiring freelancers/agencies/contractors, asking for recommendations, or describing a project/requirement the service solves)?
 
-REJECT if the author is: selling their own services, a job seeker, a recruiter/staffing agency, sharing content/tips, hiring for full-time on-site roles, or the post is not English.
+REJECT (do NOT keep) if the author is:
+- SELLING their own services — freelancers, agencies, studios, consultants promoting "I offer", "we help", "DM me", "portfolio", "I provide X", "my services"
+- Their headline reads "Freelance X", "X Agency", "Founder of X Agency", "Consultant", "Solutions", "Studio" and the post does not explicitly request the service
+- A job seeker looking for work for themselves
+- A recruiter/staffing agency placing candidates for clients
+- Sharing content/tips/thought leadership
+- Hiring for full-time on-site roles
+- Post is not English
+
+We ONLY want REAL BUYERS: people/companies that NEED the service. When in doubt, REJECT — better to return fewer, higher-quality leads.
 
 Return ONLY a JSON array of indices of KEEP posts, e.g. [0, 3, 5]. If none, return []."""
 

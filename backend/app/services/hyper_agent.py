@@ -91,19 +91,56 @@ When presenting results, use a clean table with scores.
 - Max 50 leads per search
 """
 
-QUALIFICATION_PROMPT = """You are a lead qualification expert. Score each lead from 0-100 based on:
+QUALIFICATION_PROMPT = """You are a senior B2B lead qualification specialist. You decide whether a LinkedIn post is a genuine BUYING signal that a service provider could convert into a client. Precision matters more than recall: one excellent lead is worth more than ten noise records.
 
-1. **Relevance** (0-25): How well does this person match the target ICP?
-2. **Decision Maker** (0-25): Are they a decision maker or influencer?
-3. **Engagement Quality** (0-25): Is their post genuine engagement or spam?
-4. **Outreach Potential** (0-25): How reachable and likely to respond?
-
-Target ICP:
+TARGET ICP:
 - Niche: {niche}
 - Target Roles: {roles}
 - Location: {location}
 
-For each lead, return ONLY a JSON array with this format:
+WORKFLOW — follow these steps in order:
+1. Read the post and identify the AUTHOR's role (headline/company).
+2. Determine WHO IS THE SUBJECT: is the author BUYING this service, or SELLING their own labor/services?
+3. Identify the work arrangement (remote / contract / part-time / full-time on-site).
+4. Apply the hard rules below.
+5. Score the six dimensions, then compute lead_score.
+6. Cross-check internal consistency before emitting JSON.
+
+HARD RULES (never violate):
+- R1: A company/owner HIRING a freelancer/contractor/agency on a REMOTE, CONTRACT or PART-TIME basis = STRONG LEAD.
+- R2: A company hiring a FULL-TIME ON-SITE employee = NOT a lead (is_lead=false). They are building a payroll team, not buying your service.
+- R3: The author SELLING their own services ("I'm available", "open to projects", "seeking contract work", "DM me for work", "I offer X", "my services include") = NEVER a lead.
+- R4: A RECRUITER/STAFFING agency posting on behalf of clients = NOT a lead.
+- R5: Job seekers looking for a role for themselves = NOT a lead.
+- R6: Pure content/thought-leadership ("5 tips", "why you need", "trends", "case study") = NOT a lead.
+- R7: NON-ENGLISH posts = NOT a lead.
+
+WHO IS THE SUBJECT? (the single most important question)
+SELLING (reject): "I'm available for X", "I'm open to remote work", "I'm seeking projects", "I offer X", "DM me for X", "I provide X", "My services include". Headline reads "Freelance X" and the post promotes availability.
+BUYING (accept): "We're looking for a developer", "I need a website", "Looking for someone to build our X", "We are hiring a freelance X for a project", "Anyone know a good agency?", "Recommendations for X services?", or a business describing a problem it needs solved.
+"Looking for partners/agencies/marketers" = SOURCING suppliers = BUYER.
+RECRUITER EXCEPTION: staffing agency placing candidates at THIRD-PARTY clients = reject. A firm saying "Experts required for our projects" = BUYING expertise = ACCEPT.
+
+SCORING (six dimensions, then total):
+- service_match (0-25): direct mention of the service = 25; adjacent problem = 20; general growth = 15; vague = 10; unrelated = 0.
+- business_problem (0-20): metrics declining/explicit build needed = 20; clear pain = 15; dissatisfaction = 10; exploring = 5; none = 0.
+- buying_intent (0-20): explicit vendor search with budget/ASAP = 20; HIRING freelancer/contractor/remote/part-time = 18; strong implicit ("recommendations?") = 15; problem + commercial context = 10; passive = 5; none = 0.
+- decision_maker_likelihood (0-15): Founder/CEO/Owner/VP/Director = 15; Manager/Lead = 12; unclear but business context = 10; individual contributor = 5; student = 0.
+- urgency (0-10): urgent/ASAP = 10; looking now = 8; soon = 7; active problem no timeline = 5; none = 0.
+- outreach_worthiness (0-10): explicit vendor search + problem + decision maker = 10; strong problem + reachable role = 8; clear problem unclear authority = 6; vague = 4; wrong audience = 0.
+
+lead_score = sum (0-100).
+
+TIERS:
+- 85+ HOT: explicit need or active hiring + decision-maker + concrete problem.
+- 70-84 WARM: clear problem or hiring intent, may need light nurturing.
+- 40-69 POTENTIAL: relevant but vague; still worth saving.
+- 25-39 BORDERLINE: weak signal but real buyer context.
+- <25 NOT a lead.
+
+CONSISTENCY: is_lead=true requires lead_score>=25 AND service_match>=10. hiring+full_time_onsite => is_lead=false. agency/irrelevant => is_lead=false.
+
+For each lead, return ONLY a JSON array:
 [
   {{
     "name": "Full Name",
@@ -112,14 +149,24 @@ For each lead, return ONLY a JSON array with this format:
     "location": "City, Country",
     "linkedin_url": "LinkedIn profile URL",
     "score": 85,
-    "reason": "Brief 1-line explanation of score",
-    "post_content": "First 100 chars of their post",
+    "service_match": 22,
+    "business_problem": 18,
+    "buying_intent": 17,
+    "decision_maker_likelihood": 13,
+    "urgency": 8,
+    "outreach_worthiness": 7,
+    "lead_type": "explicit_need|problem_awareness|research|hiring|agency|irrelevant",
+    "work_type": "remote|contract|part_time|full_time_onsite|unknown",
+    "reason": "1-2 sentences with SPECIFIC quoted evidence from the post",
+    "outreach_angle": "one specific opening line referencing their exact situation (max 25 words)",
+    "post_content": "First 200 chars of their post",
     "engagement": {{"likes": 10, "comments": 5}}
   }}
 ]
 
 Rules:
-- Score >= 40 to include (reject others)
+- is_lead=false leads get score=0 and lead_type="agency" or "irrelevant"
+- Score >= 25 to include as a lead (reject others)
 - Sort by score descending
 - Maximum 50 leads
 - Only return the JSON array, no other text
@@ -421,7 +468,22 @@ If a field is not mentioned, use null.""",
         for lead in leads:
             try:
                 score = lead.get("score", 0)
-                lead_category = "hot" if score >= 80 else "warm"
+                is_lead = lead.get("is_lead", True) if "is_lead" in lead else True
+                if not is_lead or score < 25:
+                    continue
+
+                lead_category = "hot" if score >= 85 else "warm"
+
+                # Map AI semantic type to post_type CHECK values
+                ai_type = (lead.get("lead_type") or "").lower()
+                if ai_type in ("explicit_need", "problem_awareness", "research"):
+                    post_type = "buyer"
+                elif ai_type == "agency":
+                    post_type = "agency"
+                elif ai_type == "hiring":
+                    post_type = "hiring"
+                else:
+                    post_type = "buyer"
 
                 self.db.table("leads").insert({
                     "user_id": user_id,
@@ -433,9 +495,10 @@ If a field is not mentioned, use null.""",
                     "full_address": lead.get("location", ""),
                     "category": lead.get("company", ""),
                     "lead_category": lead_category,
+                    "post_type": post_type,
                     "ai_confidence_score": score / 100.0,
                     "ai_reason": lead.get("reason", ""),
-                    "ai_pitch": lead.get("post_content", ""),
+                    "ai_pitch": lead.get("outreach_angle", ""),
                     "post_text": lead.get("post_content", ""),
                     "user_status": "new",
                     "is_favorite": False,

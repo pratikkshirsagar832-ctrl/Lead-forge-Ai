@@ -19,7 +19,10 @@ interface Lead {
   location: string
   linkedin_url: string
   score: number
+  lead_type: string
+  work_type: string
   reason: string
+  outreach_angle: string
   post_content: string
   engagement: { likes: number; comments: number }
 }
@@ -267,6 +270,27 @@ Here are your top leads (scored 0-100):`,
                     <tr key={i} className="border-b border-steel/10 hover:bg-navy/50">
                       <td className="py-2 px-2 text-offwhite font-medium">
                         {lead.name}
+                        {lead.lead_type && (
+                          <span className={`ml-1 text-[9px] px-1 py-0.5 rounded ${
+                            lead.lead_type === 'explicit_need' ? 'bg-emerald/20 text-emerald' :
+                            lead.lead_type === 'hiring' ? 'bg-cyan/20 text-cyan' :
+                            lead.lead_type === 'problem_awareness' ? 'bg-amber/20 text-amber' :
+                            'bg-steel/20 text-steel'
+                          }`}>
+                            {lead.lead_type === 'explicit_need' ? 'BUYER' :
+                             lead.lead_type === 'hiring' ? 'HIRING' :
+                             lead.lead_type === 'problem_awareness' ? 'PROBLEM' :
+                             lead.lead_type}
+                          </span>
+                        )}
+                        {lead.work_type && lead.work_type !== 'unknown' && (
+                          <span className="ml-1 text-[9px] px-1 py-0.5 rounded bg-ocean/20 text-ice/60">
+                            {lead.work_type === 'remote' ? '🌍 Remote' :
+                             lead.work_type === 'contract' ? '📄 Contract' :
+                             lead.work_type === 'part_time' ? '⏱️ Part-time' :
+                             lead.work_type}
+                          </span>
+                        )}
                       </td>
                       <td className="py-2 px-2 text-ice/70">{lead.company || "-"}</td>
                       <td className="py-2 px-2 text-ice/50 max-w-[200px] truncate">
@@ -275,7 +299,7 @@ Here are your top leads (scored 0-100):`,
                       <td className="py-2 px-2">
                         <span
                           className={`px-2 py-0.5 rounded-full text-xs font-medium ${
-                            lead.score >= 80
+                            lead.score >= 85
                               ? "bg-emerald/20 text-emerald"
                               : lead.score >= 60
                               ? "bg-cyan/20 text-cyan"

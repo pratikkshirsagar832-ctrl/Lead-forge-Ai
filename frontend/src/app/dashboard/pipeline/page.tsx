@@ -73,6 +73,8 @@ function PipelineCard({ lead, isDragOverlay }: { lead: LeadListItem; isDragOverl
     ? Array.from({ length: 5 }, (_, i) => i < Math.round(lead.rating!))
     : null;
 
+  const isLinkedinSource = lead.source === 'linkedin' || lead.source === 'hyper_agent';
+
   return (
     <div
       ref={setNodeRef}
@@ -110,7 +112,7 @@ function PipelineCard({ lead, isDragOverlay }: { lead: LeadListItem; isDragOverl
                 {lead.lead_category.toUpperCase()}
               </span>
             )}
-            {lead.source === 'linkedin' ? (
+            {isLinkedinSource ? (
               <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded-full shrink-0 bg-sky-500/15 text-sky-400 border border-sky-500/25 flex items-center gap-0.5">
                 <Linkedin className="w-2.5 h-2.5" />
                 LI
@@ -121,7 +123,7 @@ function PipelineCard({ lead, isDragOverlay }: { lead: LeadListItem; isDragOverl
                 Maps
               </span>
             )}
-            {lead.source === 'linkedin' && <PostTypeBadge postType={lead.post_type} />}
+            {isLinkedinSource && <PostTypeBadge postType={lead.post_type} />}
           </div>
 
           {lead.category && (

@@ -149,8 +149,8 @@ async def hyper_agent_scrape(
         supabase.table("searches").update({
             "status": "completed",
             "total_results": saved,
-            "hot_leads": len([l for l in qualified if l.get("score", 0) >= 80]),
-            "warm_leads": len([l for l in qualified if 60 <= l.get("score", 0) < 80]),
+            "hot_leads": len([l for l in qualified if l.get("score", 0) >= 75]),
+            "warm_leads": len([l for l in qualified if 40 <= l.get("score", 0) < 75]),
             "skipped": len(raw_items) - saved,
             "completed_at": datetime.now(timezone.utc).isoformat(),
         }).eq("id", search_id).execute()

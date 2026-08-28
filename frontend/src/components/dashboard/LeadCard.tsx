@@ -38,6 +38,8 @@ export function LeadCard({ lead, onToggleFavorite, isUpdatingFav }: LeadCardProp
 
   const { workType, cleanHeadline } = extractWorkType(lead.headline);
 
+  const isLinkedinSource = lead.source === 'linkedin' || lead.source === 'hyper_agent';
+
   const scoreColor = lead.website_health_score != null
     ? lead.website_health_score >= 70 ? 'text-emerald-400'
       : lead.website_health_score >= 40 ? 'text-amber-400'
@@ -61,7 +63,7 @@ export function LeadCard({ lead, onToggleFavorite, isUpdatingFav }: LeadCardProp
                 {lead.website_health_score}
               </span>
             )}
-            {lead.source === 'linkedin' ? (
+            {isLinkedinSource ? (
               <span className="text-[10px] px-1.5 py-0.5 rounded bg-sky-500/10 text-sky-400 font-semibold flex items-center gap-0.5 border border-sky-500/20">
                 <Linkedin className="w-2.5 h-2.5" />
                 LinkedIn
@@ -72,8 +74,8 @@ export function LeadCard({ lead, onToggleFavorite, isUpdatingFav }: LeadCardProp
                 Maps
               </span>
             )}
-            {lead.source === 'linkedin' && <PostTypeBadge postType={lead.post_type} />}
-            {lead.source === 'linkedin' && <WorkTypeBadge workType={workType} />}
+            {isLinkedinSource && <PostTypeBadge postType={lead.post_type} />}
+            {isLinkedinSource && <WorkTypeBadge workType={workType} />}
             {lead.ai_confidence_score != null && (
               <span
                 className={`text-[11px] font-bold px-2 py-1 rounded-md border ${
@@ -106,7 +108,7 @@ export function LeadCard({ lead, onToggleFavorite, isUpdatingFav }: LeadCardProp
         </h3>
 
         <div className="flex items-center gap-2 mb-4">
-          {lead.source === 'linkedin' ? (
+          {isLinkedinSource ? (
             <div className="flex items-center gap-2 bg-ocean/25 px-2 py-1 rounded-md border border-ocean/20">
               <Users className="w-3 h-3 text-steel/70" />
               <span className="font-semibold text-[11px] text-ice/80">{lead.connections_count != null ? `${formatNumber(lead.connections_count)} connections` : '—'}</span>
@@ -126,7 +128,7 @@ export function LeadCard({ lead, onToggleFavorite, isUpdatingFav }: LeadCardProp
         </div>
 
         <div className="space-y-2.5">
-          {lead.source === 'linkedin' ? (
+          {isLinkedinSource ? (
             <>
               {lead.email_found && (
                 <div className="flex items-center gap-2.5 text-sm text-ice/70 group/item">

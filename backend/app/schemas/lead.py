@@ -31,6 +31,10 @@ class LeadListItem(BaseModel):
     connections_count: int = 0
     posted_at: Optional[datetime] = None
     post_type: Optional[str] = None
+    ai_qualified: Optional[bool] = None
+    ai_confidence_score: Optional[float] = None
+    ai_reason: Optional[str] = None
+    ai_pitch: Optional[str] = None
     user_status: str = "new"
     is_favorite: bool = False
     has_pitch: bool = False

@@ -49,6 +49,7 @@ export function FiltersBar() {
               <option value="" style={{ color: '#cbd5e1', background: '#1e293b' }}>All Sources</option>
               <option value="google_maps" style={{ color: '#cbd5e1', background: '#1e293b' }}>Google Maps</option>
               <option value="linkedin" style={{ color: '#cbd5e1', background: '#1e293b' }}>LinkedIn</option>
+              <option value="hyper_agent" style={{ color: '#cbd5e1', background: '#1e293b' }}>HyperAgent</option>
             </select>
           </div>
 

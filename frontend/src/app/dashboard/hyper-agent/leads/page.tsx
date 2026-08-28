@@ -1,309 +1,160 @@
 "use client"
 
-import { useState } from "react"
+import { useState, useEffect } from "react"
 import { Card, CardContent } from "@/components/ui/card"
-import { Button } from "@/components/ui/button"
-import { Input } from "@/components/ui/input"
 import { Badge } from "@/components/ui/badge"
-import { Checkbox } from "@/components/ui/checkbox"
-import {
-  Search, Plus, Download, Trash2, Tag,
-  MoreHorizontal, Mail, Phone, Globe, Linkedin, Eye
-} from "lucide-react"
-
-interface Lead {
-  id: string
-  firstName: string
-  lastName: string
-  email: string
-  phone: string
-  company: string
-  title: string
-  source: string
-  status: string
-  verified: boolean
-  score: number
-  tags: string[]
-}
-
-const demoLeads: Lead[] = [
-  { id: "1", firstName: "Sarah", lastName: "Chen", email: "sarah@cloudsync.io", phone: "+1 415-555-0123", company: "CloudSync", title: "CEO", source: "LinkedIn", status: "new", verified: true, score: 95, tags: ["saas", "founder"] },
-  { id: "2", firstName: "James", lastName: "Wilson", email: "james@techcorp.com", phone: "+1 628-555-0456", company: "TechCorp", title: "CTO", source: "Crunchbase", status: "contacted", verified: true, score: 88, tags: ["tech", "enterprise"] },
-  { id: "3", firstName: "Emily", lastName: "Zhang", email: "emily@innovatelab.io", phone: "+1 510-555-0789", company: "InnovateLab", title: "VP Engineering", source: "GitHub", status: "qualified", verified: false, score: 82, tags: ["startup", "ai"] },
-  { id: "4", firstName: "Michael", lastName: "Brown", email: "michael@datavault.com", phone: "+1 650-555-0321", company: "DataVault", title: "Founder", source: "Web Search", status: "new", verified: true, score: 91, tags: ["security", "founder"] },
-  { id: "5", firstName: "Lisa", lastName: "Park", email: "lisa@nexusai.com", phone: "+1 408-555-0654", company: "Nexus AI", title: "Head of Growth", source: "LinkedIn", status: "converted", verified: true, score: 97, tags: ["ai", "growth"] },
-  { id: "6", firstName: "David", lastName: "Kim", email: "david@vertexinc.com", phone: "+1 212-555-0987", company: "Vertex Inc", title: "Director of Sales", source: "Yelp", status: "new", verified: false, score: 74, tags: ["sales", "enterprise"] },
-  { id: "7", firstName: "Jennifer", lastName: "Lee", email: "jen@apexdigital.com", phone: "+1 310-555-0147", company: "Apex Digital", title: "Marketing Manager", source: "Google Maps", status: "contacted", verified: true, score: 85, tags: ["marketing", "digital"] },
-  { id: "8", firstName: "Robert", lastName: "Taylor", email: "rob@horizontech.io", phone: "+1 617-555-0258", company: "Horizon Tech", title: "Engineering Lead", source: "GitHub", status: "new", verified: true, score: 79, tags: ["engineering", "startup"] },
-]
+import { Search, ExternalLink, Loader2 } from "lucide-react"
+import Link from "next/link"
+import api from "@/lib/api"
+import type { LeadListItem } from "@/lib/types"
 
 export default function LeadsPage() {
-  const [leads] = useState<Lead[]>(demoLeads)
+  const [leads, setLeads] = useState<LeadListItem[]>([])
+  const [loading, setLoading] = useState(true)
   const [searchQuery, setSearchQuery] = useState("")
-  const [selectedLeads, setSelectedLeads] = useState<Set<string>>(new Set())
-  const [statusFilter, setStatusFilter] = useState<string>("all")
-  const [selectedLead, setSelectedLead] = useState<Lead | null>(null)
+  const [error, setError] = useState("")
 
-  const filteredLeads = leads.filter((lead) => {
-    const matchesSearch = `${lead.firstName} ${lead.lastName} ${lead.company} ${lead.email}`.toLowerCase().includes(searchQuery.toLowerCase())
-    const matchesStatus = statusFilter === "all" || lead.status === statusFilter
-    return matchesSearch && matchesStatus
-  })
-
-  const toggleSelectAll = () => {
-    if (selectedLeads.size === filteredLeads.length) {
-      setSelectedLeads(new Set())
-    } else {
-      setSelectedLeads(new Set(filteredLeads.map((l) => l.id)))
+  useEffect(() => {
+    let cancelled = false
+    api
+      .get("/api/leads", { params: { source: "hyper_agent", per_page: 100 } })
+      .then((r) => {
+        if (!cancelled) setLeads(r.data?.items || [])
+      })
+      .catch(() => {
+        if (!cancelled) setError("Failed to load leads. Please try again.")
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false)
+      })
+    return () => {
+      cancelled = true
     }
-  }
+  }, [])
 
-  const toggleSelect = (id: string) => {
-    const next = new Set(selectedLeads)
-    if (next.has(id)) next.delete(id)
-    else next.add(id)
-    setSelectedLeads(next)
-  }
+  const filteredLeads = leads.filter((lead) =>
+    `${lead.business_name} ${lead.category || ""} ${lead.headline || ""}`
+      .toLowerCase()
+      .includes(searchQuery.toLowerCase())
+  )
 
-  const statusColors: Record<string, string> = {
-    new: "bg-steel/20 text-accent-cyan",
-    contacted: "bg-yellow-500/20 text-yellow-400",
-    qualified: "bg-purple-500/20 text-purple-400",
-    converted: "bg-emerald/20 text-emerald",
-    lost: "bg-red-500/20 text-red-400",
-  }
+  const hotCount = leads.filter((l) => l.lead_category === "hot").length
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between flex-wrap gap-4">
         <div>
-          <h1 className="text-2xl font-bold">Leads</h1>
-          <p className="text-ice/60 text-sm mt-1">{leads.length} total leads • {leads.filter((l) => l.verified).length} verified</p>
+          <h1 className="text-2xl font-bold">HyperAgent Leads</h1>
+          <p className="text-ice/60 text-sm mt-1">
+            {leads.length} leads • {hotCount} hot
+          </p>
         </div>
-        <div className="flex gap-2">
-          <Button variant="outline" size="sm" className="border-ocean/20 hover:bg-steel/10">
-            <Download className="w-4 h-4 mr-2" /> Export
-          </Button>
-          <Button size="sm" className="bg-blue-500 hover:bg-steel/80">
-            <Plus className="w-4 h-4 mr-2" /> Add Lead
-          </Button>
-        </div>
+        <Link
+          href="/dashboard/leads?search_id=&source=hyper_agent"
+          className="text-xs text-violet hover:underline"
+        >
+          View in Pipeline →
+        </Link>
       </div>
 
-      {/* Filters */}
-      <div className="flex flex-wrap items-center gap-3">
-        <div className="relative flex-1 max-w-sm">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-ice/60" />
-          <Input
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            placeholder="Search leads..."
-            className="pl-9 bg-white/5 border-ocean/20"
-          />
-        </div>
-        <div className="flex gap-2">
-          {["all", "new", "contacted", "qualified", "converted"].map((status) => (
-            <button
-              key={status}
-              onClick={() => setStatusFilter(status)}
-              className={`px-3 py-1.5 rounded-lg text-xs font-medium transition ${
-                statusFilter === status
-                  ? "bg-white/10 text-offwhite"
-                  : "text-ice/60 hover:text-offwhite hover:bg-steel/10"
-              }`}
-            >
-              {status.charAt(0).toUpperCase() + status.slice(1)}
-            </button>
-          ))}
-        </div>
-        {selectedLeads.size > 0 && (
-          <div className="flex gap-2 ml-auto">
-            <Button variant="outline" size="sm" className="border-ocean/20 text-xs">
-              <Tag className="w-3 h-3 mr-1" /> Tag ({selectedLeads.size})
-            </Button>
-            <Button variant="outline" size="sm" className="border-ocean/20 text-xs">
-              <Download className="w-3 h-3 mr-1" /> Export ({selectedLeads.size})
-            </Button>
-            <Button variant="outline" size="sm" className="border-red-500/20 text-red-400 text-xs hover:bg-red-500/10">
-              <Trash2 className="w-3 h-3 mr-1" /> Delete ({selectedLeads.size})
-            </Button>
-          </div>
-        )}
+      <div className="relative flex-1 max-w-sm">
+        <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-ice/60" />
+        <input
+          value={searchQuery}
+          onChange={(e) => setSearchQuery(e.target.value)}
+          placeholder="Search leads..."
+          className="pl-9 w-full bg-white/5 border border-ocean/20 rounded-md px-3 py-2 text-sm outline-none focus:border-violet/50"
+        />
       </div>
 
-      {/* Table */}
       <Card className="bg-ocean border-ocean/20">
         <CardContent className="p-0">
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b border-ocean/20">
-                  <th className="text-left p-3 w-10">
-                    <Checkbox checked={selectedLeads.size === filteredLeads.length && filteredLeads.length > 0} onCheckedChange={toggleSelectAll} />
-                  </th>
-                  <th className="text-left p-3 text-ice/60 font-medium">Name</th>
-                  <th className="text-left p-3 text-ice/60 font-medium">Company</th>
-                  <th className="text-left p-3 text-ice/60 font-medium">Title</th>
-                  <th className="text-left p-3 text-ice/60 font-medium">Email</th>
-                  <th className="text-left p-3 text-ice/60 font-medium">Source</th>
-                  <th className="text-left p-3 text-ice/60 font-medium">Status</th>
-                  <th className="text-left p-3 text-ice/60 font-medium">Score</th>
-                  <th className="text-left p-3 w-10"></th>
-                </tr>
-              </thead>
-              <tbody>
-                {filteredLeads.map((lead) => (
-                  <tr
-                    key={lead.id}
-                    className="border-b border-ocean/10 hover:bg-steel/10 cursor-pointer transition"
-                    onClick={() => setSelectedLead(lead)}
-                  >
-                    <td className="p-3" onClick={(e) => e.stopPropagation()}>
-                      <Checkbox checked={selectedLeads.has(lead.id)} onCheckedChange={() => toggleSelect(lead.id)} />
-                    </td>
-                    <td className="p-3">
-                      <div className="flex items-center gap-2">
-                        <div className="w-8 h-8 rounded-full bg-gradient-to-br from-steel to-accent-cyan flex items-center justify-center text-xs font-bold">
-                          {lead.firstName[0]}{lead.lastName[0]}
-                        </div>
-                        <div>
-                          <p className="font-medium">{lead.firstName} {lead.lastName}</p>
-                          <p className="text-xs text-ice/60">{lead.phone}</p>
-                        </div>
-                      </div>
-                    </td>
-                    <td className="p-3 text-ice/80">{lead.company}</td>
-                    <td className="p-3 text-ice/60">{lead.title}</td>
-                    <td className="p-3">
-                      <span className={lead.verified ? "text-emerald" : "text-ice/60"}>
-                        {lead.email}
-                      </span>
-                    </td>
-                    <td className="p-3">
-                      <Badge variant="outline" className="border-ocean/20 text-ice/60 text-xs">
-                        {lead.source}
-                      </Badge>
-                    </td>
-                    <td className="p-3">
-                      <Badge className={`${statusColors[lead.status]} border-0 text-xs`}>
-                        {lead.status}
-                      </Badge>
-                    </td>
-                    <td className="p-3">
-                      <div className="flex items-center gap-2">
-                        <div className="w-12 h-1.5 bg-white/5 rounded-full overflow-hidden">
-                          <div
-                            className={`h-full rounded-full ${
-                              lead.score >= 90 ? "bg-emerald-500" : lead.score >= 70 ? "bg-blue-500" : "bg-yellow-500"
-                            }`}
-                            style={{ width: `${lead.score}%` }}
-                          />
-                        </div>
-                        <span className="text-xs text-ice/60">{lead.score}</span>
-                      </div>
-                    </td>
-                    <td className="p-3" onClick={(e) => e.stopPropagation()}>
-                      <Button variant="ghost" size="icon" className="w-8 h-8 text-ice/60">
-                        <MoreHorizontal className="w-4 h-4" />
-                      </Button>
-                    </td>
+          {loading ? (
+            <div className="flex items-center justify-center py-16 text-steel">
+              <Loader2 className="w-5 h-5 animate-spin mr-2" /> Loading leads...
+            </div>
+          ) : error ? (
+            <div className="text-center py-16 text-rose-400 text-sm">{error}</div>
+          ) : filteredLeads.length === 0 ? (
+            <div className="text-center py-16 text-steel text-sm">
+              No leads yet. Run a HyperAgent search to find leads.
+            </div>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b border-ocean/20">
+                    <th className="text-left p-3 text-ice/60 font-medium">Name</th>
+                    <th className="text-left p-3 text-ice/60 font-medium">Company</th>
+                    <th className="text-left p-3 text-ice/60 font-medium">Headline</th>
+                    <th className="text-left p-3 text-ice/60 font-medium">Score</th>
+                    <th className="text-left p-3 text-ice/60 font-medium">Type</th>
+                    <th className="text-left p-3 text-ice/60 font-medium">Status</th>
+                    <th className="text-left p-3 w-24"></th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+                </thead>
+                <tbody>
+                  {filteredLeads.map((lead) => (
+                    <tr key={lead.id} className="border-b border-ocean/10 hover:bg-steel/10 transition">
+                      <td className="p-3">
+                        <div className="flex items-center gap-2">
+                          <div className="w-8 h-8 rounded-full bg-gradient-to-br from-violet to-cyan flex items-center justify-center text-xs font-bold shrink-0">
+                            {(lead.business_name || "?")[0]}
+                          </div>
+                          <p className="font-medium text-offwhite">{lead.business_name}</p>
+                        </div>
+                      </td>
+                      <td className="p-3 text-ice/80">{lead.category || "-"}</td>
+                      <td className="p-3 text-ice/50 max-w-[220px] truncate">{lead.headline || "-"}</td>
+                      <td className="p-3">
+                        <Badge
+                          className={
+                            (lead.ai_confidence_score ?? 0) >= 0.75
+                              ? "bg-emerald/20 text-emerald border-0"
+                              : "bg-cyan/20 text-cyan border-0"
+                          }
+                        >
+                          {Math.round((lead.ai_confidence_score ?? 0) * 100)}
+                        </Badge>
+                      </td>
+                      <td className="p-3">
+                        <span className="text-[10px] px-1.5 py-0.5 rounded bg-ocean/40 text-ice/70 border border-steel/15">
+                          {lead.post_type || "-"}
+                        </span>
+                      </td>
+                      <td className="p-3">
+                        <span className="text-[10px] px-1.5 py-0.5 rounded bg-steel/20 text-ice/60">
+                          {lead.user_status}
+                        </span>
+                      </td>
+                      <td className="p-3">
+                        <div className="flex gap-2">
+                          {lead.post_url && (
+                            <a
+                              href={lead.post_url}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="text-violet hover:underline flex items-center gap-1 text-xs"
+                            >
+                              Post <ExternalLink className="w-3 h-3" />
+                            </a>
+                          )}
+                          <Link
+                            href={`/dashboard/leads/${lead.id}`}
+                            className="text-ice/60 hover:text-ice text-xs"
+                          >
+                            Detail
+                          </Link>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
         </CardContent>
       </Card>
-
-      {/* Lead Detail Sidebar */}
-      {selectedLead && (
-        <div className="fixed inset-0 z-50 flex justify-end">
-          <div className="absolute inset-0 bg-navy/60" onClick={() => setSelectedLead(null)} />
-          <div className="relative w-full max-w-md bg-ocean border-l border-ocean/20 h-full overflow-y-auto animate-slide-in">
-            <div className="p-6">
-              <div className="flex items-center justify-between mb-6">
-                <h2 className="text-lg font-bold">Lead Details</h2>
-                <button onClick={() => setSelectedLead(null)} className="text-ice/60 hover:text-offwhite">
-                  ✕
-                </button>
-              </div>
-              <div className="flex items-center gap-4 mb-6">
-                <div className="w-14 h-14 rounded-full bg-gradient-to-br from-steel to-accent-cyan flex items-center justify-center text-lg font-bold">
-                  {selectedLead.firstName[0]}{selectedLead.lastName[0]}
-                </div>
-                <div>
-                  <h3 className="text-xl font-bold">{selectedLead.firstName} {selectedLead.lastName}</h3>
-                  <p className="text-ice/60">{selectedLead.title} at {selectedLead.company}</p>
-                </div>
-              </div>
-              <div className="space-y-4">
-                <div className="flex items-center gap-3 p-3 rounded-lg bg-white/5">
-                  <Mail className="w-4 h-4 text-ice/60" />
-                  <div>
-                    <p className="text-xs text-ice/60">Email</p>
-                    <p className={selectedLead.verified ? "text-emerald" : ""}>{selectedLead.email}</p>
-                  </div>
-                  {selectedLead.verified && <Badge className="ml-auto bg-emerald/20 text-emerald border-0 text-xs">Verified</Badge>}
-                </div>
-                <div className="flex items-center gap-3 p-3 rounded-lg bg-white/5">
-                  <Phone className="w-4 h-4 text-ice/60" />
-                  <div>
-                    <p className="text-xs text-ice/60">Phone</p>
-                    <p>{selectedLead.phone}</p>
-                  </div>
-                </div>
-                <div className="flex items-center gap-3 p-3 rounded-lg bg-white/5">
-                  <Globe className="w-4 h-4 text-ice/60" />
-                  <div>
-                    <p className="text-xs text-ice/60">Website</p>
-                    <p className="text-accent-cyan">{selectedLead.company.toLowerCase().replace(/\s+/g, "")}.com</p>
-                  </div>
-                </div>
-                <div className="flex items-center gap-3 p-3 rounded-lg bg-white/5">
-                  <Linkedin className="w-4 h-4 text-ice/60" />
-                  <div>
-                    <p className="text-xs text-ice/60">LinkedIn</p>
-                    <p className="text-accent-cyan">linkedin.com/in/{selectedLead.firstName.toLowerCase()}-{selectedLead.lastName.toLowerCase()}</p>
-                  </div>
-                </div>
-              </div>
-              <div className="mt-6">
-                <p className="text-sm text-ice/60 mb-2">Tags</p>
-                <div className="flex flex-wrap gap-2">
-                  {selectedLead.tags.map((tag) => (
-                    <Badge key={tag} variant="outline" className="border-ocean/20 text-ice/80">{tag}</Badge>
-                  ))}
-                </div>
-              </div>
-              <div className="mt-6">
-                <p className="text-sm text-ice/60 mb-2">Status</p>
-                <div className="flex gap-2">
-                  {["new", "contacted", "qualified", "converted"].map((s) => (
-                    <button
-                      key={s}
-                      className={`px-3 py-1.5 rounded-lg text-xs font-medium transition ${
-                        selectedLead.status === s
-                          ? statusColors[s]
-                          : "text-ice/60 bg-white/5 hover:bg-white/10"
-                      }`}
-                    >
-                      {s.charAt(0).toUpperCase() + s.slice(1)}
-                    </button>
-                  ))}
-                </div>
-              </div>
-              <div className="mt-6 flex gap-2">
-                <Button className="flex-1 bg-blue-500 hover:bg-steel/80">
-                  <Mail className="w-4 h-4 mr-2" /> Send Email
-                </Button>
-                <Button variant="outline" className="border-ocean/20 hover:bg-steel/10">
-                  <Eye className="w-4 h-4 mr-2" /> Research
-                </Button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   )
 }

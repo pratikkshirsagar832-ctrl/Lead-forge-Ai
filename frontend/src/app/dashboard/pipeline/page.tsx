@@ -285,7 +285,7 @@ export default function PipelinePage() {
   const [isUpdating, setIsUpdating] = useState(false);
   const [totalCount, setTotalCount] = useState(0);
   const dragSourceStageRef = useRef<StageKey | null>(null);
-  const currentStageRef = useRef<StageKey | null>(null);
+  const dragOverStageRef = useRef<StageKey | null>(null);
   const leadsByStageRef = useRef(leadsByStage);
   leadsByStageRef.current = leadsByStage;
 
@@ -335,81 +335,80 @@ export default function PipelinePage() {
     fetchAllLeads();
   }, [fetchAllLeads]);
 
-  const handleDragStart = useCallback((event: DragStartEvent) => {
-    const { active } = event;
-    setActiveId(active.id as string);
-    currentStageRef.current = null;
-
+  const findStageForLead = useCallback((leadId: string): StageKey | null => {
     const snapshot = leadsByStageRef.current;
     for (const stageKey of PIPELINE_STAGES.map((s) => s.key)) {
-      const found = snapshot[stageKey].find((l) => l.id === active.id);
-      if (found) {
-        setActiveLead(found);
-        dragSourceStageRef.current = stageKey;
-        break;
+      if (snapshot[stageKey].some((l) => l.id === leadId)) {
+        return stageKey;
       }
     }
+    return null;
   }, []);
+
+  const findStageFromOver = useCallback((overId: string): StageKey | null => {
+    const snapshot = leadsByStageRef.current;
+    // Check if overId is a lead card
+    for (const stageKey of PIPELINE_STAGES.map((s) => s.key)) {
+      if (snapshot[stageKey].some((l) => l.id === overId)) {
+        return stageKey;
+      }
+    }
+    // Check if overId is a column itself
+    if (PIPELINE_STAGES.some((s) => s.key === overId)) {
+      return overId as StageKey;
+    }
+    return null;
+  }, []);
+
+  const handleDragStart = useCallback((event: DragStartEvent) => {
+    const { active } = event;
+    const leadId = active.id as string;
+    setActiveId(leadId);
+    dragOverStageRef.current = null;
+
+    const sourceStage = findStageForLead(leadId);
+    dragSourceStageRef.current = sourceStage;
+
+    if (sourceStage) {
+      const lead = leadsByStageRef.current[sourceStage].find((l) => l.id === leadId);
+      setActiveLead(lead || null);
+    }
+  }, [findStageForLead]);
 
   const handleDragOver = useCallback((event: DragOverEvent) => {
     const { active, over } = event;
     if (!over || !active) return;
 
-    const activeLeadId = active.id as string;
-    const overId = over.id as string;
-    const snapshot = leadsByStageRef.current;
-
-    let sourceStage: StageKey | null = null;
-    let targetStage: StageKey | null = null;
-
-    for (const stageKey of PIPELINE_STAGES.map((s) => s.key)) {
-      if (snapshot[stageKey].some((l) => l.id === activeLeadId)) {
-        sourceStage = stageKey;
-        break;
-      }
-    }
-    for (const stageKey of PIPELINE_STAGES.map((s) => s.key)) {
-      if (snapshot[stageKey].some((l) => l.id === overId)) {
-        targetStage = stageKey;
-        break;
-      }
-    }
-    if (!targetStage) {
-      const overInColumns = PIPELINE_STAGES.find((s) => s.key === overId);
-      if (overInColumns) targetStage = overInColumns.key;
-    }
-
-    if (!sourceStage || !targetStage || sourceStage === targetStage) return;
-
-    currentStageRef.current = targetStage;
-
-    setLeadsByStage((prev) => {
-      const lead = prev[sourceStage!].find((l) => l.id === activeLeadId);
-      if (!lead) return prev;
-      return {
-        ...prev,
-        [sourceStage!]: prev[sourceStage!].filter((l) => l.id !== activeLeadId),
-        [targetStage!]: [...prev[targetStage!], { ...lead, user_status: targetStage! }],
-      };
-    });
-  }, []);
+    const targetStage = findStageFromOver(over.id as string);
+    dragOverStageRef.current = targetStage;
+  }, [findStageFromOver]);
 
   const handleDragEnd = useCallback(async (event: DragEndEvent) => {
     const { active } = event;
     setActiveId(null);
     setActiveLead(null);
 
-    if (!active) return;
-
-    const activeLeadId = active.id as string;
-    const targetStage = currentStageRef.current;
+    const activeLeadId = active?.id as string;
     const sourceStage = dragSourceStageRef.current;
+    const targetStage = dragOverStageRef.current;
 
-    currentStageRef.current = null;
     dragSourceStageRef.current = null;
+    dragOverStageRef.current = null;
 
-    if (!targetStage || !sourceStage || targetStage === sourceStage) return;
+    if (!sourceStage || !targetStage || sourceStage === targetStage || !activeLeadId) return;
 
+    // Optimistic UI update
+    setLeadsByStage((prev) => {
+      const lead = prev[sourceStage].find((l) => l.id === activeLeadId);
+      if (!lead) return prev;
+      return {
+        ...prev,
+        [sourceStage]: prev[sourceStage].filter((l) => l.id !== activeLeadId),
+        [targetStage]: [...prev[targetStage], { ...lead, user_status: targetStage }],
+      };
+    });
+
+    // Persist to backend
     setIsUpdating(true);
     try {
       await api.patch(API_ROUTES.leads.status(activeLeadId), { user_status: targetStage });

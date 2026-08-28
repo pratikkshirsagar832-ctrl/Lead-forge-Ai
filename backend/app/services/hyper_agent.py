@@ -279,7 +279,7 @@ If a field is not mentioned, use null.""",
         payload = {
             "searchQueries": queries,
             "maxPosts": min(max_posts, 150),
-            "postedLimit": context.get("posted_within", "month"),
+            "postedLimit": str(context.get("posted_within") or "month"),
             "sortBy": "date",
             "profileScraperMode": "main",
             "scrapeReactions": False,

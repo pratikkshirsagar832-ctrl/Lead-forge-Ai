@@ -5,6 +5,7 @@ import { Card } from "@/components/ui/card"
 import { Zap, Send, Loader2, Check, ArrowLeft, Bot, User } from "lucide-react"
 import Link from "next/link"
 import api from "@/lib/api"
+import PlanGuard from "@/components/dashboard/PlanGuard"
 
 interface Message {
   role: "user" | "assistant"
@@ -171,6 +172,7 @@ Here are your top leads (scored 0-100):`,
   }
 
   return (
+    <PlanGuard>
     <div className="h-[calc(100vh-2rem)] flex flex-col">
       {/* Header */}
       <div className="flex items-center justify-between mb-4 flex-shrink-0">
@@ -370,5 +372,6 @@ Here are your top leads (scored 0-100):`,
         </div>
       </Card>
     </div>
+    </PlanGuard>
   )
 }

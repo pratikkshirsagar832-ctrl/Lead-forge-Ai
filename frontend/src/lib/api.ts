@@ -5,17 +5,14 @@
  * All data operations go through backend API which stores in local PostgreSQL.
  */
 
+import axios from "axios"
 import { supabase } from "./supabase"
 
 const isBrowser = typeof window !== "undefined"
 
-const apiBaseUrl = isBrowser ? "" : (process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000")
-
-const api = axios_create({
-  baseURL: apiBaseUrl,
+const api = axios.create({
+  baseURL: isBrowser ? "" : (process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"),
 })
-
-import axios_create from "axios"
 
 let _refreshPromise: Promise<boolean> | null = null
 

@@ -39,6 +39,7 @@ import {
   Loader2,
   ArrowRight,
   Linkedin,
+  ExternalLink,
 } from 'lucide-react';
 
 const PIPELINE_STAGES = [
@@ -178,6 +179,19 @@ function PipelineCard({ lead, isDragOverlay }: { lead: LeadListItem; isDragOverl
               >
                 <Globe className="w-3 h-3" />
                 <span className="truncate">{lead.website_url.replace(/^https?:\/\//, '')}</span>
+              </a>
+            )}
+            {isLinkedinSource && lead.post_url && (
+              <a
+                href={lead.post_url}
+                target="_blank"
+                rel="noopener noreferrer"
+                onClick={(e) => e.stopPropagation()}
+                className="flex items-center gap-1.5 text-[11px] text-sky-400/80 hover:text-sky-300 transition-colors mt-1"
+                title="View LinkedIn post"
+              >
+                <ExternalLink className="w-3 h-3" />
+                <span className="truncate">View post</span>
               </a>
             )}
             {lead.full_address && (

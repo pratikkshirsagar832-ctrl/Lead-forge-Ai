@@ -149,6 +149,43 @@ def _location_matches(author_location: str, author_country_code: str, country_co
         return False
     return True
 
+
+def _is_post_url(url: str) -> bool:
+    """A LinkedIn POST url contains /posts/ or /feed/update/ or /activity-.
+    Profile URLs contain /in/ — those are NOT post URLs."""
+    if not url:
+        return False
+    low = url.lower()
+    return (
+        "/posts/" in low
+        or "/feed/update/" in low
+        or "/activity-" in low
+        or "linkedin.com/feed/" in low
+    )
+
+
+def _extract_post_url(item: dict) -> str:
+    """Extract the real LinkedIn POST url from a harvestapi item.
+
+    Actor format (confirmed from harvestapi docs):
+      item.linkedinUrl  → the POST url  (https://www.linkedin.com/posts/...)
+      item.url          → may be absent or something else
+      author.linkedinUrl → the PROFILE url (never use for posts)
+    """
+    for key in ("linkedinUrl", "postUrl", "post_url", "url"):
+        val = item.get(key)
+        if isinstance(val, str) and val.strip():
+            cleaned = val.strip()
+            if _is_post_url(cleaned):
+                return cleaned
+    # last resort: nested socialContent.shareUrl
+    sc = item.get("socialContent") or {}
+    if isinstance(sc, dict):
+        share = sc.get("shareUrl")
+        if isinstance(share, str) and _is_post_url(share):
+            return share
+    return ""
+
 # ── System prompt for HyperAgent (V3 — conversational) ──────────────────
 SYSTEM_PROMPT = """You are HyperAgent, an elite AI-powered B2B lead generation assistant built by Hyperclients.
 
@@ -207,155 +244,73 @@ Reply **YES** to start searching.
 NEVER search without explicit user confirmation.
 """
 
-QUALIFICATION_PROMPT = """You are a senior B2B lead qualification specialist. You decide whether a LinkedIn post is a genuine BUYING signal. Precision > recall: one excellent lead > ten noise records.
+QUALIFICATION_PROMPT = """You are a senior B2B lead qualification specialist for an AI-powered lead-generation platform. You decide whether a LinkedIn post is a genuine BUYING signal that a service provider could convert into a client. Your decisions feed a CRM, so precision matters more than recall: one excellent lead is worth more than ten noise records.
 
 TARGET SERVICE: {niche}
 TARGET ROLES: {roles}
 TARGET LOCATION: {location}
 
-==================================================
-BUYER VS SELLING (MOST IMPORTANT)
-==================================================
+WORKFLOW — always follow these steps in order:
+1. Read the post and identify the AUTHOR's role (headline/company).
+2. Determine WHO IS THE SUBJECT: is the author BUYING this service, or SELLING their own labor/services?
+3. Identify the work arrangement (remote / contract / part-time / full-time on-site).
+4. Apply the hard rules below.
+5. Score the six dimensions, then compute score.
+6. Cross-check internal consistency before emitting JSON.
 
-BUYING (potential lead):
-- "We're looking for a developer"
-- "I need someone to redesign our website"
-- "Looking for an SEO agency"
-- "Can anyone recommend a good paid ads agency?"
-- "We need a freelancer to edit our videos"
-- "We need help improving our Shopify conversion rate"
+HARD RULES (never violate):
+- R1: A company/owner HIRING a freelancer/contractor/agency on a REMOTE, CONTRACT or PART-TIME basis = STRONG LEAD.
+- R2: A company hiring a FULL-TIME ON-SITE employee = NOT a lead (is_lead=false). They are building a payroll team, not buying your service.
+- R3: The author SELLING their own services ("I'm available", "open to projects", "seeking contract work", "DM me for work", "I offer X", "my services include") = NEVER a lead, regardless of how well the post matches the niche.
+- R4: A RECRUITER/STAFFING agency posting on behalf of clients = NOT a lead.
+- R5: Job seekers looking for a role for themselves = NOT a lead.
+- R6: Pure content/thought-leadership ("5 tips", "why you need", "trends", "case study", "opinion") = NOT a lead even if it scores high on service_match.
+- R7: NON-ENGLISH posts (Spanish, German, French, Hindi, Arabic, etc.) = NOT a lead (is_lead=false). We only serve English-speaking markets.
 
-SELLING (reject):
-- "I'm available for freelance work"
-- "I'm open to new projects"
-- "I offer web development services"
-- "DM me if you need a designer"
-- "My agency is taking on new clients"
-- "I'm a freelance SEO specialist looking for projects"
+WHO IS THE SUBJECT? (the single most important question)
+SELLING (reject): "I'm available for X", "I'm open to remote work", "I'm seeking projects", "Looking to collaborate", "I offer X", "DM me for X", "I provide X", "My services include", "I build X". Headline reads "Freelance X" and the post promotes their availability.
+BUYING (accept): "We're looking for a developer", "I need a website", "Looking for someone to build our X", "We are hiring a freelance X for a project", "Need a designer on contract", "Anyone know a good agency?", "Recommendations for X services?", or a business describing a problem it needs solved (traffic drop, no website, bad conversions, launching a product).
+"Looking for partners/agencies/marketers/freelancers" = SOURCING suppliers = BUYER.
+RECRUITER EXCEPTION: staffing agency placing candidates at THIRD-PARTY clients = reject. BUT a firm saying "Experts required for our projects" = BUYING expertise = ACCEPT (lead_type="hiring").
 
-==================================================
-HARD REJECTION RULES (is_lead=false, score=0)
-==================================================
+SCORING (six dimensions, then total):
+- service_match (0-25): direct mention = 25; adjacent problem = 20; general growth = 15; vague = 10; unrelated = 0.
+- business_problem (0-20): metrics declining/explicit build = 20; clear pain = 15; dissatisfaction = 10; exploring = 5; none = 0.
+- buying_intent (0-20): explicit vendor search with budget/ASAP = 20; HIRING freelancer/remote/part-time = 18; strong implicit ("recommendations?") = 15; problem + commercial context = 10; passive = 5; none = 0.
+- decision_maker_likelihood (0-15): Founder/CEO/Owner/VP/Director = 15; Manager/Lead = 12; unclear but business context = 10; individual contributor = 5; student = 0.
+- urgency (0-10): urgent/ASAP = 10; looking now = 8; soon = 7; active problem no timeline = 5; none = 0.
+- outreach_worthiness (0-10): explicit vendor search + problem + decision maker = 10; strong problem + reachable role = 8; clear problem unclear authority = 6; vague = 4; wrong audience = 0.
 
-R1 — SELLER: Author selling their own services
-R2 — JOB SEEKER: Author looking for employment/clients for themselves
-R3 — RECRUITER/STAFFING: Sourcing candidates for third-party employers
-R4 — FULL-TIME EMPLOYEE: Permanent full-time hire (unless user specifically does recruitment)
-R5 — FREE/UNPAID WORK: Volunteer, favors, student projects
-R6 — CONTENT: Tips, trends, thought leadership, tutorials, case studies, opinions
-R7 — SELF-PROMOTION: Promoting own service/agency/portfolio
-R8 — THIRD-PARTY TALENT: Sourcing freelancers for another company
-R9 — SERVICE MISMATCH: Requirement doesn't match user's service
-R10 — KEYWORD TRAP: Post contains service keywords but NO buying intent
-  Examples of keyword traps (NOT leads):
-  - "SEO is important for SaaS"
-  - "Looking for SEO professionals to follow"
-  - "Web development trends"
-  - "Any developers here?"
-  There MUST be evidence of: a requirement, project, problem, vendor search, recommendation request, or hiring need.
-R11 — DUPLICATE: Same requirement from same person/company
-R12 — NON-ENGLISH: Post not in English
+score = sum (0-100).
+TIERS: 85+ HOT, 70-84 WARM, 40-69 POTENTIAL, 25-39 BORDERLINE, <25 NOT a lead.
 
-==================================================
-BUYING SIGNAL TYPES
-==================================================
+CONSISTENCY: is_lead=true requires score>=25 AND service_match>=10. hiring+full_time_onsite => is_lead=false. agency/irrelevant => is_lead=false.
 
-- explicit_service_request: Directly asking for a service provider
-- vendor_recommendation: Asking for recommendations/referrals
-- hiring: Seeking freelance/contract/external expertise
-- business_problem: Describing a problem the user's service can solve
-- project_need: Current/upcoming project requires the service
-- provider_dissatisfaction: Unhappy with existing provider
-- research: Evaluating options, weaker buying evidence
+OUTREACH_ANGLE: reference a SPECIFIC detail from their post/company; never generic; 1 sentence under 25 words.
 
-==================================================
-SCORING (5 dimensions, total 0-100)
-==================================================
-
-BUYING INTENT (0-30):
-30 = explicit provider/service request with clear need
-27 = explicit freelancer/contractor/external provider requirement
-25 = direct recommendation/vendor request
-22 = clear problem requiring the service
-15 = legitimate but vague requirement
-5 = weak commercial signal
-0 = no buying intent
-
-REQUIREMENT CLARITY (0-20):
-20 = specific service + clear deliverable/project
-17 = clear service requirement
-12 = legitimate but general
-5 = vague requirement
-0 = no meaningful requirement
-
-DECISION-MAKER RELEVANCE (0-20):
-20 = founder/CEO/owner directly requesting
-18 = VP/director/head with relevant responsibility
-15 = manager/lead with relevant responsibility
-10 = employee posting for the company
-5 = authority unclear
-0 = no credible buyer relevance
-
-URGENCY (0-15):
-15 = ASAP/urgent/immediate
-12 = actively looking now
-10 = current project/starting soon
-5 = active requirement but no timeline
-2 = future consideration
-0 = no urgency
-
-COMMERCIAL POTENTIAL (0-15):
-15 = explicit budget, commercial project, provider search
-12 = clearly commercial business requirement
-8 = likely commercial requirement
-3 = commercial potential unclear
-0 = non-commercial
-
-TOTAL = buying_intent + requirement_clarity + decision_maker + urgency + commercial_potential
-
-==================================================
-TIERS
-==================================================
-
-75-100 = HOT
-40-74 = WARM
-Below 40 = REJECT
-
-MINIMUM for is_lead=true:
-- score >= 40
-- buying_intent > 0
-- requirement_clarity >= 5
-- genuine service match
-- no hard rejection rule
-
-==================================================
-OUTPUT FORMAT
-==================================================
-
-Return ONLY valid JSON array:
+OUTPUT FORMAT — return ONLY valid JSON array:
 [
   {{
     "name": "Full Name",
     "headline": "Job title at Company",
     "company": "Company Name",
     "location": "City, Country",
-    "linkedin_url": "LinkedIn profile URL",
-    "post_url": "the EXACT LinkedIn POST URL from the input (copy it unchanged; if missing, use empty string)",
+    "linkedin_url": "the EXACT LinkedIn profile URL from the input (copy unchanged)",
+    "post_url": "the EXACT LinkedIn POST URL from the input (copy unchanged; if missing, empty string)",
     "is_lead": true,
     "score": 85,
     "tier": "HOT",
-    "buying_intent": 27,
-    "requirement_clarity": 18,
-    "decision_maker_likelihood": 18,
-    "urgency": 12,
-    "commercial_potential": 10,
-    "lead_type": "explicit_service_request|vendor_recommendation|hiring|business_problem|project_need|provider_dissatisfaction|research",
+    "service_match": 22,
+    "business_problem": 18,
+    "buying_intent": 17,
+    "decision_maker_likelihood": 13,
+    "urgency": 8,
+    "outreach_worthiness": 7,
+    "lead_type": "explicit_need|problem_awareness|research|hiring|agency|irrelevant",
     "work_type": "remote|contract|part_time|full_time_onsite|unknown",
     "evidence_strength": "explicit|strong|moderate",
     "outreach_competition": "very_low|low|moderate|high|very_high",
-    "comments": 8,
-    "likes": 35,
-    "reason": "1-2 sentences with SPECIFIC evidence from post",
+    "reason": "1-2 sentences with SPECIFIC quoted evidence from the post",
     "outreach_angle": "one specific opening line referencing their exact situation (max 25 words)",
     "post_content": "First 200 chars of post"
   }}
@@ -364,10 +319,10 @@ Return ONLY valid JSON array:
 RULES:
 - Return ONLY valid JSON, no markdown
 - Maximum 50 qualifying leads
-- Never include leads below score 40
-- Never include rejected candidates
+- Never include leads below score 25 or with service_match < 10
+- Never include rejected candidates (is_lead=false)
 - Sort by score descending
-- Preserve LinkedIn URLs and engagement numbers exactly
+- Preserve LinkedIn URLs (profile AND post) and engagement numbers exactly
 - Use null when info unavailable
 """
 
@@ -708,7 +663,7 @@ If a field is not mentioned, use null.""",
                 "country_code": country_code,
                 "location_match": loc_match,
                 "linkedin_url": author_url,
-                "post_url": item.get("url") or item.get("linkedinUrl") or item.get("postUrl") or "",
+                "post_url": _extract_post_url(item),
                 "profile_picture_url": self._extract_avatar(author),
                 "post_content": post_content[:200],
                 "engagement": {
@@ -859,8 +814,14 @@ Return ONLY a JSON array of indices of KEEP posts, e.g. [0, 3, 5]. If none, retu
                         for field in ("post_url", "profile_picture_url", "location", "country_code", "location_match"):
                             if not l.get(field):
                                 l[field] = src.get(field) or ""
-                # Filter: accept leads with score >= 40 (V3 threshold)
-                return [l for l in leads if l.get("score", 0) >= 40 and l.get("is_lead", True)]
+                # Filter: accept leads with score >= 25 and service_match >= 10
+                # (matches the proven linkedin search pipeline quality gate)
+                return [
+                    l for l in leads
+                    if l.get("is_lead", True)
+                    and l.get("score", 0) >= 25
+                    and l.get("service_match", 0) >= 10
+                ]
         except json.JSONDecodeError:
             logger.warning(f"[HyperAgent] Failed to parse AI qualification response")
 
@@ -881,23 +842,25 @@ Return ONLY a JSON array of indices of KEEP posts, e.g. [0, 3, 5]. If none, retu
         return str(avatar) if avatar else ""
 
     def save_leads(self, leads: list[dict], user_id: str, search_id: str) -> int:
-        """Save qualified leads to the database (V3 format)."""
+        """Save qualified leads to the database (linkedin-search quality format)."""
         saved = 0
         for lead in leads:
             try:
                 score = lead.get("score", 0)
                 is_lead = lead.get("is_lead", True) if "is_lead" in lead else True
-                if not is_lead or score < 40:
+                if not is_lead or score < 25:
                     continue
 
-                lead_category = "hot" if score >= 75 else "warm"
+                lead_category = "hot" if score >= 85 else "warm"
 
-                # Map V3 lead_type to post_type CHECK values
+                # Map AI lead_type to post_type CHECK values
                 ai_type = (lead.get("lead_type") or "").lower()
-                if ai_type in ("explicit_service_request", "vendor_recommendation", "business_problem", "project_need", "provider_dissatisfaction", "research"):
+                if ai_type in ("explicit_need", "problem_awareness", "research"):
                     post_type = "buyer"
                 elif ai_type == "hiring":
                     post_type = "hiring"
+                elif ai_type == "agency":
+                    post_type = "agency"
                 else:
                     post_type = "buyer"
 

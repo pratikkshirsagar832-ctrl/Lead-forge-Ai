@@ -88,8 +88,8 @@ def run_hyper_agent_job(search_id: str, user_id: str, context: dict) -> None:
         # Update search record
         _mark("completed", f"Found {len(qualified)} high-quality leads from {len(raw_items)} results", {
             "total_results": saved,
-            "hot_leads": len([l for l in qualified if l.get("score", 0) >= 75]),
-            "warm_leads": len([l for l in qualified if 40 <= l.get("score", 0) < 75]),
+            "hot_leads": len([l for l in qualified if l.get("score", 0) >= 85]),
+            "warm_leads": len([l for l in qualified if 25 <= l.get("score", 0) < 85]),
             "skipped": max(0, len(raw_items) - saved),
             "completed_at": datetime.now(timezone.utc).isoformat(),
         })
@@ -269,3 +269,90 @@ async def health():
         "apify_key_configured": bool(settings.apify_api_key),
         "openai_key_configured": bool(settings.openai_api_key),
     }
+
+
+@router.post("/backfill-post-urls")
+async def backfill_post_urls(current_user: dict = Depends(get_current_user)):
+    """Backfill missing post_url on existing LinkedIn leads.
+
+    Finds leads (source=linkedin or hyper_agent) with empty post_url for the
+    current user, re-runs the HarvestAPI post-search actor for each search,
+    matches posts back to leads by author URL + post text, and fills post_url.
+    """
+    from app.services.hyper_agent import HyperAgentService, _extract_post_url
+    from app.services.apify_service import HARVEST_POST_SEARCH_ACTOR, _run_with_key
+
+    supabase = get_supabase_admin()
+    user_id = current_user["id"]
+
+    # Find leads with empty post_url
+    leads_resp = (
+        supabase.table("leads")
+        .select("id, search_id, linkedin_url, post_text, business_name")
+        .in_("source", ["linkedin", "hyper_agent"])
+        .eq("user_id", user_id)
+        .eq("post_url", "")
+        .limit(200)
+        .execute()
+    )
+    leads = leads_resp.data or []
+    if not leads:
+        return {"updated": 0, "message": "No leads need backfill"}
+
+    # Group by search_id and get the search context (niche/location)
+    search_ids = {l["search_id"] for l in leads}
+    searches_resp = supabase.table("searches").select("id, niche, location").in_("id", list(search_ids)).execute()
+    search_map = {s["id"]: s for s in (searches_resp.data or [])}
+
+    service = HyperAgentService()
+    updated = 0
+    # author-url → post_url map (cleaned profile url)
+    post_by_author: dict[str, str] = {}
+
+    for search_id in search_ids:
+        search = search_map.get(search_id)
+        if not search:
+            continue
+        niche = (search.get("niche") or "").replace("HyperAgent: ", "").strip()
+        if not niche:
+            continue
+
+        try:
+            queries = service._build_queries(niche, "", search.get("location", ""))
+            payload = {
+                "searchQueries": queries,
+                "maxPosts": 100,
+                "postedLimit": "year",
+                "sortBy": "date",
+                "profileScraperMode": "main",
+                "scrapeReactions": False,
+                "postNestedReactions": False,
+                "scrapeComments": False,
+                "postNestedComments": False,
+            }
+            key = service._get_harvest_key()
+            items = _run_with_key(HARVEST_POST_SEARCH_ACTOR, key, payload)
+            for item in items:
+                author = item.get("author") or {}
+                author_url = (author.get("url") or author.get("linkedinUrl") or "").strip()
+                if not author_url:
+                    continue
+                clean = author_url.split("?")[0].rstrip("/").lower()
+                post_url = _extract_post_url(item)
+                if post_url:
+                    post_by_author.setdefault(clean, post_url)
+        except Exception as e:
+            logger.warning(f"[HyperAgent] Backfill scrape failed for search {search_id}: {e}")
+            continue
+
+    # Match and update leads
+    for lead in leads:
+        linkedin_url = (lead.get("linkedin_url") or "").strip()
+        clean = linkedin_url.split("?")[0].rstrip("/").lower()
+        post_url = post_by_author.get(clean)
+        if not post_url:
+            continue
+        supabase.table("leads").update({"post_url": post_url}).eq("id", lead["id"]).execute()
+        updated += 1
+
+    return {"updated": updated, "message": f"Backfilled post_url for {updated} leads"}

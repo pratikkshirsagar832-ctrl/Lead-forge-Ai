@@ -434,6 +434,41 @@ def _get_avatar(author: dict) -> str:
     return ""
 
 
+def _is_post_url(url: str) -> bool:
+    """A LinkedIn POST url contains /posts/, /feed/update/, /activity- or
+    linkedin.com/feed/. Profile URLs contain /in/ — those are NOT post URLs."""
+    if not url:
+        return False
+    low = url.lower()
+    return (
+        "/posts/" in low
+        or "/feed/update/" in low
+        or "/activity-" in low
+        or "linkedin.com/feed/" in low
+    )
+
+
+def _extract_post_url(item: dict) -> str:
+    """Extract the real LinkedIn POST url from a harvestapi/scrapeforge item.
+
+    harvestapi format: item.linkedinUrl is the POST url; item.url may be
+    absent or a profile link. Validate the candidate actually looks like a
+    post link before returning it.
+    """
+    for key in ("linkedinUrl", "postUrl", "post_url", "url"):
+        val = item.get(key)
+        if isinstance(val, str) and val.strip():
+            cleaned = val.strip()
+            if _is_post_url(cleaned):
+                return cleaned
+    sc = item.get("socialContent") or {}
+    if isinstance(sc, dict):
+        share = sc.get("shareUrl")
+        if isinstance(share, str) and _is_post_url(share):
+            return share
+    return ""
+
+
 def _company_from_profile(profile: dict) -> str:
     positions = profile.get("currentPosition") or []
     for pos in positions:
@@ -522,8 +557,9 @@ def process_items(items: list[dict], max_results: int) -> tuple[list[dict], int]
             "location": location_text,
             "country_code": country_code,
             "linkedin_url": author_url,
-            # harvestapi: item.linkedinUrl; scrapeforge: item.url
-            "post_url": item.get("url") or item.get("linkedinUrl") or "",
+            # harvestapi: item.linkedinUrl is the POST url; item.url may be
+            # absent or a profile link. Validate it's actually a post link.
+            "post_url": _extract_post_url(item),
             "post_text": content[:3000],
             "posted_at": _parse_posted_at(item.get("postedAt") or item.get("postedTimestamp")),
             "engagement_likes": _int(eng.get("likes") if eng.get("likes") is not None else eng.get("reactions")),

@@ -174,7 +174,26 @@ async def hyper_agent_scrape(
     # Plan check
     _check_plan_access(current_user)
 
-    context = request.context
+    context = request.context or {}
+    # Sanitize: the AI context extractor can return nulls for any field,
+    # which crashes the background job (e.g. "can only concatenate str
+    # (not 'NoneType') to str" in qualify_leads). Coerce to safe values.
+    def _s(v) -> str:
+        return "" if v is None else str(v).strip()
+
+    context = {
+        "niche": _s(context.get("niche")),
+        "roles": _s(context.get("roles")),
+        "location": _s(context.get("location")),
+        "company_size": _s(context.get("company_size")),
+        "posted_within": _s(context.get("posted_within")) or "month",
+        "lead_types": context.get("lead_types") or [],
+    }
+    try:
+        context["count"] = min(int(context.get("count") or 20), 50)
+    except (TypeError, ValueError):
+        context["count"] = 20
+
     if not context.get("niche") or not context.get("location"):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,

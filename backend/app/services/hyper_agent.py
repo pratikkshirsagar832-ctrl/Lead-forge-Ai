@@ -535,10 +535,13 @@ If a field is not mentioned, use null.""",
         Returns:
             List of raw LinkedIn post/author items
         """
-        niche = context.get("niche", "")
-        roles = context.get("roles", "")
-        location = context.get("location", "")
-        count = min(context.get("count", 20), 50)
+        niche = context.get("niche") or ""
+        roles = context.get("roles") or ""
+        location = context.get("location") or ""
+        try:
+            count = min(int(context.get("count") or 20), 50)
+        except (TypeError, ValueError):
+            count = 20
         lead_types = context.get("lead_types") or []
 
         # Build search queries from context
@@ -689,6 +692,7 @@ If a field is not mentioned, use null.""",
         if not items:
             return []
 
+        context = {k: ("" if v is None else v) for k, v in context.items()}
         user_location = (context.get("location") or "").lower()
         req_country_codes, req_city = _parse_location_request(user_location)
         # If the user explicitly wants a country we'd normally gate out, allow it.

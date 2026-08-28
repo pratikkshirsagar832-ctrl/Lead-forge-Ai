@@ -84,7 +84,7 @@ export default function PlanGuard({ children }: { children: React.ReactNode }) {
                 Maybe Later
               </Button>
               <Link href="/dashboard/billing" className="flex-1">
-                <Button variant="primary" className="w-full gap-2">
+                <Button variant="default" className="w-full gap-2">
                   View Plans <ArrowRight className="h-4 w-4" />
                 </Button>
               </Link>

@@ -185,6 +185,30 @@ async def hyper_agent_scrape(
     def _s(v) -> str:
         return "" if v is None else str(v).strip()
 
+    # Region → country/region names (from the Q3 location modal). If the
+    # frontend passed region IDs (e.g. "asia,europe"), expand them into
+    # the location string so _parse_location_request can resolve codes.
+    REGION_TO_LOCATION = {
+        "asia": "Asia",
+        "united_states": "United States",
+        "usa": "United States",
+        "india": "India",
+        "europe": "Europe",
+        "africa": "Africa",
+        "australia": "Australia",
+        "canada": "Canada",
+        "south_america": "South America",
+    }
+    locations_raw = _s(context.get("locations"))
+    if locations_raw:
+        expanded = []
+        for rid in locations_raw.split(","):
+            rid = rid.strip()
+            if rid in REGION_TO_LOCATION:
+                expanded.append(REGION_TO_LOCATION[rid])
+        if expanded:
+            context["location"] = _s(context.get("location")) + (", " if context.get("location") else "") + ", ".join(expanded)
+
     context = {
         "niche": _s(context.get("niche")),
         "roles": _s(context.get("roles")),

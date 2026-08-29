@@ -212,6 +212,36 @@ def _extract_post_url(item: dict) -> str:
             return share
     return ""
 
+
+def _normalize_terms(value) -> list[str]:
+    """Split a service/role value into clean terms.
+
+    Handles: plain strings ('web dev, app dev'), Python-list strings
+    ("['web dev', 'app dev']"), and actual lists. Strips brackets,
+    quotes, and empty entries. Dedupes preserving order.
+    """
+    if not value:
+        return []
+    if isinstance(value, list):
+        raw = [str(x) for x in value if x]
+    else:
+        text = str(value).strip().strip("[]").strip("()")
+        raw = [p.strip() for p in text.split(",")]
+    out: list[str] = []
+    for part in raw:
+        p = str(part).strip().strip("'\"").strip()
+        if len(p) < 2:
+            continue
+        for sub in [s.strip().strip("'\"").strip() for s in p.split(",")]:
+            if len(sub) >= 2 and sub not in out:
+                out.append(sub)
+    return out
+
+
+def _article(term: str) -> str:
+    return "an" if (term or "")[:1].lower() in "aeiou" else "a"
+
+
 # ── System prompt for HyperAgent (V3 — conversational) ──────────────────
 SYSTEM_PROMPT = """You are HyperAgent, an elite AI-powered B2B lead generation assistant built by Hyperclients.
 
@@ -619,6 +649,7 @@ class HyperAgentService:
 
     def _extract_context(self, history: list[dict]) -> dict:
         """Extract ICP context from conversation history using AI."""
+        import re as _re
         # Build a summary of the conversation
         conversation = "\n".join(
             f"{m['role']}: {m['content']}" for m in history[-10:]  # last 10 messages
@@ -632,11 +663,11 @@ class HyperAgentService:
                     "content": """Extract the lead search parameters from this conversation.
 Return ONLY a JSON object with these fields:
 {
-  "niche": "industry/niche (e.g., SaaS, E-commerce, Real Estate)",
+  "niche": "services the user sells, comma-separated (e.g., web development, app development, SaaS development)",
   "roles": "target job titles (e.g., CTO, Marketing Director, Founder)",
-  "location": "city, country (e.g., San Francisco, USA)",
+  "location": "city, country or region (e.g., San Francisco, USA)",
   "company_size": "company size range (e.g., 10-50 employees)",
-  "count": number of leads needed (default 20),
+  "count": number of leads needed (always a NUMBER, e.g. 5, 10, 20, 50; default 20),
   "posted_within": "timeframe (e.g., week, month)",
   "lead_types": ["hiring", "freelancer", "agency"] — which kinds of leads the user wants. 
     "hiring" = companies hiring freelancers/contractors (hiring posts)
@@ -654,9 +685,35 @@ If a field is not mentioned, use null.""",
         )
 
         try:
-            return json.loads(response.choices[0].message.content)
+            ctx = json.loads(response.choices[0].message.content)
         except Exception:
-            return {}
+            ctx = {}
+
+        # Reliability fallbacks (the AI often drops or mangles these)
+        # 1. count: regex from the last user message ("5 leads", "count: 5", "I need 5")
+        try:
+            if not ctx.get("count"):
+                last_user = ""
+                for m in reversed(history[-10:]):
+                    if m.get("role") == "user":
+                        last_user = m.get("content", "")
+                        break
+                m = _re.search(r"(?:count[:\s]*|need\s+|want\s+)(\d+)\s*(?:leads?)?", last_user, _re.IGNORECASE)
+                m2 = _re.search(r"(\d+)\s*leads?", last_user, _re.IGNORECASE)
+                if m:
+                    ctx["count"] = int(m.group(1))
+                elif m2:
+                    ctx["count"] = int(m2.group(1))
+        except Exception:
+            pass
+
+        # 2. If niche/roles came back as a list string, keep it — the query
+        #    builder normalizes lists now. Just ensure they're strings.
+        for field in ("niche", "roles", "location"):
+            v = ctx.get(field)
+            if isinstance(v, list):
+                ctx[field] = ", ".join(str(x) for x in v if x)
+        return ctx
 
     def scrape_leads(self, context: dict) -> list[dict]:
         """Scrape LinkedIn using HarvestAPI based on confirmed context.
@@ -728,38 +785,42 @@ If a field is not mentioned, use null.""",
         want_freelancer = (not lead_types) or "freelancer" in lead_types
         want_agency = (not lead_types) or "agency" in lead_types
 
-        role_list = [r.strip() for r in roles.split(",") if r.strip()] if roles else []
-        niche_terms = [n.strip() for n in niche.split(",") if n.strip()] if niche else []
+        role_list = _normalize_terms(roles)
+        niche_terms = _normalize_terms(niche)
 
-        # Role variants from niche (website development -> website developer)
+        # Role variants per TERM (website development -> website developer),
+        # never on the combined string (fixes "web developer, app dev agency"
+        # garbage queries).
         role_variants: set[str] = set()
-        niche_low = niche.lower()
-        if "development" in niche_low:
-            role_variants.add(niche.replace("development", "developer").strip())
-        if "design" in niche_low:
-            role_variants.add(niche.replace("design", "designer").strip())
-        if "marketing" in niche_low:
-            role_variants.add(f"{niche} expert")
-            role_variants.add(f"{niche} specialist")
-        if "seo" in niche_low:
-            role_variants.add("seo expert")
-        if "shopify" in niche_low or "ecommerce" in niche_low:
-            role_variants.add("shopify expert")
-        if "web" in niche_low or "website" in niche_low:
-            role_variants.add(f"{niche.replace(' website', '').replace('website', 'web').strip()} developer")
-            role_variants.add(f"{niche.replace(' website', '').replace('website', 'web').strip()} designer")
+        for term in niche_terms:
+            t_low = term.lower()
+            base = term
+            if "development" in t_low:
+                role_variants.add(base.replace("development", "developer").strip())
+            if "design" in t_low:
+                role_variants.add(base.replace("design", "designer").strip())
+            if "marketing" in t_low:
+                role_variants.add(f"{base} expert")
+                role_variants.add(f"{base} specialist")
+            if "seo" in t_low:
+                role_variants.add("seo expert")
+            if "shopify" in t_low or "ecommerce" in t_low:
+                role_variants.add("shopify expert")
+            if "web" in t_low or "website" in t_low:
+                role_variants.add(f"{base.replace(' website', '').replace('website', 'web').strip()} developer")
+                role_variants.add(f"{base.replace(' website', '').replace('website', 'web').strip()} designer")
         all_roles = list(dict.fromkeys(role_list + list(role_variants)))
 
         # AGENCY-seekers first (highest value: people asking FOR an agency)
         if want_agency:
             for role in all_roles:
-                _add(f"looking for an {role} agency")
-                _add(f"recommend an {role} agency")
-                _add(f"need an {role} agency")
+                _add(f"looking for {_article(role)} {role} agency")
+                _add(f"recommend {_article(role)} {role} agency")
+                _add(f"need {_article(role)} {role} agency")
                 _add(f"looking for {role} agency")
                 _add(f"best {role} agency")
             for n in niche_terms:
-                _add(f"looking for an {n} agency")
+                _add(f"looking for {_article(n)} {n} agency")
                 _add(f"recommend a good {n} agency")
 
         # FREELANCER-seekers
@@ -774,7 +835,7 @@ If a field is not mentioned, use null.""",
         if want_hiring:
             for role in all_roles:
                 _add(f"hiring {role}")
-                _add(f"need a {role} for our")
+                _add(f"need {_article(role)} {role} for our")
                 _add(f"looking for {role} for our")
                 _add(f"we are hiring {role}")
 
@@ -806,6 +867,7 @@ If a field is not mentioned, use null.""",
         # Fallback
         if not queries:
             queries = [f'"{niche}"' if niche else "business development"]
+
 
         return queries[:16]  # Max 16 queries
 
@@ -918,18 +980,23 @@ If a field is not mentioned, use null.""",
         niche = context.get("niche", "")
         roles = context.get("roles", "")
         relevance_kws: set[str] = set()
-        for kw in (niche + "," + roles).split(","):
-            kw = kw.strip().lower()
+        for kw in _normalize_terms(niche) + _normalize_terms(roles):
+            kw = kw.lower()
             if len(kw) >= 3:
                 relevance_kws.add(kw)
-        # Derived role keywords: "website development" -> "web developer" etc.
-        if "development" in niche.lower():
-            relevance_kws.add(niche.lower().replace("development", "developer").strip())
-        if "design" in niche.lower():
-            relevance_kws.add(niche.lower().replace("design", "designer").strip())
+        # Derived role keywords per-term: "website development" -> "web developer"
+        for t in _normalize_terms(niche):
+            t_low = t.lower()
+            if "development" in t_low:
+                relevance_kws.add(t_low.replace("development", "developer").strip())
+            if "design" in t_low:
+                relevance_kws.add(t_low.replace("design", "designer").strip())
+            if "marketing" in t_low:
+                relevance_kws.add(f"{t_low} expert")
+                relevance_kws.add(f"{t_low} specialist")
         # Also add role terms to relevance keywords
-        for r in (roles or "").split(","):
-            r = r.strip().lower()
+        for r in _normalize_terms(roles):
+            r = r.lower()
             if len(r) >= 3:
                 relevance_kws.add(r)
 
@@ -1125,8 +1192,8 @@ Return ONLY a JSON array of indices of KEEP posts, e.g. [0, 3, 5]. If none, retu
     def _ai_qualify_batch(self, batch: list[dict], context: dict) -> list[dict]:
         """Qualify a batch of leads with AI scoring (V3 format)."""
         prompt = QUALIFICATION_PROMPT.format(
-            niche=context.get("niche", ""),
-            roles=context.get("roles", ""),
+            niche=", ".join(_normalize_terms(context.get("niche", ""))),
+            roles=", ".join(_normalize_terms(context.get("roles", ""))),
             location=context.get("location", ""),
         )
 

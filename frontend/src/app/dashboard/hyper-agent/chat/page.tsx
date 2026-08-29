@@ -228,6 +228,12 @@ I'll understand your needs, confirm the details, then scrape LinkedIn and qualif
           if (selectedLeadTypes.length > 0) {
             contextData.lead_types = selectedLeadTypes
           }
+          if (selectedLeadCount) {
+            contextData.count = parseInt(selectedLeadCount, 10) || 20
+          }
+          if (selectedLocations.length > 0) {
+            contextData.locations = selectedLocations.join(",")
+          }
           const scrapeRes = await api.post("/api/hyper-agent/scrape", { context: contextData })
 
           if (scrapeRes.status !== 200) {

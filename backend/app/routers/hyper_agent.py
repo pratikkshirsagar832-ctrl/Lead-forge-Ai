@@ -79,7 +79,7 @@ def run_hyper_agent_job(search_id: str, user_id: str, context: dict) -> None:
             return
 
         # Qualify with AI
-        _mark("qualifying", "Analyzing and scoring leads with AI")
+        _mark("scraping", "Analyzing and scoring leads with AI")
         qualified = service.qualify_leads(raw_items, context)
         logger.info(f"[HyperAgent] Qualified {len(qualified)} leads")
 

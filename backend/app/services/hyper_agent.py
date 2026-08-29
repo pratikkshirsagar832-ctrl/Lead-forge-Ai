@@ -218,7 +218,7 @@ SYSTEM_PROMPT = """You are HyperAgent, an elite AI-powered B2B lead generation a
 Your job is to help freelancers, consultants, and agencies find highly relevant LinkedIn leads for the services they sell.
 
 ==================================================
-CONVERSATION FLOW — 3 QUESTIONS MAX THEN CONFIRM
+CONVERSATION FLOW — 4 QUESTIONS THEN CONFIRM
 ==================================================
 
 Always follow this EXACT order. Do NOT skip questions the user hasn't answered.
@@ -255,8 +255,22 @@ Then list the options:
 - Canada
 - South America
 
-**Step 4 — Confirm & Search**
-Once all 3 questions are answered, present the confirmation card and wait for YES.
+**Step 4 — Ask Q4: Lead Count**
+After the user answers Q3, ask:
+How many leads do you need?
+
+Start your message with the exact line:
+LEAD_COUNT_QUESTION
+
+Then list the options:
+📊 Select one:
+- 5 leads (Quick sample)
+- 10 leads (Small batch)
+- 20 leads (Standard — recommended)
+- 50 leads (Maximum)
+
+**Step 5 — Confirm & Search**
+Once all 4 questions are answered, present the confirmation card and wait for YES.
 
 ==================================================
 ICP UNDERSTANDING
@@ -275,7 +289,7 @@ From the user's answers, identify:
    - Australia → AU, NZ
    - Canada → CA
    - South America → BR, MX, AR, CL, CO
-5. LEAD COUNT — Default = 20.
+5. LEAD COUNT — From Q4 (default = 20).
 
 NEVER confuse SERVICE (what user sells) with TARGET CUSTOMER (who buys it).
 
@@ -283,7 +297,7 @@ NEVER confuse SERVICE (what user sells) with TARGET CUSTOMER (who buys it).
 CONVERSATION RULES
 ==================================================
 
-- Ask AT MOST 3 questions (Q1, Q2, Q3), then confirm immediately
+- Ask AT MOST 4 questions (Q1, Q2, Q3, Q4), then confirm immediately
 - NEVER ask questions the user already answered
 - If user gives enough info in first message, skip to confirmation
 - When user says "yes", "go", "start", "just start", "find them" — STOP ASKING, confirm with defaults immediately
@@ -545,6 +559,24 @@ class HyperAgentService:
                 },
             }
 
+        # If the AI is asking the lead count question, return a special action
+        # so the frontend can render count options.
+        if "LEAD_COUNT_QUESTION" in (ai_message or ""):
+            clean = (ai_message or "").replace("LEAD_COUNT_QUESTION", "").strip()
+            return {
+                "response": clean,
+                "action": "lead_count",
+                "data": {
+                    "options": [
+                        {"id": "5", "label": "5 leads", "description": "Quick sample — test the waters"},
+                        {"id": "10", "label": "10 leads", "description": "Small batch — good starting point"},
+                        {"id": "20", "label": "20 leads", "description": "Standard — recommended for most users"},
+                        {"id": "50", "label": "50 leads", "description": "Maximum — full pipeline boost"},
+                    ],
+                    "context": self._extract_context(history + [{"role": "user", "content": message}]),
+                },
+            }
+
         # Check if user confirmed (YES/CONFIRM/START)
         if self._is_confirmation(message):
             # Check if we have enough info from history
@@ -649,11 +681,12 @@ If a field is not mentioned, use null.""",
         logger.info(f"[HyperAgent] Queries: {queries}")
 
         key = self._get_harvest_key()
-        max_posts = count * 3  # Get 3x to have enough after qualification filtering
+        # For small counts, get way more raw items to compensate for heavy filtering
+        max_posts = max(count * 8, 80) if count <= 10 else count * 5
 
         payload = {
-            "searchQueries": queries[:8],
-            "maxPosts": min(max_posts, 80),
+            "searchQueries": queries[:10],
+            "maxPosts": min(max_posts, 120),
             "postedLimit": str(context.get("posted_within") or "month"),
             "sortBy": "date",
             "timeoutSeconds": 540,
@@ -689,7 +722,7 @@ If a field is not mentioned, use null.""",
         def _add(q: str) -> None:
             q = " ".join(q.split())
             key = q.lower().strip('"')
-            if key and key not in seen and len(queries) < 12:
+            if key and key not in seen and len(queries) < 16:
                 seen.add(key)
                 queries.append(q)
 
@@ -748,17 +781,22 @@ If a field is not mentioned, use null.""",
                 _add(f"looking for {role} for our")
                 _add(f"we are hiring {role}")
 
-        # Generic niche-level intent phrases
+        # Generic niche-level intent phrases — generate MORE per term
         for n in niche_terms:
             _add(f"looking for {n}")
             _add(f"need {n}")
             _add(f"{n} help")
             _add(f"recommend {n}")
+            _add(f"anyone know {n}")
+            _add(f"{n} required")
+            _add(f"seeking {n}")
 
-        # Location-scoped queries — if a city is given, target it directly
+        # Location-scoped queries — generate for ALL regions, not just the first
         if location:
-            loc = location.split(",")[0].strip() if location else ""
-            if loc:
+            # Split location into individual regions/countries
+            loc_parts = [l.strip() for l in location.split(",") if l.strip()]
+            # Use first 3 location parts to keep query count manageable
+            for loc in loc_parts[:3]:
                 for role in all_roles[:3]:
                     _add(f"hiring {role} in {loc}")
                     _add(f"looking for {role} in {loc}")
@@ -766,12 +804,13 @@ If a field is not mentioned, use null.""",
                 for n in niche_terms[:2]:
                     _add(f"{n} in {loc}")
                     _add(f"looking for {n} in {loc}")
+                    _add(f"need {n} in {loc}")
 
         # Fallback
         if not queries:
             queries = [f'"{niche}"' if niche else "business development"]
 
-        return queries[:12]  # Max 12 queries
+        return queries[:16]  # Max 16 queries
 
     def qualify_leads(self, items: list[dict], context: dict) -> list[dict]:
         """Use AI to qualify and score scraped leads.
@@ -936,44 +975,25 @@ If a field is not mentioned, use null.""",
             if not ((q.get("lead_type") == "hiring") and (q.get("work_type") == "full_time_onsite"))
         ]
 
-        # Code-level SELLER gate: reject service PROVIDERS (freelancers,
-        # agencies, studios selling their work). Only strong signals —
-        # company names like "ABC Services LLC" alone must NOT reject a
-        # genuine buyer, otherwise we return 0 results.
-        SELLER_PROVIDER_HEADLINE = (
-            "freelance", "freelancer", "digital agency", "web agency",
-            "design agency", "seo agency", "marketing agency", "social media agency",
-            "i help businesses", "i help companies", "we help businesses",
-            "we help companies", "we build websites", "we build apps",
-            "service provider",
-        )
+        # Code-level SELLER gate: only reject STRONG selling signals.
+        # Be very lenient — false positives kill leads. Only reject when the
+        # post is CLEARLY promoting their own services for hire.
         SELLER_POST_MARKERS = (
-            "i offer", "we offer", "i provide", "we provide", "my services",
-            "our services", "dm me", "book a call", "open to work",
-            "open for work", "available for hire", "available for work",
-            "taking new clients", "need clients", "i specialize",
-            "we specialize", "check out my", "portfolio", "case studies",
+            "i offer", "we offer", "i provide services", "we provide services",
+            "dm me for", "book a call", "open to work", "open for hire",
+            "available for freelance", "available for work",
+            "taking new clients", "need clients",
+            "check out my portfolio", "see my portfolio",
             "i'm a freelance", "im a freelance", "i am a freelance",
-            "i am a web developer", "i am a designer", "my agency",
+            "my agency is", "our agency is",
         )
 
         def _is_seller(q: dict) -> bool:
-            headline = (q.get("headline") or "").lower()
-            company = (q.get("company") or "").lower()
             post = (q.get("post_content") or "").lower()
-            # Strong: post is clearly selling their own services
+            # Only reject based on POST content — headline alone is never enough
+            # (too many false positives: "Founder at ABC Services" could be a buyer)
             if any(m in post for m in SELLER_POST_MARKERS):
                 return True
-            # Strong: headline explicitly claims to be a freelancer/provider
-            # AND the post does not clearly ask to BUY the service
-            if any(m in headline for m in SELLER_PROVIDER_HEADLINE):
-                buying_hints = (
-                    "looking for", "need a", "need help", "recommend",
-                    "hiring", "anyone know", "looking to hire", "for our project",
-                )
-                if not any(h in post for h in buying_hints):
-                    return True
-            # Company name alone ("ABC Services LLC") is NEVER enough to reject.
             return False
 
         qualified = [q for q in qualified if not _is_seller(q)]

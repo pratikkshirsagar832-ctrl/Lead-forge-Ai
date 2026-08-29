@@ -67,6 +67,8 @@ I'll understand your needs, confirm the details, then scrape LinkedIn and qualif
   const [selectedLeadTypes, setSelectedLeadTypes] = useState<string[]>([])
   const [locationPrompt, setLocationPrompt] = useState<any>(null)
   const [selectedLocations, setSelectedLocations] = useState<string[]>([])
+  const [leadCountPrompt, setLeadCountPrompt] = useState<any>(null)
+  const [selectedLeadCount, setSelectedLeadCount] = useState<string>("")
   const [pendingContext, setPendingContext] = useState<any>(null)
   const [showHistory, setShowHistory] = useState(false)
   const [history, setHistory] = useState<any[]>([])
@@ -202,6 +204,14 @@ I'll understand your needs, confirm the details, then scrape LinkedIn and qualif
         setLocationPrompt(data.data || { options: [] })
         setPendingContext(data.data?.context || null)
         setSelectedLocations([])
+        return
+      }
+
+      // Lead count question → show radio modal
+      if (data.action === "lead_count") {
+        setLeadCountPrompt(data.data || { options: [] })
+        setPendingContext(data.data?.context || null)
+        setSelectedLeadCount("")
         return
       }
 
@@ -703,6 +713,69 @@ Here are your top leads (scored 0-100):`,
                 className="flex-1 py-2.5 rounded-xl text-sm font-bold text-white bg-cyan hover:bg-cyan/80 transition-colors"
               >
                 Confirm & Continue
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Lead Count Radio Modal */}
+      {leadCountPrompt && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+          <div className="absolute inset-0 bg-navy/70 backdrop-blur-sm" onClick={() => setLeadCountPrompt(null)} />
+          <div className="relative w-full max-w-md bg-ocean border border-emerald/30 rounded-2xl p-6 shadow-2xl animate-in fade-in zoom-in-95 duration-200">
+            <h3 className="text-lg font-bold text-offwhite mb-1">📊 How many leads do you need?</h3>
+            <p className="text-xs text-ice/60 mb-4">Pick one option. More leads = wider search but same quality.</p>
+
+            <div className="space-y-2.5 mb-5">
+              {(leadCountPrompt.options || []).map((opt: any) => {
+                const checked = selectedLeadCount === opt.id
+                return (
+                  <button
+                    key={opt.id}
+                    onClick={() => setSelectedLeadCount(opt.id)}
+                    className={`w-full flex items-center gap-3 p-3 rounded-xl border transition-all text-left ${
+                      checked
+                        ? "border-emerald/60 bg-emerald/10"
+                        : "border-steel/20 bg-navy/60 hover:border-steel/40"
+                    }`}
+                  >
+                    <div className={`w-4 h-4 shrink-0 rounded-full border-2 flex items-center justify-center transition-colors ${
+                      checked ? "border-emerald bg-emerald" : "border-steel/50"
+                    }`}>
+                      {checked && <div className="w-1.5 h-1.5 rounded-full bg-white" />}
+                    </div>
+                    <div>
+                      <p className="text-sm font-semibold text-offwhite">{opt.label}</p>
+                      {opt.description && (
+                        <p className="text-[11px] text-ice/50 mt-0.5">{opt.description}</p>
+                      )}
+                    </div>
+                  </button>
+                )
+              })}
+            </div>
+
+            <div className="flex gap-2">
+              <button
+                onClick={() => setLeadCountPrompt(null)}
+                className="flex-1 py-2.5 rounded-xl text-sm font-medium text-ice/60 hover:text-offwhite border border-steel/20 hover:bg-steel/10 transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => {
+                  if (!selectedLeadCount) {
+                    setLeadCountPrompt(null)
+                    return
+                  }
+                  const label = (leadCountPrompt.options || []).find((o: any) => o.id === selectedLeadCount)?.label || selectedLeadCount
+                  setLeadCountPrompt(null)
+                  sendMessage(`I need ${label} (count: ${selectedLeadCount})`)
+                }}
+                className="flex-1 py-2.5 rounded-xl text-sm font-bold text-white bg-emerald hover:bg-emerald/80 transition-colors"
+              >
+                Confirm & Search
               </button>
             </div>
           </div>

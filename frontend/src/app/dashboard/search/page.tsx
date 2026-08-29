@@ -352,7 +352,7 @@ export default function SearchPage() {
                       <input
                         {...mapsForm.register('niche')}
                         type="text"
-                        placeholder={source === 'linkedin' ? 'e.g. I need SEO help' : 'e.g. Plumbers, Dentists'}
+                        placeholder={source === 'linkedin' ? 'e.g. I need website help' : 'e.g. Plumbers, Dentists'}
                         className="w-full pl-10 pr-4 py-3 rounded-xl border border-ocean/30 bg-navy/60 focus:bg-navy/80 focus:ring-2 focus:ring-steel/40 focus:border-steel/50 transition-all text-offwhite text-lg placeholder-ice/30 outline-none"
                       />
                     </div>

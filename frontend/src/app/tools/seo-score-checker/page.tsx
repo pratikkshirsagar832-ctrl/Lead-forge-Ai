@@ -103,13 +103,13 @@ export default function SeoScoreCheckerPage() {
       <Header />
       <div className="container relative z-10 mx-auto px-6 pt-28 pb-20 max-w-4xl">
         <p className="text-xs font-semibold uppercase tracking-widest text-brand-accent-light mb-2 flex items-center gap-2">
-          <Gauge className="w-4 h-4" /> Free SEO Tool
+          <Gauge className="w-4 h-4" /> Free Website Audit Tool
         </p>
         <h1 className="text-4xl md:text-5xl font-bold text-offwhite font-heading mb-3">
-          SEO Score <span className="gradient-text-premium">Checker</span>
+          Website <span className="gradient-text-premium">Audit</span>
         </h1>
         <p className="text-ice/80 text-lg mb-10">
-          Paste any website URL and get an instant on-page SEO audit — title, headings, alt text, meta
+          Paste any website URL and get an instant on-page audit — title, headings, alt text, meta
           tags, robots.txt, sitemap and more. Free, no login required.
         </p>
 
@@ -266,11 +266,11 @@ export default function SeoScoreCheckerPage() {
 
               <div className="mt-10 glass-card rounded-2xl p-6 md:p-8">
                 <h3 className="text-xl font-bold text-offwhite font-heading mb-2">
-                  Want SEO-ready leads instead of audits?
+                  Want ready-to-buy leads instead of audits?
                 </h3>
                 <p className="text-ice/80 leading-relaxed text-sm mb-5">
                   Hyperclients finds local businesses with weak or missing websites and scores them by
-                  opportunity — so you pitch the ones ready to buy a redesign or SEO retainer.
+                  opportunity — so you pitch the ones ready to buy a redesign or website retainer.
                 </p>
                 <a href="/login" className="btn-gradient-cyan rounded-xl px-6 py-3 text-sm inline-flex items-center gap-2">
                   Try It Free <ArrowRight className="w-4 h-4" />

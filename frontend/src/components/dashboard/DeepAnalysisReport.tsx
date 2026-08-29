@@ -41,7 +41,7 @@ function organizeSections(raw: Record<string, any>): SectionDef[] {
 
   sections.push({
     id: 'seo',
-    label: 'SEO & Meta',
+    label: 'Website & Meta',
     icon: FileSearch,
     checks: [
       { label: 'HTTPS Enabled', pass: !!raw.is_https },

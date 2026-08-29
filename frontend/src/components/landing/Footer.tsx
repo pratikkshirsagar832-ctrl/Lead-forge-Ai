@@ -44,7 +44,7 @@ export function Footer() {
             <ul className="space-y-3 text-sm">
               <li><Link href="/#features" className="hover:text-steel transition-colors duration-200">Features</Link></li>
               <li><Link href="/#how-it-works" className="hover:text-steel transition-colors duration-200">How it Works</Link></li>
-              <li><Link href="/tools/seo-score-checker" className="hover:text-steel transition-colors duration-200">SEO Score Checker</Link></li>
+              <li><Link href="/tools/seo-score-checker" className="hover:text-steel transition-colors duration-200">Website Audit</Link></li>
               <li><Link href="/pricing" className="hover:text-steel transition-colors duration-200">Pricing</Link></li>
               <li><Link href="/blogs" className="hover:text-steel transition-colors duration-200">Blog</Link></li>
               <li><Link href="/dashboard" className="hover:text-steel transition-colors duration-200">Dashboard</Link></li>

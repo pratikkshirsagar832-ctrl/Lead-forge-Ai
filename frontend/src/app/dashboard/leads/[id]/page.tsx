@@ -507,7 +507,7 @@ export default function LeadDetailPage() {
                   <Target className="w-10 h-10 text-steel/50 mb-3" />
                   <h3 className="text-lg font-bold text-offwhite mb-1">Website Score Not Available</h3>
                   <p className="text-sm text-ice/60 mb-5 max-w-xs">
-                    Click below to analyze this lead&apos;s website — we&apos;ll check for SEO, UX,
+                    Click below to analyze this lead&apos;s website — we&apos;ll check for website issues, UX,
                     mobile-friendliness, and more.
                   </p>
                   <LoadingButton

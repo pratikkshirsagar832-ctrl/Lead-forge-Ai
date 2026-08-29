@@ -20,6 +20,9 @@ import {
   User,
   Zap,
   Sparkles,
+  ArrowUpRight,
+  Kanban,
+  UsersRound,
 } from 'lucide-react';
 import { motion } from 'framer-motion';
 import { ThemeToggle } from '@/components/ThemeToggle';

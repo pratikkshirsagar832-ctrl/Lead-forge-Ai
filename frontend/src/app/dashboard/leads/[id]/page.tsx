@@ -69,7 +69,7 @@ export default function LeadDetailPage() {
     try {
       setIsGeneratingPitch(true);
       const { data } = await api.post(API_ROUTES.ai.pitch(id as string));
-      setLead({ ...lead, ai_pitch: data.pitch });
+      setLead((prev: any) => prev ? { ...prev, ai_pitch: data.pitch } : prev);
       showToast('AI Pitch generated successfully!', 'success');
     } catch (error: any) {
       const detail = error.response?.data?.detail;
@@ -83,7 +83,7 @@ export default function LeadDetailPage() {
     try {
       setIsAnalyzingWebsite(true);
       const { data } = await api.post(API_ROUTES.leads.analyzeWebsite(id as string));
-      setLead((prev: any) => ({
+      setLead((prev: any) => prev ? ({
         ...prev,
         website_analyses: [{
           overall_score: data.data.overall_score,
@@ -92,7 +92,7 @@ export default function LeadDetailPage() {
         }],
         website_health_score: data.data.overall_score,
         lead_category: data.data.category,
-      }));
+      }) : prev);
       showToast('Website analysis complete!', 'success');
       handleGenerateWebsiteMessage();
     } catch (error: any) {

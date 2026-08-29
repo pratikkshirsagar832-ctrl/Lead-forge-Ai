@@ -5,7 +5,7 @@ import api from '@/lib/api';
 import { API_ROUTES } from '@/lib/constants';
 import { GlassCard } from '@/components/shared/GlassCard';
 import { Skeleton } from '@/components/shared/Skeleton';
-import { Search, Users, Flame, TrendingUp, Sparkles } from 'lucide-react';
+import { Search, Users, Flame, TrendingUp } from 'lucide-react';
 import { motion } from 'framer-motion';
 
 interface DashboardStats {
@@ -119,7 +119,7 @@ export function StatsCards() {
             <div className="relative p-6">
               <div className="flex items-center justify-between">
                 <div className={`w-12 h-12 rounded-xl ${card.iconBg} flex items-center justify-center ring-1 ring-white/5 backdrop-blur-sm`}>
-                  <card.icon className={`w-5.5 h-5.5 ${card.iconColor}`} />
+                  <card.icon className={`w-5 h-5 ${card.iconColor}`} />
                 </div>
                 <div className="text-right">
                   <p className="text-xs font-semibold text-ice/40 uppercase tracking-widest mb-1.5">{card.title}</p>

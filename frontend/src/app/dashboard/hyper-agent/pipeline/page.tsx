@@ -199,7 +199,7 @@ export default function PipelinePage() {
                     </div>
                   </div>
                   <div className="flex items-center justify-between mt-2 pt-2 border-t border-ocean/10">
-                    <span className="text-[10px] text-ice0">{lead.lastActivity}</span>
+                    <span className="text-[10px] text-ice/60">{lead.lastActivity}</span>
                     <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition">
                       <button className="p-1 text-ice/60 hover:text-accent-cyan">
                         <Mail className="w-3 h-3" />

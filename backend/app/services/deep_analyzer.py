@@ -200,7 +200,7 @@ async def _call_openai_batch(client: OpenAI, batch: list[dict]) -> list[dict]:
         ),
     )
 
-    text = resp.choices[0].message.content
+    text = resp.choices[0].message.content if resp.choices and resp.choices[0].message.content else "[]"
     json_str = _extract_json(text)
     ai_results: list[dict] = json.loads(json_str)
 

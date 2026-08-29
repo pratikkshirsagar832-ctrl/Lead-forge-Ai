@@ -107,7 +107,7 @@ export default function ResearchPage() {
         <div className="text-center py-16">
           <Loader2 className="w-12 h-12 mx-auto mb-4 text-accent-cyan animate-spin" />
           <p className="text-ice/60">Researching {query}...</p>
-          <p className="text-ice0 text-sm mt-1">Searching across multiple sources</p>
+          <p className="text-ice/60 text-sm mt-1">Searching across multiple sources</p>
         </div>
       )}
 

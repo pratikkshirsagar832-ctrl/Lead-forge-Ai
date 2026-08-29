@@ -204,7 +204,7 @@ export default function ExportPage() {
                       <p className="text-xs text-ice/60">{item.date}</p>
                     </div>
                     <Badge variant="outline" className="border-ocean/20 text-ice/60 text-xs">{item.format}</Badge>
-                    <span className="text-xs text-ice0">{item.size}</span>
+                    <span className="text-xs text-ice/60">{item.size}</span>
                   </div>
                 ))}
               </div>

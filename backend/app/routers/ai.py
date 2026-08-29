@@ -126,7 +126,7 @@ async def generate_lead_pitch(
             "ai_confidence_score": result["confidence_score"],
             "estimated_deal_value": result["estimated_deal_value"],
         }
-        supabase.table("leads").update(update_data).eq("id", lead_id).execute()
+        supabase.table("leads").update(update_data).eq("id", lead_id).eq("user_id", user_id).execute()
     except Exception as e:
         logger.warning(f"Failed to save pitch for lead {lead_id}: {e}")
 

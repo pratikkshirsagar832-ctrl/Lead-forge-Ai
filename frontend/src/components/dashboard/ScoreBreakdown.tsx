@@ -4,7 +4,7 @@ import { GlassCard } from '@/components/shared/GlassCard';
 import { cn } from '@/lib/utils';
 import {
   AlertTriangle, CheckCircle, XCircle, AlertCircle,
-  TrendingUp, Target, Plus
+  TrendingUp, Target
 } from 'lucide-react';
 
 interface BreakdownItem {

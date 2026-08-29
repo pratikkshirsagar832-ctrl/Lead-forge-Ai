@@ -95,7 +95,7 @@ export function HowItWorks() {
                 <div
                   className={`w-12 h-12 rounded-xl bg-gradient-to-br ${step.color} flex items-center justify-center mb-5 transition-colors duration-300 ${step.iconColor}`}
                 >
-                  <Icon className="w-5.5 h-5.5" />
+                  <Icon className="w-5 h-5" />
                 </div>
 
                 <h4

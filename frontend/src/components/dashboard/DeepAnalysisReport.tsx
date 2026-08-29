@@ -6,7 +6,7 @@ import { cn } from '@/lib/utils';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   Home, FileSearch, Paintbrush, Link2, PhoneCall, Zap,
-  CheckCircle, XCircle, AlertTriangle, AlertCircle, ChevronDown, ChevronUp
+  CheckCircle, XCircle, AlertCircle, ChevronDown, ChevronUp
 } from 'lucide-react';
 
 interface DeepAnalysisReportProps {

@@ -241,7 +241,7 @@ export default function CompliancePage() {
                         <Badge className={`${typeColors[log.type]} border-0 text-xs`}>{log.type}</Badge>
                       </div>
                       <p className="text-sm text-ice/60 mt-0.5">{log.detail}</p>
-                      <div className="flex items-center gap-4 mt-1 text-xs text-ice0">
+                      <div className="flex items-center gap-4 mt-1 text-xs text-ice/60">
                         <span>{log.user}</span>
                         <span>{log.timestamp}</span>
                       </div>

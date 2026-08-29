@@ -1,5 +1,6 @@
 from functools import lru_cache
 from pathlib import Path
+from typing import Literal
 
 from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -57,7 +58,7 @@ class Settings(BaseSettings):
     backend_url: str = "http://localhost:8000"
     site_url: str = "http://localhost:3000"
 
-    environment: str = "development"
+    environment: Literal["development", "staging", "production"] = "development"
 
     @model_validator(mode="after")
     def _collect_apify_keys(self):

@@ -735,13 +735,13 @@ def _detect_framework(html_lower: str) -> str:
         return "shopify"
     if "webflow" in html_lower:
         return "webflow"
-    if any(s in html_lower for s in ["drupal", "Drupal"]):
+    if any(s in html_lower for s in ["drupal"]):
         return "drupal"
     if any(s in html_lower for s in ["joomla", "com_content"]):
         return "joomla"
-    if any(s in html_lower for s in ["next/js", "__NEXT_DATA__", "next-static"]):
+    if any(s in html_lower for s in ["next/js", "__next_data__", "next-static"]):
         return "nextjs"
-    if "__NUXT__" in html_lower:
+    if "__nuxt__" in html_lower:
         return "nuxt"
     return "none"
 

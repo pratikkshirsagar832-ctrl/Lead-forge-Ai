@@ -14,16 +14,12 @@ import {
   History,
   Download,
   Settings,
-  Target,
   X,
   CreditCard,
   LogOut,
   User,
   Zap,
   Sparkles,
-  ArrowUpRight,
-  Kanban,
-  UsersRound,
 } from 'lucide-react';
 import { motion } from 'framer-motion';
 import { ThemeToggle } from '@/components/ThemeToggle';

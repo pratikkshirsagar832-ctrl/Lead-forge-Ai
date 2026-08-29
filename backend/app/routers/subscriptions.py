@@ -180,7 +180,7 @@ async def verify_payment(
         hashlib.sha256,
     ).hexdigest()
 
-    if expected_signature != razorpay_signature:
+    if not hmac.compare_digest(expected_signature, razorpay_signature or ""):
         raise HTTPException(status_code=400, detail="Invalid payment signature")
 
     supabase = get_supabase_admin()
@@ -259,7 +259,7 @@ async def razorpay_webhook(request: Request):
         hashlib.sha256,
     ).hexdigest()
 
-    if received_signature != expected_signature:
+    if not hmac.compare_digest(expected_signature, received_signature or ""):
         raise HTTPException(status_code=400, detail="Invalid webhook signature")
 
     try:

@@ -53,7 +53,7 @@ export const LoadingButton = forwardRef<HTMLButtonElement, LoadingButtonProps>(
       'gradient-cyan':
         'btn-gradient-cyan text-navy focus:ring-accent-cyan/50',
       'gradient-purple':
-        'btn-gradient-cyan text-navy focus:ring-accent-cyan/50',
+        'btn-gradient-purple text-navy focus:ring-violet-500/50',
       glass:
         'btn-glass text-offwhite focus:ring-accent-cyan/30',
     };

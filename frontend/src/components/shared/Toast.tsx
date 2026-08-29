@@ -1,7 +1,7 @@
 'use client';
 
 import { AnimatePresence, motion } from 'framer-motion';
-import { CheckCircle, XCircle, AlertCircle, Info, X, Sparkles } from 'lucide-react';
+import { CheckCircle, XCircle, AlertCircle, Info, X } from 'lucide-react';
 import { useToast, Toast as ToastType } from '@/hooks/useToast';
 import { cn } from '@/lib/utils';
 

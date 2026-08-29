@@ -771,7 +771,7 @@ Return ONLY valid JSON, nothing else."""
         if is_hiring and work_type == "full_time_onsite":
             logger.info(f"[AI Qualify] FILTERED OUT {full_name} - on-site/full-time job, not remote/contract/part-time")
             return None
-        logger.info(f"[AI Qualify DEBUG] {full_name} -> is_lead={result.get('is_lead')}, score={result.get('lead_score')}, type={result.get('lead_type')}, work={work_type}, reason={result.get('reason')[:100]}")
+        logger.info(f"[AI Qualify DEBUG] {full_name} -> is_lead={result.get('is_lead')}, score={result.get('lead_score')}, type={result.get('lead_type')}, work={work_type}, reason={(result.get('reason') or '')[:100]}")
 
         if result.get("is_lead") and result.get("lead_score", 0) >= 25:
             lead["ai_qualified"] = True

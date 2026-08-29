@@ -66,6 +66,8 @@ async def generate_pitch(
                 max_tokens=500,
             ),
         )
+        if not resp.choices or not resp.choices[0].message.content:
+            return {"pitch": "Unable to generate pitch at this time.", "confidence_score": 0, "estimated_deal_value": 0}
         result = json.loads(resp.choices[0].message.content)
         pitch_text = result.get("pitch", "")
 
@@ -129,6 +131,8 @@ async def generate_website_message(
                 max_tokens=300,
             ),
         )
+        if not resp.choices or not resp.choices[0].message.content:
+            return {"message": "Unable to generate message at this time."}
         result = json.loads(resp.choices[0].message.content)
         return {"message": result.get("message", "")}
 

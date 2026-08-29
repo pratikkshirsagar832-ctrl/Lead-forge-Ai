@@ -392,7 +392,7 @@ export default function SettingsPage() {
                 ].map((t) => (
                   <div key={t.tool} className="p-2 rounded bg-navy/30 border border-ocean/10">
                     <p className="text-xs font-mono text-emerald">{t.tool}</p>
-                    <p className="text-xs text-ice0">{t.desc}</p>
+                    <p className="text-xs text-ice/60">{t.desc}</p>
                   </div>
                 ))}
               </div>

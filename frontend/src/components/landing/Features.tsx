@@ -1,7 +1,7 @@
 'use client';
 
 import { motion } from 'framer-motion';
-import { Map, Bot, Zap, Filter, LayoutDashboard, Target, Sparkles, Shield, BarChart3, MessageSquare } from 'lucide-react';
+import { Map, Zap, Filter, LayoutDashboard, Target, Sparkles, Shield, BarChart3, MessageSquare } from 'lucide-react';
 import { ScrollReveal } from '@/lib/animations';
 
 const features = [

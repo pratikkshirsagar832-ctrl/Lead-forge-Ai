@@ -165,7 +165,7 @@ export default function CampaignsPage() {
               </div>
 
               <div className="flex items-center justify-between">
-                <span className="text-xs text-ice0">Created {campaign.createdAt}</span>
+                <span className="text-xs text-ice/60">Created {campaign.createdAt}</span>
                 <div className="flex gap-1">
                   {campaign.status === "active" ? (
                     <Button variant="ghost" size="icon" className="w-8 h-8 text-ice/60 hover:text-yellow-400">

@@ -61,7 +61,7 @@ function BillingContent() {
         handleUpgrade(plan);
       }
     }
-  }, [searchParams, plans, subscription?.plan_id]);
+  }, [searchParams, plans, subscription?.plan_id, handleUpgrade]);
 
   interface RazorpayResponse {
     razorpay_order_id: string;

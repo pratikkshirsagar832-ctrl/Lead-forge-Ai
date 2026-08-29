@@ -178,7 +178,7 @@ export default function SignalsPage() {
                     )}
                   </div>
                   <p className="text-sm text-ice/60 mb-2">{signal.description}</p>
-                  <div className="flex items-center gap-4 text-xs text-ice0">
+                  <div className="flex items-center gap-4 text-xs text-ice/60">
                     <span className="flex items-center gap-1">
                       <Building2 className="w-3 h-3" /> {signal.company}
                     </span>
@@ -201,7 +201,7 @@ export default function SignalsPage() {
                     signal.score >= 75 ? "text-accent-cyan" :
                     "text-yellow-400"
                   }`}>{signal.score}</div>
-                  <span className="text-xs text-ice0">Signal Score</span>
+                  <span className="text-xs text-ice/60">Signal Score</span>
                   {signal.actionable && (
                     <Button size="sm" className="bg-blue-500 hover:bg-steel/80 text-xs">
                       Take Action

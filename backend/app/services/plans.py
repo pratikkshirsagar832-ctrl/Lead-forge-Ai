@@ -109,7 +109,7 @@ def get_used_today(supabase, user_id: str) -> tuple[int, int]:
         .eq("user_id", user_id) \
         .eq("date", today_str) \
         .execute()
-    used = resp.data[0] if resp.data else {}
+    used = (resp.data or [{}])[0] or {}
     return (used.get("searches_run", 0) or 0, used.get("leads_generated", 0) or 0)
 
 

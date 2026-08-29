@@ -96,6 +96,9 @@ async def list_leads(
             data_query = data_query.ilike("business_name", f"%{search}%")
 
         # Sort
+        ALLOWED_SORT_FIELDS = {"created_at", "updated_at", "ai_confidence_score", "business_name", "lead_category", "user_status"}
+        if sort_by not in ALLOWED_SORT_FIELDS:
+            sort_by = "created_at"
         desc = sort_order.lower() == "desc"
         data_query = data_query.order(sort_by, desc=desc)
 

@@ -649,13 +649,14 @@ If a field is not mentioned, use null.""",
         logger.info(f"[HyperAgent] Queries: {queries}")
 
         key = self._get_harvest_key()
-        max_posts = count * 5  # Get 5x to have enough after qualification filtering
+        max_posts = count * 3  # Get 3x to have enough after qualification filtering
 
         payload = {
-            "searchQueries": queries,
-            "maxPosts": min(max_posts, 150),
+            "searchQueries": queries[:8],
+            "maxPosts": min(max_posts, 80),
             "postedLimit": str(context.get("posted_within") or "month"),
             "sortBy": "date",
+            "timeoutSeconds": 540,
             # "main" mode returns full author metadata (countryCode, currentPosition,
             # info) on every post — critical for country gating + company extraction.
             # This does NOT change post search into profile scraping.

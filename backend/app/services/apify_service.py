@@ -31,7 +31,7 @@ ALL_IN_ONE_ACTOR = "scrapeforge~linkedin-all-in-one"
 PROFILE_SCRAPER_ACTOR = "harvestapi~linkedin-profile-scraper"
 JOB_SCRAPER_ACTOR = "shahidirfan~linkedin-job-scraper"
 
-SYNC_TIMEOUT_SECONDS = 300
+SYNC_TIMEOUT_SECONDS = 600
 
 RETRYABLE_STATUS_CODES = {401, 402, 403, 407, 429, 500, 502, 503, 504}
 

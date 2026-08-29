@@ -106,11 +106,15 @@ def run_hyper_agent_job(search_id: str, user_id: str, context: dict) -> None:
             logger.warning(f"[HyperAgent] Usage increment failed: {e}")
 
     except ApifyError as e:
-        logger.error(f"[HyperAgent] Apify error: {e}")
-        _mark("failed", f"LinkedIn scraping failed: {str(e)}")
+        err_msg = str(e)
+        if "408" in err_msg or "timeout" in err_msg.lower():
+            _mark("failed", "LinkedIn search timed out. Try a simpler query or fewer leads.")
+        else:
+            logger.error(f"[HyperAgent] Apify error: {e}")
+            _mark("failed", f"LinkedIn scraping failed: {err_msg[:200]}")
     except Exception as e:
         logger.error(f"[HyperAgent] Scrape error: {e}", exc_info=True)
-        _mark("failed", f"Search failed: {str(e)}")
+        _mark("failed", f"Search failed: {str(e)[:200]}")
 
 
 def _check_plan_access(current_user: dict) -> dict:

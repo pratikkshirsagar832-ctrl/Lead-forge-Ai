@@ -95,10 +95,36 @@ def _parse_location_request(location: str) -> tuple[set[str], str | None]:
     'US'     → ({"US"}, None)
     'Dubai'  → ({"AE"}, "dubai")
     'UK'     → ({"GB"}, None)
+    'Asia'   → ({"IN","PK","BD","PH","VN","ID","TH","MY","SG","JP","KR","TW"}, None)
+    'Europe' → ({"GB","DE","FR","NL","BE","CH","AT","SE","NO","DK","FI","ES","IT","PT","IE"}, None)
     """
     if not location:
         return set(), None
     low = " ".join(location.lower().split()).strip(" ,.;")
+
+    # Region name mappings (for Q3 location selections)
+    REGION_MAP = {
+        "asia": {"IN", "PK", "BD", "PH", "VN", "ID", "TH", "MY", "SG", "JP", "KR", "TW"},
+        "united states": {"US"},
+        "india": {"IN"},
+        "europe": {"GB", "DE", "FR", "NL", "BE", "CH", "AT", "SE", "NO", "DK", "FI", "ES", "IT", "PT", "IE"},
+        "africa": {"NG", "KE", "GH", "ZA", "EG"},
+        "australia": {"AU", "NZ"},
+        "canada": {"CA"},
+        "south america": {"BR", "MX", "AR", "CL", "CO"},
+    }
+
+    # Handle region names first (exact match or contained)
+    # Support multiple regions separated by commas
+    all_region_codes: set[str] = set()
+    found_region = False
+    for region_name, codes in REGION_MAP.items():
+        if region_name in low:
+            all_region_codes |= codes
+            found_region = True
+    if found_region:
+        return all_region_codes, None
+
     country_codes: set[str] = set()
     city: str | None = None
 
@@ -192,34 +218,72 @@ SYSTEM_PROMPT = """You are HyperAgent, an elite AI-powered B2B lead generation a
 Your job is to help freelancers, consultants, and agencies find highly relevant LinkedIn leads for the services they sell.
 
 ==================================================
+CONVERSATION FLOW — 3 QUESTIONS MAX THEN CONFIRM
+==================================================
+
+Always follow this EXACT order. Do NOT skip questions the user hasn't answered.
+
+**Step 1 — Ask Q1: Lead Type**
+Start your FIRST message with:
+LEAD_TYPES_QUESTION
+
+Then ask:
+What kind of leads are you looking for?
+1️⃣ Hiring posts (Full-time/contractor/Part-time/Freelancers)
+2️⃣ People or Companies Looking for Freelancers
+3️⃣ People or Companies Looking for Agencies
+
+**Step 2 — Ask Q2: Services Provided**
+After the user answers Q1, ask:
+What services do you provide? (comma-separated, e.g. website banner design, social media post design, email newsletter design)
+
+**Step 3 — Ask Q3: Buyer Location**
+After the user answers Q2, ask:
+Where are your buyers located?
+
+Start your message with the exact line:
+LOCATION_QUESTION
+
+Then list the options:
+📍 Select one or more:
+- Asia
+- United States
+- India
+- Europe
+- Africa
+- Australia
+- Canada
+- South America
+
+**Step 4 — Confirm & Search**
+Once all 3 questions are answered, present the confirmation card and wait for YES.
+
+==================================================
 ICP UNDERSTANDING
 ==================================================
 
-Before searching, identify:
-
-1. SERVICE — What exactly does the user sell?
+From the user's answers, identify:
+1. SERVICE — What exactly does the user sell? (from Q2)
 2. TARGET CUSTOMER — What type of company/person should buy it?
 3. TARGET ROLES — Who within the target customer is the buyer/decision-maker?
-4. LOCATION — Country, region, or city.
-5. LEAD COUNT — How many leads? Default = 20.
+4. LOCATION — From Q3, map regions to country codes:
+   - Asia → IN, PK, BD, PH, VN, ID, TH, MY, SG, JP, KR, TW
+   - United States → US
+   - India → IN
+   - Europe → GB, DE, FR, NL, BE, CH, AT, SE, NO, DK, FI, ES, IT, PT, IE
+   - Africa → NG, KE, GH, ZA, EG
+   - Australia → AU, NZ
+   - Canada → CA
+   - South America → BR, MX, AR, CL, CO
+5. LEAD COUNT — Default = 20.
 
 NEVER confuse SERVICE (what user sells) with TARGET CUSTOMER (who buys it).
-
-Example: "I run an SEO agency and want SaaS companies in the US."
-→ service=SEO, target_customer=SaaS companies, target_roles=Founder/CEO/Head of Marketing, location=US
-
-LOCATION GRANULARITY:
-- If the user names a CITY (e.g. "Mumbai", "London", "Dubai") — keep the city; leads will be filtered to that city/country.
-- If the user names a COUNTRY (e.g. "India", "US", "UK") — use the whole country.
-- If the user names a REGION (e.g. "Europe", "Gulf", "Middle East") — ask which country/city they mean (ONE question max), or use the largest English-speaking markets.
-- The system filters leads by the requested location AFTER scraping, so accuracy matters: city → targeted city leads; country → country-wide leads.
-- If the user gives BOTH a city and a country ("SaaS companies in Mumbai, India"), keep both.
 
 ==================================================
 CONVERSATION RULES
 ==================================================
 
-- Ask AT MOST 4 questions TOTAL, then confirm immediately
+- Ask AT MOST 3 questions (Q1, Q2, Q3), then confirm immediately
 - NEVER ask questions the user already answered
 - If user gives enough info in first message, skip to confirmation
 - When user says "yes", "go", "start", "just start", "find them" — STOP ASKING, confirm with defaults immediately
@@ -233,18 +297,34 @@ DEFAULTS:
 - If service unclear → ask
 
 ==================================================
-LEAD TYPE QUESTION (ask BEFORE confirming search)
+LOCATION MAPPING FROM Q3
 ==================================================
 
-Before presenting the final confirmation, ALWAYS ask which kind of leads they want. When you ask this question, start your message with the exact line:
+When the user selects regions in Q3, convert to country codes:
+- "Asia" → India, Pakistan, Bangladesh, Philippines, Vietnam, Indonesia, Thailand, Malaysia, Singapore, Japan, South Korea, Taiwan
+- "United States" → US
+- "India" → India
+- "Europe" → UK, Germany, France, Netherlands, Belgium, Switzerland, Austria, Sweden, Norway, Denmark, Finland, Spain, Italy, Portugal, Ireland
+- "Africa" → Nigeria, Kenya, Ghana, South Africa, Egypt
+- "Australia" → Australia, New Zealand
+- "Canada" → Canada
+- "South America" → Brazil, Mexico, Argentina, Chile, Colombia
+
+Use these country codes when building the search.
+
+==================================================
+LEAD TYPE QUESTION (ask FIRST as Q1)
+==================================================
+
+When you ask the lead type question, start your message with the exact line:
 
 LEAD_TYPES_QUESTION
 
 Then ask:
 Which kind of leads would you want?
-1️⃣ Hiring posts — companies hiring freelancers/contractors
-2️⃣ People looking for Freelancers — "need a freelancer for X"
-3️⃣ People looking for Agencies — "looking for an X agency", "recommend a good agency"
+1️⃣ Hiring posts — companies hiring freelancers/contractors (Full-time/contractor/Part-time/Freelancers)
+2️⃣ People or Companies Looking for Freelancers
+3️⃣ People or Companies Looking for Agencies
 
 The user may pick one, several, or say "all". Record their answer as lead_types: "hiring", "freelancer", "agency".
 
@@ -252,8 +332,6 @@ IMPORTANT BUSINESS RULE:
 - If the user IS an agency/company (they sell services as a business), they almost always want type 3 (people looking for Agencies) and possibly type 2 — NOT hiring posts. If they say they're an agency, recommend type 3 and confirm they don't want hiring posts.
 - If the user is a freelancer, they want type 2 (people looking for Freelancers), not hiring posts.
 - Hiring posts (type 1) are only for users who explicitly want to find companies hiring.
-
-Never scrape without asking this question first (unless the user already told you their preference or says "just start" / "no questions").
 
 When confirming, use this format:
 🔍 **Ready to Search**
@@ -437,9 +515,31 @@ class HyperAgentService:
                 "action": "lead_types",
                 "data": {
                     "options": [
-                        {"id": "hiring", "label": "Hiring posts", "description": "Companies hiring freelancers/contractors"},
-                        {"id": "freelancer", "label": "People looking for Freelancers", "description": "\"Need a freelancer for X\""},
-                        {"id": "agency", "label": "People looking for Agencies", "description": "\"Looking for an X agency\", \"recommend a good agency\""},
+                        {"id": "hiring", "label": "Hiring posts (Full-time/contractor/Part-time/Freelancers)", "description": "Companies hiring freelancers/contractors"},
+                        {"id": "freelancer", "label": "People or Companies Looking for Freelancers", "description": "\"Need a freelancer for X\""},
+                        {"id": "agency", "label": "People or Companies Looking for Agencies", "description": "\"Looking for an X agency\", \"recommend a good agency\""},
+                    ],
+                    "context": self._extract_context(history + [{"role": "user", "content": message}]),
+                },
+            }
+
+        # If the AI is asking the location question, return a special action
+        # so the frontend can render region checkboxes.
+        if "LOCATION_QUESTION" in (ai_message or ""):
+            clean = (ai_message or "").replace("LOCATION_QUESTION", "").strip()
+            return {
+                "response": clean,
+                "action": "location",
+                "data": {
+                    "options": [
+                        {"id": "asia", "label": "Asia", "countries": "IN, PK, BD, PH, VN, ID, TH, MY, SG, JP, KR, TW"},
+                        {"id": "united_states", "label": "United States", "countries": "US"},
+                        {"id": "india", "label": "India", "countries": "IN"},
+                        {"id": "europe", "label": "Europe", "countries": "GB, DE, FR, NL, BE, CH, AT, SE, NO, DK, FI, ES, IT, PT, IE"},
+                        {"id": "africa", "label": "Africa", "countries": "NG, KE, GH, ZA, EG"},
+                        {"id": "australia", "label": "Australia", "countries": "AU, NZ"},
+                        {"id": "canada", "label": "Canada", "countries": "CA"},
+                        {"id": "south_america", "label": "South America", "countries": "BR, MX, AR, CL, CO"},
                     ],
                     "context": self._extract_context(history + [{"role": "user", "content": message}]),
                 },
@@ -790,6 +890,11 @@ If a field is not mentioned, use null.""",
             relevance_kws.add(niche.lower().replace("development", "developer").strip())
         if "design" in niche.lower():
             relevance_kws.add(niche.lower().replace("design", "designer").strip())
+        # Also add role terms to relevance keywords
+        for r in (roles or "").split(","):
+            r = r.strip().lower()
+            if len(r) >= 3:
+                relevance_kws.add(r)
 
         if relevance_kws:
             authors_filtered = []
@@ -805,8 +910,14 @@ If a field is not mentioned, use null.""",
                 requested_count_hint = int(context.get("count") or 20)
             except (TypeError, ValueError):
                 pass
-            if len(authors_filtered) >= max(requested_count_hint * 2, 10):
+            # When lead_types are used, be MORE lenient — queries already target
+            # specific buyer-intent phrases, so keep more candidates.
+            lead_types = context.get("lead_types") or []
+            min_keep = max(requested_count_hint * 2, 10) if not lead_types else max(requested_count_hint, 5)
+            if len(authors_filtered) >= min_keep:
                 authors = authors_filtered
+            else:
+                logger.info(f"[HyperAgent] Relevance gate: only {len(authors_filtered)} matched, keeping all {len(authors)} to avoid 0 results")
 
         if not authors:
             return []

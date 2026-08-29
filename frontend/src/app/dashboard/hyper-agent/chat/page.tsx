@@ -65,6 +65,8 @@ I'll understand your needs, confirm the details, then scrape LinkedIn and qualif
   const [searchId, setSearchId] = useState<string | null>(null)
   const [leadTypePrompt, setLeadTypePrompt] = useState<any>(null)
   const [selectedLeadTypes, setSelectedLeadTypes] = useState<string[]>([])
+  const [locationPrompt, setLocationPrompt] = useState<any>(null)
+  const [selectedLocations, setSelectedLocations] = useState<string[]>([])
   const [pendingContext, setPendingContext] = useState<any>(null)
   const [showHistory, setShowHistory] = useState(false)
   const [history, setHistory] = useState<any[]>([])
@@ -192,6 +194,14 @@ I'll understand your needs, confirm the details, then scrape LinkedIn and qualif
         setLeadTypePrompt(data.data || { options: [] })
         setPendingContext(data.data?.context || null)
         setSelectedLeadTypes([])
+        return
+      }
+
+      // Location question → show checkbox modal
+      if (data.action === "location") {
+        setLocationPrompt(data.data || { options: [] })
+        setPendingContext(data.data?.context || null)
+        setSelectedLocations([])
         return
       }
 
@@ -622,6 +632,75 @@ Here are your top leads (scored 0-100):`,
                   sendMessage(`I want: ${labels} (lead_types: ${selectedLeadTypes.join(",")})`)
                 }}
                 className="flex-1 py-2.5 rounded-xl text-sm font-bold text-white bg-violet hover:bg-violet/80 transition-colors"
+              >
+                Confirm & Continue
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Location Checkbox Modal */}
+      {locationPrompt && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+          <div className="absolute inset-0 bg-navy/70 backdrop-blur-sm" onClick={() => setLocationPrompt(null)} />
+          <div className="relative w-full max-w-md bg-ocean border border-cyan/30 rounded-2xl p-6 shadow-2xl animate-in fade-in zoom-in-95 duration-200">
+            <h3 className="text-lg font-bold text-offwhite mb-1">📍 Where are your buyers?</h3>
+            <p className="text-xs text-ice/60 mb-4">Select one or more regions. We'll search for leads in these markets.</p>
+
+            <div className="space-y-2.5 mb-5">
+              {(locationPrompt.options || []).map((opt: any) => {
+                const checked = selectedLocations.includes(opt.id)
+                return (
+                  <button
+                    key={opt.id}
+                    onClick={() => {
+                      setSelectedLocations((prev) =>
+                        checked ? prev.filter((x) => x !== opt.id) : [...prev, opt.id]
+                      )
+                    }}
+                    className={`w-full flex items-center gap-3 p-3 rounded-xl border transition-all text-left ${
+                      checked
+                        ? "border-cyan/60 bg-cyan/10"
+                        : "border-steel/20 bg-navy/60 hover:border-steel/40"
+                    }`}
+                  >
+                    <div className={`w-4 h-4 shrink-0 rounded border flex items-center justify-center transition-colors ${
+                      checked ? "bg-cyan border-cyan" : "border-steel/50"
+                    }`}>
+                      {checked && <Check className="w-3 h-3 text-white" />}
+                    </div>
+                    <div>
+                      <p className="text-sm font-semibold text-offwhite">{opt.label}</p>
+                      {opt.countries && (
+                        <p className="text-[10px] text-ice/40 mt-0.5">{opt.countries}</p>
+                      )}
+                    </div>
+                  </button>
+                )
+              })}
+            </div>
+
+            <div className="flex gap-2">
+              <button
+                onClick={() => setLocationPrompt(null)}
+                className="flex-1 py-2.5 rounded-xl text-sm font-medium text-ice/60 hover:text-offwhite border border-steel/20 hover:bg-steel/10 transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => {
+                  if (selectedLocations.length === 0) {
+                    setLocationPrompt(null)
+                    return
+                  }
+                  const labels = selectedLocations
+                    .map((id) => (locationPrompt.options || []).find((o: any) => o.id === id)?.label || id)
+                    .join(", ")
+                  setLocationPrompt(null)
+                  sendMessage(`My buyers are in: ${labels} (locations: ${selectedLocations.join(",")})`)
+                }}
+                className="flex-1 py-2.5 rounded-xl text-sm font-bold text-white bg-cyan hover:bg-cyan/80 transition-colors"
               >
                 Confirm & Continue
               </button>

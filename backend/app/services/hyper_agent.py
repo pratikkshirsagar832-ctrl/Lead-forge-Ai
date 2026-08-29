@@ -682,17 +682,14 @@ If a field is not mentioned, use null.""",
 
         key = self._get_harvest_key()
         # For small counts, get way more raw items to compensate for heavy filtering
-        max_posts = max(count * 8, 80) if count <= 10 else count * 5
+        max_posts = max(count * 4, 40) if count <= 10 else count * 3
 
         payload = {
-            "searchQueries": queries[:10],
-            "maxPosts": min(max_posts, 120),
+            "searchQueries": queries[:6],
+            "maxPosts": min(max_posts, 60),
             "postedLimit": str(context.get("posted_within") or "month"),
             "sortBy": "date",
-            "timeoutSeconds": 540,
-            # "main" mode returns full author metadata (countryCode, currentPosition,
-            # info) on every post — critical for country gating + company extraction.
-            # This does NOT change post search into profile scraping.
+            "timeoutSeconds": 240,
             "profileScraperMode": "main",
             "scrapeReactions": False,
             "postNestedReactions": False,

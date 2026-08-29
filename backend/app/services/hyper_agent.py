@@ -742,7 +742,7 @@ If a field is not mentioned, use null.""",
         max_posts = max(count * 4, 40) if count <= 10 else count * 3
 
         payload = {
-            "searchQueries": queries[:6],
+            "searchQueries": queries[:10],
             "maxPosts": min(max_posts, 60),
             "postedLimit": str(context.get("posted_within") or "month"),
             "sortBy": "date",
@@ -776,7 +776,7 @@ If a field is not mentioned, use null.""",
         def _add(q: str) -> None:
             q = " ".join(q.split())
             key = q.lower().strip('"')
-            if key and key not in seen and len(queries) < 16:
+            if key and key not in seen and len(queries) < 24:
                 seen.add(key)
                 queries.append(q)
 
@@ -788,9 +788,15 @@ If a field is not mentioned, use null.""",
         role_list = _normalize_terms(roles)
         niche_terms = _normalize_terms(niche)
 
-        # Role variants per TERM (website development -> website developer),
-        # never on the combined string (fixes "web developer, app dev agency"
-        # garbage queries).
+        # Role variants per TERM — works for ANY service type, not just
+        # dev/design/SEO. Rules:
+        #   "X development"  -> "X developer"
+        #   "X design"       -> "X designer"
+        #   "X editing"      -> "X editor"
+        #   "X writing"      -> "X writer"
+        #   "X marketing"    -> "X marketer" + "X expert"
+        #   "X photography"  -> "X photographer"
+        #   generic "-ing" verb -> "-er" noun (building->builder, managing->manager)
         role_variants: set[str] = set()
         for term in niche_terms:
             t_low = term.lower()
@@ -799,7 +805,14 @@ If a field is not mentioned, use null.""",
                 role_variants.add(base.replace("development", "developer").strip())
             if "design" in t_low:
                 role_variants.add(base.replace("design", "designer").strip())
+            if "editing" in t_low or "editor" in t_low:
+                role_variants.add(base.replace("editing", "editor").replace("editor", "editor").strip())
+            if "writing" in t_low or "writer" in t_low:
+                role_variants.add(base.replace("writing", "writer").strip())
+            if "photography" in t_low or "photographer" in t_low:
+                role_variants.add(base.replace("photography", "photographer").strip())
             if "marketing" in t_low:
+                role_variants.add(base.replace("marketing", "marketer").strip())
                 role_variants.add(f"{base} expert")
                 role_variants.add(f"{base} specialist")
             if "seo" in t_low:
@@ -807,69 +820,72 @@ If a field is not mentioned, use null.""",
             if "shopify" in t_low or "ecommerce" in t_low:
                 role_variants.add("shopify expert")
             if "web" in t_low or "website" in t_low:
-                role_variants.add(f"{base.replace(' website', '').replace('website', 'web').strip()} developer")
-                role_variants.add(f"{base.replace(' website', '').replace('website', 'web').strip()} designer")
+                web_base = base.replace("website", "web")
+                role_variants.add(f"{web_base} developer")
+                role_variants.add(f"{web_base} designer")
+                if "development" in web_base.lower():
+                    role_variants.add(web_base.replace("development", "developer"))
+            # Generic verb -> person: "video editing" -> "video editor",
+            # "building maintenance" -> "building maintenance person"
+            # (ing -> er when the last word ends in 'ing')
+            last_word = t_low.rsplit(" ", 1)[-1]
+            if last_word.endswith("ing") and len(last_word) > 4:
+                person = last_word[:-3] + "er"
+                role_variants.add(f"{base.rsplit(' ', 1)[0]} {person}".strip() if " " in base else person)
+                role_variants.add(f"{base} expert")
         all_roles = list(dict.fromkeys(role_list + list(role_variants)))
 
-        # AGENCY-seekers first (highest value: people asking FOR an agency)
+        # ── Query priority: SERVICES first (what the user sells), then roles ──
+        # Agency-seekers (highest value: people asking FOR an agency)
         if want_agency:
-            for role in all_roles:
-                _add(f"looking for {_article(role)} {role} agency")
-                _add(f"recommend {_article(role)} {role} agency")
-                _add(f"need {_article(role)} {role} agency")
-                _add(f"looking for {role} agency")
-                _add(f"best {role} agency")
             for n in niche_terms:
                 _add(f"looking for {_article(n)} {n} agency")
-                _add(f"recommend a good {n} agency")
+                _add(f"recommend {_article(n)} {n} agency")
+                _add(f"need {_article(n)} {n} agency")
+            for role in all_roles:
+                _add(f"looking for {_article(role)} {role} agency")
 
-        # FREELANCER-seekers
+        # Location-scoped queries — high value, so right after agency services.
+        # Respects lead_types: no "hiring X in LOC" for agency-only users.
+        if location:
+            loc_parts = [l.strip() for l in location.split(",") if l.strip()]
+            for loc in loc_parts[:3]:
+                for n in niche_terms[:2]:
+                    _add(f"looking for {n} in {loc}")
+                    _add(f"{n} in {loc}")
+                for role in all_roles[:2]:
+                    _add(f"looking for {role} in {loc}")
+                    if want_hiring:
+                        _add(f"hiring {role} in {loc}")
+
+        # Freelancer-seekers
         if want_freelancer:
+            for n in niche_terms:
+                _add(f"looking for a freelance {n}")
+                _add(f"need a freelance {n}")
             for role in all_roles:
                 _add(f"looking for a freelance {role}")
-                _add(f"looking for freelance {role}")
-                _add(f"need a freelance {role}")
-                _add(f"freelance {role} needed")
 
-        # HIRING posts
+        # Hiring posts
         if want_hiring:
+            for n in niche_terms:
+                _add(f"hiring {n}")
+                _add(f"we are hiring {n}")
             for role in all_roles:
                 _add(f"hiring {role}")
-                _add(f"need {_article(role)} {role} for our")
-                _add(f"looking for {role} for our")
-                _add(f"we are hiring {role}")
 
-        # Generic niche-level intent phrases — generate MORE per term
+        # Generic niche-level intent phrases
         for n in niche_terms:
             _add(f"looking for {n}")
             _add(f"need {n}")
-            _add(f"{n} help")
             _add(f"recommend {n}")
-            _add(f"anyone know {n}")
-            _add(f"{n} required")
-            _add(f"seeking {n}")
-
-        # Location-scoped queries — generate for ALL regions, not just the first
-        if location:
-            # Split location into individual regions/countries
-            loc_parts = [l.strip() for l in location.split(",") if l.strip()]
-            # Use first 3 location parts to keep query count manageable
-            for loc in loc_parts[:3]:
-                for role in all_roles[:3]:
-                    _add(f"hiring {role} in {loc}")
-                    _add(f"looking for {role} in {loc}")
-                    _add(f"{role} {loc}")
-                for n in niche_terms[:2]:
-                    _add(f"{n} in {loc}")
-                    _add(f"looking for {n} in {loc}")
-                    _add(f"need {n} in {loc}")
+            _add(f"{n} help")
 
         # Fallback
         if not queries:
             queries = [f'"{niche}"' if niche else "business development"]
 
-
-        return queries[:16]  # Max 16 queries
+        return queries[:24]  # Max 24 queries
 
     def qualify_leads(self, items: list[dict], context: dict) -> list[dict]:
         """Use AI to qualify and score scraped leads.

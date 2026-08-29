@@ -405,7 +405,7 @@ export default function SearchPage() {
                       What we find
                     </label>
                     <p className="text-xs text-ice/60 leading-relaxed">
-                      We search LinkedIn posts for people looking to hire this service — remote, contract-basis and part-time opportunities, plus businesses with an active need.
+                      We will search LinkedIn posts for people looking to hire — remote, contract-basis and part-time opportunities, plus businesses with an active need globally. To find filtered leads, use <a href="/dashboard/hyper-agent/chat" className="text-cyan-400 underline hover:text-cyan-300">Hyperagent</a>.
                     </p>
                   </div>
                   </>

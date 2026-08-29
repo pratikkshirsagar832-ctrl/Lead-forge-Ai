@@ -400,62 +400,67 @@ WORKFLOW — always follow these steps in order:
 2. Determine WHO IS THE SUBJECT: is the author BUYING this service, or SELLING their own labor/services?
 3. Identify the work arrangement (remote / contract / part-time / full-time on-site).
 4. Apply the hard rules below.
-5. Score the six dimensions, then compute score.
+5. Score the six dimensions, then compute lead_score.
 6. Cross-check internal consistency before emitting JSON.
 
-==================================================
-🚨 SELLER REJECTION — READ THIS FIRST (MOST IMPORTANT)
-==================================================
-
-We ONLY want REAL BUYERS: people and companies that NEED a service and are looking to HIRE/PURCHASE it. We NEVER want service providers promoting themselves.
-
-AUTHOR IS A SELLER/PROVIDER (REJECT — is_lead=false, score=0) if ANY of these are true:
-- Their headline contains: "Freelance X", "Founder of X agency", "X Agency", "X Studio", "X Company", "X Consultant", "X Solutions", "X Services", "X Marketing", "Helping businesses with X", "I help businesses", "X agency helping"
-- Their company contains: agency, studio, solutions, services, consultancy, consulting, marketing, digital, media, tech solutions, "& co", "llc" that provides the same service as the target
-- The post promotes their OWN services: "I help", "we help", "we provide", "I provide", "our services", "my agency", "my team", "DM me", "book a call", "portfolio", "check my work", "case studies", "we specialize", "I specialize", "open for projects", "available for work", "taking new clients", "need clients", "clients in X", "I'm looking for clients"
-- They are sharing their work/achievements: "proud to announce", "launched a website for", "my new project", "I built", "we built", "client work", "success story", "case study of"
-
-AUTHOR IS A REAL BUYER (ACCEPT) if:
-- They explicitly need a service: "we're looking for", "I need someone to", "looking for someone who can", "need help with X"
-- They are sourcing: "looking for an agency", "recommend an agency", "who do you use for X?", "need a freelancer for X project", "hiring a designer/developer for our project"
-- They describe a BUSINESS PROBLEM their company has: "our website isn't converting", "our sales dropped", "we don't have a website", "launching a product, need X"
-- "Looking for partners/agencies/marketers/freelancers" = SOURCING suppliers = BUYER.
-
-THE #1 MISTAKE TO AVOID: Rejecting a post just because it mentions the service name. "I help companies with SEO" (seller) vs "our SEO isn't working, need help" (buyer). ALWAYS ask: does the author WANT to buy this service, or DO they provide it?
-
-==================================================
-HARD RULES (never violate)
-==================================================
+HARD RULES (never violate):
 - R1: A company/owner HIRING a freelancer/contractor/agency on a REMOTE, CONTRACT or PART-TIME basis = STRONG LEAD.
 - R2: A company hiring a FULL-TIME ON-SITE employee = NOT a lead (is_lead=false). They are building a payroll team, not buying your service.
-- R3: SELLER/PROVIDER (see above) = NEVER a lead, regardless of how well the post matches the niche.
+- R3: The author SELLING their own services ("I'm available", "open to projects", "seeking contract work", "DM me for work", "I offer X", "my services include") = NEVER a lead, regardless of how well the post matches the niche.
 - R4: A RECRUITER/STAFFING agency posting on behalf of clients = NOT a lead.
 - R5: Job seekers looking for a role for themselves = NOT a lead.
 - R6: Pure content/thought-leadership ("5 tips", "why you need", "trends", "case study", "opinion") = NOT a lead even if it scores high on service_match.
-- R7: NON-ENGLISH posts (Spanish, German, French, Hindi, Arabic, etc.) = NOT a lead (is_lead=false). We only serve English-speaking markets.
-- R8: IF HEADLINE SAYS "FREELANCE X" OR "X AGENCY" AND THE POST DOES NOT EXPLICITLY REQUEST THE SERVICE → REJECT. Sellers rarely buy; when in doubt, REJECT.
+- R7: NON-ENGLISH posts (Spanish, German, French, Hindi, Arabic, etc.) = NOT a lead (is_lead=false). We only serve English-speaking markets. If the post is mostly in another language, reject it even if it describes hiring.
 
 WHO IS THE SUBJECT? (the single most important question)
-SELLING (reject): "I'm available for X", "I'm open to remote work", "I'm seeking projects", "Looking to collaborate", "I offer X", "DM me for X", "I provide X", "My services include", "I build X", "I help companies". Headline reads "Freelance X"/"X Agency"/"Founder of X Agency" and the post promotes their availability or work.
-BUYING (accept): "We're looking for a developer", "I need a website", "Looking for someone to build our X", "We are hiring a freelance X for a project", "Need a designer on contract", "Anyone know a good agency?", "Recommendations for X services?", or a business describing a problem it needs solved (traffic drop, no website, bad conversions, launching a product).
-RECRUITER EXCEPTION: staffing agency placing candidates at THIRD-PARTY clients = reject. BUT a firm saying "Experts required for our projects" = BUYING expertise = ACCEPT (lead_type="hiring").
+🚫 SELLING (reject): "I'm available for X", "I'm open to remote work", "I'm seeking projects", "Looking to collaborate", "I offer X", "DM me for X", "I provide X", "My services include", "I build X", "I'm a freelance X looking for clients", "Open to contract work", "Taking new clients". Headline reads "Freelance X", "X Developer/Designer" and the post promotes their availability, portfolio, or services.
+✅ BUYING (accept): "We're looking for a developer", "I need a website", "Looking for someone to build our X", "We are hiring a freelance X for a project", "Need a designer on contract", "Anyone know a good agency?", "Recommendations for X services?", "We're looking for the right partners to build our marketing", "Seeking agencies & marketers to work with", or a business describing a problem it needs solved (traffic drop, no website, bad conversions, launching a product).
+⚠️ "Looking for partners/agencies/marketers/freelancers" = the company is SOURCING suppliers = BUYER. Only "we offer X / I provide X / we help businesses with X" is a SELLER.
+⚠️ RECRUITER EXCEPTION: A staffing agency placing candidates at THIRD-PARTY clients = reject. BUT a company/firm saying "We are building our pool of experts", "Experts required for our projects", "Building a team of freelancers" = they are BUYING expertise for their own work = ACCEPT (lead_type="hiring").
+
+TRAP CASES — the mistakes to avoid:
+- Trap 1: A post says "Looking for a freelance SEO expert to work on our project" — this is a BUYER (they're hiring) even though the word "freelance" appears. work_type=contract, is_lead=true.
+- Trap 2: A freelancer posts "Freelance SEO expert available for remote projects" — this is a SELLER despite matching the niche perfectly. is_lead=false.
+- Trap 3: "We're hiring a full-time SEO manager, on-site in NY" — payroll hire, on-site. is_lead=false.
+- Trap 4: "Hiring a remote contract web designer for a 3-month project" — BUYER, remote + contract. Strong lead, score 80+.
+- Trap 5: Thought leadership: "5 SEO mistakes killing your rankings" or "How we grew traffic 300%" — content, not intent. is_lead=false.
+- Trap 6: A company complains "our organic traffic dropped 40% since the update" WITHOUT asking for help — this is implicit buying intent. problem_awareness, is_lead=true (score 60-80).
+- Trap 7: "Anyone else seeing traffic drops?" (no business context, no "for my business") — passive/research, low score (40-55) or reject if purely casual.
+- Trap 8: A COMPANY/AGENCY/FIRM says "We are building our pool of experts", "Service Line Experts Required", "Looking for experts to join our project roster", "Building a team of freelancers for client projects" — this is a BUYER of talent/expertise. They are not selling their own services; they are recruiting service providers to work FOR them on projects. is_lead=true, lead_type="hiring". (Exception to the recruiter rule: a firm hiring experts for ITS OWN projects is a buyer; only staffing agencies that place candidates at THIRD-PARTY clients are rejected.)
+- Trap 9: "We fired our agency and now use X" — if the post is about replacing a service with a tool, they are NOT currently buying; is_lead=false. But if they say "we fired our agency, looking for a replacement" → buyer.
+- Trap 10: "We're looking for partners / looking for the right partners / seeking agencies & marketers to work with / building our marketing engine" — the author is a COMPANY SEEKING service providers = BUYER. is_lead=true, lead_type="hiring". NEVER classify "looking for partners/marketers/agencies" as a seller — they are sourcing suppliers, not offering services. ONLY if the post says "we offer X", "I provide X", "we help businesses with X" is it a seller.
 
 SCORING (six dimensions, then total):
-- service_match (0-25): direct mention = 25; adjacent problem = 20; general growth = 15; vague = 10; unrelated = 0.
-- business_problem (0-20): metrics declining/explicit build = 20; clear pain = 15; dissatisfaction = 10; exploring = 5; none = 0.
-- buying_intent (0-20): explicit vendor search with budget/ASAP = 20; HIRING freelancer/remote/part-time = 18; strong implicit ("recommendations?") = 15; problem + commercial context = 10; passive = 5; none = 0.
-- decision_maker_likelihood (0-15): Founder/CEO/Owner/VP/Director = 15; Manager/Lead = 12; unclear but business context = 10; individual contributor = 5; student = 0.
-- urgency (0-10): urgent/ASAP = 10; looking now = 8; soon = 7; active problem no timeline = 5; none = 0.
+- service_match (0-25): direct mention of the service or its core problem = 25; adjacent problem (traffic drop for SEO, slow site for web dev) = 20; general growth/marketing = 15; vague = 10; unrelated = 0.
+- business_problem (0-20): metrics declining or explicit build needed = 20; clear pain ("struggling", "can't") = 15; dissatisfaction/improvement desire = 10; exploring = 5; none = 0.
+- buying_intent (0-20): explicit vendor/freelancer search with budget/ASAP = 20; HIRING freelancer/contractor/remote/part-time = 18; strong implicit ("recommendations?", "who can help?") = 15; problem + commercial context ("for my business") = 10; passive = 5; none = 0.
+- decision_maker_likelihood (0-15): Founder/CEO/Owner/VP/Director/Head of Marketing = 15; Manager/Lead = 12; unclear but business context = 10; individual contributor/freelancer = 5; student/job-seeker = 0.
+- urgency (0-10): urgent/ASAP/deadline = 10; "looking now"/project starting = 8; soon/this month = 7; active problem no timeline = 5; none = 0.
 - outreach_worthiness (0-10): explicit vendor search + problem + decision maker = 10; strong problem + reachable role = 8; clear problem unclear authority = 6; vague = 4; wrong audience = 0.
 
-score = sum (0-100).
-TIERS: 85+ HOT, 70-84 WARM, 40-69 POTENTIAL, 25-39 BORDERLINE, <25 NOT a lead.
+lead_score = service_match + business_problem + buying_intent + decision_maker_likelihood + urgency + outreach_worthiness (0-100).
 
-CONSISTENCY: is_lead=true requires score>=25 AND service_match>=10. hiring+full_time_onsite => is_lead=false. agency/irrelevant => is_lead=false. SELLER (R3/R8) => is_lead=false.
+TIERS:
+- 85+ HOT: explicit need or active hiring + decision-maker + concrete problem.
+- 70-84 WARM: clear problem or hiring intent, may need light nurturing.
+- 40-69 POTENTIAL: relevant but vague; still worth saving.
+- 25-39 BORDERLINE: weak signal but real buyer context; still worth saving (they exist).
+- <25 NOT a lead.
 
-OUTREACH_ANGLE: reference a SPECIFIC detail from their post/company; never generic; 1 sentence under 25 words.
+CONSISTENCY CHECKS (verify before output):
+- is_lead=true ⟹ lead_score >= 25.
+- is_lead=true ⟹ service_match >= 10 (must relate to the niche).
+- lead_type="hiring" + work_type="full_time_onsite" ⟹ is_lead MUST be false.
+- lead_type="agency" or "irrelevant" ⟹ is_lead MUST be false.
+- Score >= 80 ⟹ reason must cite explicit evidence from the post, not generic phrases.
 
-OUTPUT FORMAT — return ONLY valid JSON array:
+OUTREACH_ANGLE rules:
+- MUST reference a SPECIFIC detail from the post (their company, their problem, their exact words).
+- NEVER start with "I noticed your insights on" or "I noticed your recent post" — too generic.
+- Sound like a human expert offering a specific next step, not a sales pitch.
+- 1 sentence, under 25 words.
+
+OUTPUT FORMAT — return ONLY a valid JSON array:
 [
   {{
     "name": "Full Name",
@@ -1149,20 +1154,26 @@ If a field is not mentioned, use null.""",
     def _ai_triage_batch(self, batch: list[dict], context: dict) -> list[dict]:
         """Cheap single-question screen for remaining authors (mirrors triage in
         linkedin_pipeline). Only genuine buyers with a requirement are kept."""
-        triage_prompt = f"""You are a B2B lead triage specialist. TARGET SERVICE: {context.get('niche', '')}.
+        niche = ", ".join(_normalize_terms(context.get("niche", "")))
+        triage_prompt = f"""You are a B2B lead triage specialist. TARGET SERVICE: {niche or 'the service'}.
 
 For each post below, decide ONE thing: is the AUTHOR a genuine BUYER of this service (hiring freelancers/agencies/contractors, asking for recommendations, or describing a project/requirement the service solves)?
 
-REJECT (do NOT keep) if the author is:
-- SELLING their own services — freelancers, agencies, studios, consultants promoting "I offer", "we help", "DM me", "portfolio", "I provide X", "my services"
-- Their headline reads "Freelance X", "X Agency", "Founder of X Agency", "Consultant", "Solutions", "Studio" and the post does not explicitly request the service
-- A job seeker looking for work for themselves
-- A recruiter/staffing agency placing candidates for clients
-- Sharing content/tips/thought leadership
-- Hiring for full-time on-site roles
-- Post is not English
+STEP 1 — Who is the author?
+  A) BUYER: looking to get this work done ("we're looking for", "I need", "recommend an agency", "hiring a freelancer for a project", "we fired our agency, need a replacement", "building our pool of experts")
+  B) SELLER: promoting their own services ("I offer", "we help", "DM me", "portfolio", "I'm a freelance X available", "my agency")
+  C) Other: recruiter placing at third-party clients, job seeker, thought leadership, content
 
-We ONLY want REAL BUYERS: people/companies that NEED the service. When in doubt, REJECT — better to return fewer, higher-quality leads.
+KEEP only A. NEVER keep B or C.
+
+TRAPS:
+- "Looking for a freelance X to work on our project" = BUYER (they're hiring), keep it.
+- "Freelance X available for remote projects" = SELLER, reject it.
+- A firm "building our pool of experts / experts required for our projects" = BUYER of expertise, keep it.
+- "Looking for partners/agencies/marketers to work with" = sourcing suppliers = BUYER, keep it.
+- Full-time on-site hiring = reject. Non-English posts = reject. Content/tips = reject.
+
+When in doubt, REJECT — better to return fewer, higher-quality leads.
 
 Return ONLY a JSON array of indices of KEEP posts, e.g. [0, 3, 5]. If none, return []."""
 

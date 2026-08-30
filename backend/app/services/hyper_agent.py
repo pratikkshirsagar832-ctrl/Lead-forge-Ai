@@ -708,20 +708,22 @@ If a field is not mentioned, use null.""",
             ctx = {}
 
         # Reliability fallbacks (the AI often drops or mangles these)
-        # 1. count: regex from the last user message ("5 leads", "count: 5", "I need 5")
+        # 1. count: the USER's explicit number ALWAYS wins over the AI's
+        #    guess. The AI likes to default to 20 even when the user said 5
+        #    ("5 leads", "count: 5", "I need 5") — so the regex runs FIRST
+        #    and unconditionally overrides any AI-extracted count.
         try:
-            if not ctx.get("count"):
-                last_user = ""
-                for m in reversed(history[-10:]):
-                    if m.get("role") == "user":
-                        last_user = m.get("content", "")
-                        break
-                m = _re.search(r"(?:count[:\s]*|need\s+|want\s+)(\d+)\s*(?:leads?)?", last_user, _re.IGNORECASE)
-                m2 = _re.search(r"(\d+)\s*leads?", last_user, _re.IGNORECASE)
-                if m:
-                    ctx["count"] = int(m.group(1))
-                elif m2:
-                    ctx["count"] = int(m2.group(1))
+            last_user = ""
+            for m in reversed(history[-10:]):
+                if m.get("role") == "user":
+                    last_user = m.get("content", "")
+                    break
+            m = _re.search(r"(?:count[:\s]*|need\s+|want\s+)(\d+)\s*(?:leads?)?", last_user, _re.IGNORECASE)
+            m2 = _re.search(r"(\d+)\s*leads?", last_user, _re.IGNORECASE)
+            if m:
+                ctx["count"] = int(m.group(1))
+            elif m2:
+                ctx["count"] = int(m2.group(1))
         except Exception:
             pass
 
@@ -755,15 +757,21 @@ If a field is not mentioned, use null.""",
         queries = self._build_queries(niche, roles, location, lead_types)
         logger.info(f"[HyperAgent] Queries: {queries}")
 
-        # For small counts, get more raw items to compensate for heavy filtering.
-        # The final save is strictly capped at `count`, so fetching a bit more
-        # never over-delivers — it just gives the gates more candidates to
-        # reach the exact requested number.
-        max_posts = min(max(count * 5, 30), 60)
+        # CREDIT BUDGET: harvestapi's maxPosts is PER QUERY, so total raw =
+        # maxPosts × len(searchQueries). Fetching 10 queries × 60 posts = 600
+        # records burns credits on every search. Budget the TOTAL to ~count×3
+        # (never more than needed — the gates + fill logic deliver exactly
+        # `count` leads, so extra raw items are pure waste):
+        #   count=5   → 2 queries × 10  = 20 raw
+        #   count=20  → 4 queries × 15  = 60 raw
+        #   count=50  → 6 queries × 25  = 150 raw
+        n_queries = max(2, min(6, -(-count // 10)))
+        per_query = max(10, min(25, -(-count * 3 // n_queries)))
+        selected = queries[:n_queries]
 
         payload = {
-            "searchQueries": queries[:10],
-            "maxPosts": min(max_posts, 60),
+            "searchQueries": selected,
+            "maxPosts": per_query,
             "postedLimit": str(context.get("posted_within") or "month"),
             "sortBy": "date",
             "timeoutSeconds": 240,
@@ -773,6 +781,7 @@ If a field is not mentioned, use null.""",
             "scrapeComments": False,
             "postNestedComments": False,
         }
+        logger.info(f"[HyperAgent] budget: {n_queries} queries × maxPosts={per_query} (≈{n_queries * per_query} raw max)")
 
         items = _run_sync_actor(HARVEST_POST_SEARCH_ACTOR, payload)
         logger.info(f"[HyperAgent] HarvestAPI returned {len(items)} items")
@@ -780,7 +789,7 @@ If a field is not mentioned, use null.""",
             # Zero results — retry ONCE with a much simpler query set. The
             # built-in phrases can be too specific for niche services, and a
             # plain niche query usually still surfaces relevant posts.
-            logger.warning(f"[HyperAgent] 0 items with {len(queries[:10])} phrases — retrying with simple niche queries")
+            logger.warning(f"[HyperAgent] 0 items with {len(selected)} phrases — retrying with simple niche queries")
             simple = [q.strip() for q in _normalize_terms(niche) if q.strip()][:3]
             if not simple:
                 simple = [niche or "marketing"]

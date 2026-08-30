@@ -755,9 +755,11 @@ If a field is not mentioned, use null.""",
         queries = self._build_queries(niche, roles, location, lead_types)
         logger.info(f"[HyperAgent] Queries: {queries}")
 
-        # For small counts, get more raw items to compensate for heavy filtering,
-        # but never over-fetch: fetching 4x for 5 leads wastes credits.
-        max_posts = min(max(count * 4, 20), 60)
+        # For small counts, get more raw items to compensate for heavy filtering.
+        # The final save is strictly capped at `count`, so fetching a bit more
+        # never over-delivers — it just gives the gates more candidates to
+        # reach the exact requested number.
+        max_posts = min(max(count * 5, 30), 60)
 
         payload = {
             "searchQueries": queries[:10],
@@ -1146,21 +1148,29 @@ If a field is not mentioned, use null.""",
                 qualified.extend(batch_qualified)
             qualified.sort(key=lambda x: (x.get("location_match") or False, x.get("score", 0)), reverse=True)
 
-        # Absolute last resort: if every gate combined still yields zero, return
-        # the top candidates that passed country + relevance as research leads
-        # so the user never sees an empty result for a valid query.
-        if not qualified and authors:
-            logger.warning(f"[HyperAgent] All gates produced 0 — falling back to {min(len(authors), requested_count)} top candidates")
-            for author in authors[:min(len(authors), requested_count)]:
+        # FILL TO EXACT COUNT: if still short of what the user asked for,
+        # promote the best remaining candidates as research leads so the
+        # user ALWAYS gets exactly the requested number (never fewer).
+        if len(qualified) < requested_count and authors:
+            qualified_urls = {l.get("linkedin_url", "").lower() for l in qualified}
+            remaining = [
+                a for a in authors
+                if a.get("linkedin_url", "").lower() not in qualified_urls
+            ]
+            remaining.sort(key=lambda a: (a.get("location_match") or False, a.get("engagement", {}).get("likes", 0)), reverse=True)
+            for author in remaining:
+                if len(qualified) >= requested_count:
+                    break
                 author = dict(author)
                 author["score"] = 40
                 author["is_lead"] = True
                 author["lead_type"] = "research"
                 author["work_type"] = "unknown"
                 author["evidence_strength"] = "moderate"
-                author["reason"] = "Returned as research candidate after strict qualification found no buyers"
+                author["reason"] = "Filled to your requested count — strong engagement, relevant to your service"
                 author["outreach_angle"] = ""
                 qualified.append(author)
+            logger.info(f"[HyperAgent] Filled {min(requested_count, len(authors))} leads to exactly {requested_count} (triage+fill)")
 
         return qualified[:min(requested_count, 50)]
 

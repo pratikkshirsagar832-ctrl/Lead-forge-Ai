@@ -149,13 +149,28 @@ def check_apify_keys_health() -> dict:
 
 
 def _run_sync_actor(actor_id: str, payload: dict) -> list[dict]:
-    """Run an actor synchronously and return dataset items, with key failover."""
+    """Run an actor synchronously and return dataset items, with key failover.
+
+    Every key attempt is logged with its last-4 digits + HTTP status so a
+    failed search is fully diagnosable from logs. On 402 (credits) the key
+    goes into cooldown and the NEXT key is tried immediately.
+    """
     last_error: ApifyError | None = None
+    stat: dict[str, int] = {}
+    attempted = 0
     for key in _ordered_keys():
+        attempted += 1
         try:
-            return _run_with_key(actor_id, key, payload)
+            items = _run_with_key(actor_id, key, payload)
+            logger.info(f"[Apify:{actor_id}] Key {key[-6:]} succeeded ({len(items)} items)")
+            return items
         except ApifyRetryableError as e:
-            logger.warning(f"[Apify:{actor_id}] Key failed (HTTP {e.status_code}): {e}. Trying next key...")
+            label = str(e.status_code) if e.status_code else "net"
+            stat[label] = stat.get(label, 0) + 1
+            logger.warning(
+                f"[Apify:{actor_id}] Key {key[-6:]} failed (HTTP {label}) — "
+                f"rotating to next key ({attempted}/{len(_get_api_keys())} tried)"
+            )
             last_error = e
             if e.status_code == 401 and "user-or-token-not-found" in str(e):
                 # Token revoked/deleted — permanently remove from rotation.
@@ -165,14 +180,32 @@ def _run_sync_actor(actor_id: str, payload: dict) -> list[dict]:
         except ApifyError:
             raise
 
-    if last_error and last_error.status_code == 401:
+    revoked = stat.get("401", 0)
+    no_credits = stat.get("402", 0)
+    net_err = stat.get("net", 0)
+    breakdown = " ".join(f"{k}={v}" for k, v in sorted(stat.items()))
+    logger.error(f"[Apify:{actor_id}] ALL {attempted} keys failed — statuses: {breakdown}")
+    if no_credits and not revoked:
         raise ApifyError(
-            "All Apify API keys are invalid or revoked (user-or-token-not-found). "
-            "Please add working keys to the server environment (APIFY_API_KEY*) "
-            "or check console.apify.com for account status.",
+            f"All Apify API keys are out of credits ({no_credits} tried, "
+            "not-enough-usage-to-run-paid-actor). Top up credits at "
+            "console.apify.com/billing or add keys with remaining credits.",
+            402,
+        )
+    if revoked and no_credits:
+        raise ApifyError(
+            f"Apify keys: {no_credits} out of credits + {revoked} revoked/invalid — "
+            "add keys with credits at console.apify.com/billing.",
             401,
         )
-    raise last_error or ApifyError("All Apify API keys failed")
+    if revoked and not no_credits and not net_err:
+        raise ApifyError(
+            "All Apify API keys are invalid or revoked (user-or-token-not-found). "
+            "Add working keys to the server environment (APIFY_API_KEY*) or check "
+            "console.apify.com for account status.",
+            401,
+        )
+    raise last_error or ApifyError(f"All Apify API keys failed ({breakdown})")
 
 
 def _run_with_key(actor_id: str, key: str, payload: dict) -> list[dict]:

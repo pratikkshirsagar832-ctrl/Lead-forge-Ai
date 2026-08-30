@@ -1,16 +1,16 @@
 """
 Hyperclients — LinkedIn Intent-Lead Pipeline
 
-Flow (scrapeforge/linkedin-all-in-one):
+Flow (Bright Data LinkedIn Scraper API):
 
   1. Build BROAD discovery phrases from user niche (not literal "I need X")
-  2. post-search mode → raw posts (boolean OR across phrases)
-  3. Parse posts into candidates; keep the strongest post per author
-  4. profile-detail mode → enrich headline/company/location (AI context)
-  5. GPT semantic scoring 0-100 — implicit commercial intent, not just
+  2. Bright Data search → LinkedIn profile/post URLs
+  3. Bright Data scrape → structured JSON data
+  4. Parse posts into candidates; keep the strongest post per author
+  5. Profile enrichment → headline/company/location (AI context)
+  6. GPT semantic scoring 0-100 — implicit commercial intent, not just
      explicit "I need X" statements
-  6. Rank → dedupe by author → save tagged leads (source='linkedin')
-  7. Optional email enrichment via legacy profile-scraper actor
+  7. Rank → dedupe by author → save tagged leads (source='linkedin')
 """
 
 import asyncio
@@ -21,15 +21,10 @@ from datetime import datetime, timezone
 
 from app.config import get_settings
 from app.database import get_supabase_admin
-from app.services.apify_service import (
-    ApifyError,
-    dedupe_post_items,
-    enrich_profiles,
-    fetch_profile_details,
-    run_post_search,
-    run_lane_search,
-    run_job_search,
-    filter_jobs_by_work_type,
+from app.services.brightdata_service import (
+    BrightDataError,
+    scrape_leads as brightdata_scrape_leads,
+    scrape_profiles as brightdata_scrape_profiles,
 )
 
 logger = logging.getLogger(__name__)
@@ -927,7 +922,7 @@ async def run_linkedin_pipeline(
 
         # MEGA-PARALLEL DISCOVERY: build ALL query angles up front and fire
         # them in ONE batch. run_post_search splits the queries across all
-        # healthy Apify keys and runs them CONCURRENTLY — so 10 leads means
+        # healthy Bright Data keys and runs them CONCURRENTLY — so 10 leads means
         # ~96 queries hit ~10-24 keys simultaneously in a single pass, not
         # round after round. Repeat only if still short.
         MAX_PASSES = 2
@@ -990,7 +985,7 @@ async def run_linkedin_pipeline(
             if leads and missing_headline > 0:
                 enrich_urls = [l["linkedin_url"] for l in leads[:PROFILE_ENRICHMENT_CAP] if not (l.get("headline") or "").strip()]
                 try:
-                    profiles = await asyncio.to_thread(fetch_profile_details, enrich_urls, "basic")
+                    profiles = await asyncio.to_thread(brightdata_scrape_profiles, enrich_urls)
                     by_url = {(p.get("url") or "").rstrip("/").lower(): p for p in profiles if isinstance(p, dict)}
                     for lead in leads:
                         p = by_url.get((lead.get("linkedin_url") or "").rstrip("/").lower())
@@ -1069,20 +1064,25 @@ async def run_linkedin_pipeline(
 
             async def _fetch_jobs(job_query: str) -> list[dict]:
                 try:
-                    # Hard timeout — the job actor can hang; never let it block
-                    # the whole search for more than 60s.
-                    jobs = await asyncio.wait_for(
+                    # Use Bright Data to search for job-related posts
+                    items = await asyncio.wait_for(
                         asyncio.to_thread(
-                            run_job_search,
-                            query=job_query,
+                            brightdata_scrape_leads,
+                            services=[job_query],
                             location="United States",
-                            time_range="7d",
-                            max_jobs=min(max_results * 2, 40),
+                            max_results=min(max_results * 2, 40),
+                            posted_limit="week",
                         ),
-                        timeout=60,
+                        timeout=120,
                     )
-                    logger.info(f"[LinkedInPipeline:{search_id}] Job search '{job_query}' returned {len(jobs)} jobs")
-                    return filter_jobs_by_work_type(jobs, ["Remote", "Part-time", "Contract"])
+                    logger.info(f"[LinkedInPipeline:{search_id}] Job search '{job_query}' returned {len(items)} items")
+                    # Filter for remote/contract/part-time signals in post text
+                    filtered = []
+                    for item in items:
+                        text = (item.get("text") or "").lower()
+                        if any(kw in text for kw in ["remote", "contract", "part-time", "freelance", "hiring"]):
+                            filtered.append(item)
+                    return filtered
                 except asyncio.TimeoutError:
                     logger.warning(f"[LinkedInPipeline:{search_id}] Job search '{job_query}' timed out — skipping")
                     return []
@@ -1093,31 +1093,26 @@ async def run_linkedin_pipeline(
             # Run all job queries IN PARALLEL — big speedup over sequential.
             job_results = await asyncio.gather(*[_fetch_jobs(q) for q in job_queries])
             for filtered_jobs in job_results:
-                logger.info(f"[LinkedInPipeline:{search_id}] After work type filter: {len(filtered_jobs)} jobs")
-                # Convert jobs to lead format
+                logger.info(f"[LinkedInPipeline:{search_id}] After filter: {len(filtered_jobs)} items")
+                # Convert items to lead format
                 for job in filtered_jobs:
-                    company_url = (job.get("companyUrl") or "").strip()
-                    job_url = (job.get("jobUrl") or "").strip()
+                    company_url = (job.get("author_url") or "").strip()
+                    job_url = (job.get("url") or "").strip()
                     linkedin_url = company_url or job_url
                     job_lead = {
-                        "full_name": job.get("company") or "Unknown Company",
-                        "headline": f"{job.get('title', '')} at {job.get('company', '')}",
-                        "company": job.get("company", ""),
-                        "location": job.get("location", ""),
+                        "full_name": job.get("author_name") or "Unknown",
+                        "headline": job.get("author_headline", ""),
+                        "company": "",
+                        "location": "",
                         "linkedin_url": linkedin_url,
-                        "post_url": job.get("jobUrl", ""),
-                        "post_text": job.get("descriptionText", "")[:3000],
-                        "posted_at": _parse_posted_at(job.get("postedAt")),
-                        "engagement_likes": 0,
-                        "engagement_comments": 0,
-                        "profile_picture_url": job.get("companyLogo", ""),
+                        "post_url": job_url,
+                        "post_text": job.get("text", "")[:3000],
+                        "posted_at": job.get("postedAt", ""),
+                        "engagement_likes": job.get("numLikes", 0),
+                        "engagement_comments": job.get("numComments", 0),
+                        "profile_picture_url": "",
                         "connections_count": 0,
                         "lead_type": "hiring",
-                        "job_work_type": job.get("workType", ""),
-                        "job_salary": job.get("salary", ""),
-                        "job_seniority": job.get("seniority", ""),
-                        "job_function": job.get("jobFunction", ""),
-                        "job_industry": job.get("companyIndustry", ""),
                     }
                     all_leads.append(job_lead)
 
@@ -1174,8 +1169,8 @@ async def run_linkedin_pipeline(
         })
         logger.info(f"[LinkedInPipeline:{search_id}] Completed — {saved} leads ({hot} hot, {warm} warm), {emails_found} emails")
 
-    except ApifyError as e:
-        logger.error(f"[LinkedInPipeline:{search_id}] Apify error: {e}", exc_info=True)
+    except BrightDataError as e:
+        logger.error(f"[LinkedInPipeline:{search_id}] Bright Data error: {e}", exc_info=True)
         await _update_search(supabase, search_id, {
             "status": "failed",
             "message": "LinkedIn scraper failed",
@@ -1316,8 +1311,8 @@ async def _enrich_emails(
         return 0
 
     try:
-        profiles = await asyncio.to_thread(enrich_profiles, urls, 50)
-    except ApifyError as e:
+        profiles = await asyncio.to_thread(brightdata_scrape_profiles, urls)
+    except BrightDataError as e:
         logger.warning(f"[LinkedInPipeline:{search_id}] Email enrichment failed: {e}")
         return 0
 
@@ -1388,7 +1383,7 @@ async def _update_search(supabase, search_id: str, data: dict) -> None:
 
 
 # ══════════════════════════════════════════════════════════════════════════
-# FAST PIPELINE — N selected leads → N parallel Apify lanes + async OpenAI
+# FAST PIPELINE — N selected leads → N parallel Bright Data lanes + async OpenAI
 # ══════════════════════════════════════════════════════════════════════════
 
 # Max concurrent OpenAI calls during async qualification. gpt-4o-mini TPM
@@ -1832,7 +1827,7 @@ async def run_linkedin_pipeline_fast(
 ) -> None:
     """GUARANTEED-COUNT fast pipeline.
 
-    User selects N leads → N parallel Apify lanes (each on its own key)
+    User selects N leads → N parallel Bright Data lanes (each on its own key)
     fire SIMULTANEOUSLY → all candidates scored by GPT-4o-mini with up to
     30 CONCURRENT async calls → tiered acceptance guarantees at least N
     fresh leads whenever they exist. Wave 2 lanes + job-scraper act as
@@ -1870,7 +1865,7 @@ async def run_linkedin_pipeline_fast(
             known_urls = set()
 
         # ── HARD LIMIT: no daily leads left → fail fast WITHOUT burning
-        # any Apify/OpenAI credits. User sees the upgrade prompt.
+        # any Bright Data/OpenAI credits. User sees the upgrade prompt.
         remaining_now = await _get_remaining_leads(supabase, user_id)
         if remaining_now <= 0:
             logger.warning(f"[LinkedInPipeline:{search_id}] HARD STOP — daily lead limit already reached")
@@ -1909,17 +1904,29 @@ async def run_linkedin_pipeline_fast(
         all_skipped = 0
 
         async def _run_wave_async(lane_list: list[list[str]]) -> list[dict]:
-            results = await asyncio.gather(*[
-                asyncio.to_thread(run_lane_search, lq, fetch_per_lane, "month")
-                for lq in lane_list
-            ])
-            items: list[dict] = []
-            ok_lanes = 0
-            for lane_items in results:
-                if lane_items:
-                    ok_lanes += 1
-                    items.extend(lane_items)
-            logger.info(f"[LinkedInPipeline:{search_id}] wave done: {ok_lanes}/{len(lane_list)} lanes returned data")
+            # Convert lane queries to service list for Bright Data discovery
+            all_services = []
+            for lq in lane_list:
+                for q in lq:
+                    # Extract service terms from query
+                    terms = [t.strip().strip('"') for t in q.split() if len(t) >= 3]
+                    all_services.extend(terms[:2])
+            all_services = list(dict.fromkeys(all_services))[:10]
+
+            # Use Bright Data to scrape leads
+            try:
+                items = await asyncio.to_thread(
+                    brightdata_scrape_leads,
+                    services=all_services if all_services else ["marketing"],
+                    location=query.split(",")[-1].strip() if "," in query else None,
+                    max_results=fetch_per_lane * len(lane_list),
+                    posted_limit="month",
+                )
+            except BrightDataError as e:
+                logger.warning(f"[LinkedInPipeline:{search_id}] Bright Data wave failed: {e}")
+                items = []
+
+            logger.info(f"[LinkedInPipeline:{search_id}] wave done: {len(items)} items from Bright Data")
             return items
 
         async def _process_items_to_candidates(items: list[dict]) -> tuple[list[dict], int]:
@@ -1931,7 +1938,15 @@ async def run_linkedin_pipeline_fast(
                 if pid:
                     seen_post_ids.add(pid)
                 fresh.append(it)
-            deduped = dedupe_post_items(fresh)
+            # Dedupe by post id/url
+            seen: set[str] = set()
+            deduped = []
+            for it in fresh:
+                pid = it.get("postId") or it.get("id") or it.get("url") or it.get("linkedinUrl")
+                if not pid or pid in seen:
+                    continue
+                seen.add(pid)
+                deduped.append(it)
             # Keep EVERY parsed post (cap 400) — Stage-1 triage screens all of
             # them cheaply, so genuine low-engagement buyers are never lost to
             # viral-noise ranking.
@@ -1949,7 +1964,7 @@ async def run_linkedin_pipeline_fast(
         # filler) until max_results leads are delivered or the wave/time
         # budget is exhausted. Accepted leads ACCUMULATE across waves.
         # Exact-count policy: the user asked for max_results leads, they get
-        # EXACTLY max_results — no over-delivery, no wasted Apify/OpenAI credits.
+        # EXACTLY max_results — no over-delivery, no wasted credits.
         overdeliver_cap = max_results
         final_leads: list[dict] = []
         chosen_urls: set[str] = set()
@@ -1997,46 +2012,45 @@ async def run_linkedin_pipeline_fast(
                 if added >= need:
                     break
                 try:
-                    job_lists = await asyncio.gather(*[
-                        asyncio.wait_for(
-                            asyncio.to_thread(
-                                run_job_search,
-                                query=q,
-                                location=location,
-                                time_range="7d",
-                                max_jobs=min(need * 3, 40),
-                            ),
-                            timeout=60,
-                        )
-                        for q in job_queries
-                    ])
-                except Exception as e:
-                    logger.warning(f"[LinkedInPipeline:{search_id}] job filler ({location}) failed: {e}")
-                    continue
-                for jobs in job_lists:
-                    filtered = filter_jobs_by_work_type(jobs, ["Remote", "Part-time", "Contract"])
-                    logger.info(f"[LinkedInPipeline:{search_id}] job filler ({location}): {len(filtered)} remote/contract jobs")
+                    # Use Bright Data to search for hiring posts
+                    job_items = await asyncio.wait_for(
+                        asyncio.to_thread(
+                            brightdata_scrape_leads,
+                            services=job_queries[:4],
+                            location=location,
+                            max_results=min(need * 3, 40),
+                            posted_limit="week",
+                        ),
+                        timeout=120,
+                    )
+                    # Filter for hiring signals
+                    filtered = []
+                    for item in job_items:
+                        text = (item.get("text") or "").lower()
+                        if any(kw in text for kw in ["hiring", "looking for", "need", "freelance", "contract", "remote"]):
+                            filtered.append(item)
+                    logger.info(f"[LinkedInPipeline:{search_id}] job filler ({location}): {len(filtered)} hiring posts")
                     for job in filtered:
                         if len(final_leads) >= overdeliver_cap or added >= need:
                             break
-                        company_url = (job.get("companyUrl") or "").strip()
-                        job_url = (job.get("jobUrl") or "").strip()
+                        company_url = (job.get("author_url") or "").strip()
+                        job_url = (job.get("url") or "").strip()
                         linkedin_url = company_url or job_url
                         key = linkedin_url.split("?")[0].rstrip("/").lower()
                         if not linkedin_url or key in chosen_urls or key in known_urls:
                             continue
                         final_leads.append({
-                            "full_name": job.get("company") or "Unknown Company",
-                            "headline": f"{job.get('title', '')} at {job.get('company', '')}",
-                            "company": job.get("company", ""),
-                            "location": job.get("location", ""),
+                            "full_name": job.get("author_name") or "Unknown",
+                            "headline": job.get("author_headline", ""),
+                            "company": "",
+                            "location": "",
                             "linkedin_url": linkedin_url,
                             "post_url": job_url,
                             "post_text": (job.get("descriptionText") or "")[:3000],
-                            "posted_at": _parse_posted_at(job.get("postedAt")),
-                            "engagement_likes": 0,
-                            "engagement_comments": 0,
-                            "profile_picture_url": job.get("companyLogo", ""),
+                            "posted_at": job.get("postedAt", ""),
+                            "engagement_likes": job.get("numLikes", 0),
+                            "engagement_comments": job.get("numComments", 0),
+                            "profile_picture_url": "",
                             "connections_count": 0,
                             "ai_qualified": True,
                             "ai_score": 75,
@@ -2048,6 +2062,9 @@ async def run_linkedin_pipeline_fast(
                         })
                         chosen_urls.add(key)
                         added += 1
+                except Exception as e:
+                    logger.warning(f"[LinkedInPipeline:{search_id}] job filler ({location}) failed: {e}")
+                    continue
             return added
 
         async def _hunt_wave(wave_no: int, lane_list: list[list[str]]) -> None:
@@ -2069,12 +2086,12 @@ async def run_linkedin_pipeline_fast(
             # STAGE 1 — cheap buying-intent triage over EVERY parsed post.
             promising = await triage_candidates_async(candidates_w, query, openai_client)
 
-            # Enrich ONLY triage survivors missing a headline (Apify cost control).
+            # Enrich ONLY triage survivors missing a headline (cost control).
             missing = [c for c in promising if not (c.get("headline") or "").strip()]
             if missing:
                 try:
                     enrich_urls = [c["linkedin_url"] for c in missing[:PROFILE_ENRICHMENT_CAP]]
-                    profiles = await asyncio.to_thread(fetch_profile_details, enrich_urls, "basic")
+                    profiles = await asyncio.to_thread(brightdata_scrape_profiles, enrich_urls)
                     by_url = {(p.get("url") or "").rstrip("/").lower(): p for p in profiles if isinstance(p, dict)}
                     for c in promising:
                         p = by_url.get((c.get("linkedin_url") or "").rstrip("/").lower())
@@ -2170,8 +2187,8 @@ async def run_linkedin_pipeline_fast(
             f"({hot} hot), {emails_found} emails, limit_hit={lead_limit_hit}, {raw_count_total} raw posts"
         )
 
-    except ApifyError as e:
-        logger.error(f"[LinkedInPipeline:{search_id}] Apify error: {e}", exc_info=True)
+    except BrightDataError as e:
+        logger.error(f"[LinkedInPipeline:{search_id}] Bright Data error: {e}", exc_info=True)
         await _update_search(supabase, search_id, {
             "status": "failed", "message": "LinkedIn scraper failed", "error_message": str(e),
         })

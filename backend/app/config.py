@@ -20,30 +20,24 @@ class Settings(BaseSettings):
 
     openai_api_key: str = ""
 
-    apify_api_key: str = ""
-    apify_api_key_2: str = ""
-    apify_api_key_3: str = ""
-    apify_api_key_4: str = ""
-    apify_api_key_5: str = ""
-    apify_api_key_6: str = ""
-    apify_api_key_7: str = ""
-    apify_api_key_8: str = ""
-    apify_api_key_9: str = ""
-    apify_api_key_10: str = ""
-    apify_api_key_11: str = ""
-    apify_api_key_12: str = ""
-    apify_api_key_13: str = ""
-    apify_api_key_14: str = ""
-    apify_api_key_15: str = ""
-    apify_api_key_16: str = ""
-    apify_api_key_17: str = ""
-    apify_api_key_18: str = ""
-    apify_api_key_19: str = ""
-    apify_api_key_20: str = ""
-    apify_api_key_21: str = ""
-    apify_api_key_22: str = ""
-    apify_api_key_23: str = ""
-    apify_api_key_24: str = ""
+    # ── Bright Data multi-key rotation ────────────────────────────────
+    # Primary key (always tried first). Additional keys rotate on failure.
+    bright_data_api_key: str = ""
+    bright_data_api_key_2: str = ""
+    bright_data_api_key_3: str = ""
+    bright_data_api_key_4: str = ""
+    bright_data_api_key_5: str = ""
+    bright_data_api_key_6: str = ""
+    bright_data_api_key_7: str = ""
+    bright_data_api_key_8: str = ""
+    bright_data_api_key_9: str = ""
+    bright_data_api_key_10: str = ""
+    bright_data_api_key_11: str = ""
+    bright_data_api_key_12: str = ""
+    bright_data_api_key_13: str = ""
+    bright_data_api_key_14: str = ""
+    bright_data_api_key_15: str = ""
+    bright_data_api_key_16: str = ""
 
     razorpay_key_id: str = ""
     razorpay_key_secret: str = ""
@@ -61,17 +55,16 @@ class Settings(BaseSettings):
     environment: Literal["development", "staging", "production"] = "development"
 
     @model_validator(mode="after")
-    def _collect_apify_keys(self):
-        self._apify_keys = [
+    def _collect_bright_data_keys(self):
+        """Collect all non-empty Bright Data API keys."""
+        self._bright_data_keys = [
             k for k in (
-                self.apify_api_key, self.apify_api_key_2, self.apify_api_key_3,
-                self.apify_api_key_4, self.apify_api_key_5, self.apify_api_key_6,
-                self.apify_api_key_7, self.apify_api_key_8, self.apify_api_key_9,
-                self.apify_api_key_10, self.apify_api_key_11, self.apify_api_key_12,
-                self.apify_api_key_13, self.apify_api_key_14, self.apify_api_key_15,
-                self.apify_api_key_16, self.apify_api_key_17, self.apify_api_key_18,
-                self.apify_api_key_19, self.apify_api_key_20, self.apify_api_key_21,
-                self.apify_api_key_22, self.apify_api_key_23, self.apify_api_key_24,
+                self.bright_data_api_key, self.bright_data_api_key_2, self.bright_data_api_key_3,
+                self.bright_data_api_key_4, self.bright_data_api_key_5, self.bright_data_api_key_6,
+                self.bright_data_api_key_7, self.bright_data_api_key_8, self.bright_data_api_key_9,
+                self.bright_data_api_key_10, self.bright_data_api_key_11, self.bright_data_api_key_12,
+                self.bright_data_api_key_13, self.bright_data_api_key_14, self.bright_data_api_key_15,
+                self.bright_data_api_key_16,
             )
             if k
         ]
@@ -82,8 +75,8 @@ class Settings(BaseSettings):
         return self.environment == "production"
 
     @property
-    def apify_keys(self) -> list[str]:
-        return getattr(self, "_apify_keys", [k for k in (self.apify_api_key, self.apify_api_key_2) if k])
+    def bright_data_keys(self) -> list[str]:
+        return getattr(self, "_bright_data_keys", [k for k in (self.bright_data_api_key, self.bright_data_api_key_2) if k])
 
     @property
     def scraper_binary_path(self) -> Path:

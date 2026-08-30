@@ -5,7 +5,7 @@ Flow:
   1. User describes their business/ideal lead
   2. OpenAI understands intent, asks clarifying questions
   3. User confirms: niche, location, city, lead count
-  4. System scrapes LinkedIn via HarvestAPI (Apify)
+  4. System scrapes LinkedIn via Bright Data LinkedIn Scraper API
   5. AI qualifies and scores leads (0-100)
   6. Returns high-quality leads to user
 
@@ -23,10 +23,9 @@ from openai import OpenAI
 
 from app.config import get_settings
 from app.database import get_supabase_admin
-from app.services.apify_service import (
-    HARVEST_POST_SEARCH_ACTOR,
-    _run_sync_actor,
-    ApifyError,
+from app.services.brightdata_service import (
+    scrape_leads as brightdata_scrape_leads,
+    check_brightdata_health,
 )
 from app.services.linkedin_pipeline import (
     ALLOWED_COUNTRY_CODES,
@@ -734,13 +733,13 @@ If a field is not mentioned, use null.""",
         return ctx
 
     def scrape_leads(self, context: dict) -> list[dict]:
-        """Scrape LinkedIn using HarvestAPI based on confirmed context.
+        """Scrape LinkedIn via Bright Data based on confirmed context.
 
         Args:
             context: {niche, roles, location, count, ...}
 
         Returns:
-            List of raw LinkedIn post/author items
+            List of raw LinkedIn post/author items (Bright Data format)
         """
         niche = context.get("niche") or ""
         roles = context.get("roles") or ""
@@ -751,41 +750,35 @@ If a field is not mentioned, use null.""",
             count = 20
         lead_types = context.get("lead_types") or []
 
-        # Build search queries from context
+        # Build search queries from context (same as before — used for URL discovery)
         queries = self._build_queries(niche, roles, location, lead_types)
         logger.info(f"[HyperAgent] Queries: {queries}")
 
         # For small counts, get more raw items to compensate for heavy filtering.
-        # The final save is strictly capped at `count`, so fetching a bit more
-        # never over-delivers — it just gives the gates more candidates to
-        # reach the exact requested number.
         max_posts = min(max(count * 5, 30), 60)
 
-        payload = {
-            "searchQueries": queries[:10],
-            "maxPosts": min(max_posts, 60),
-            "postedLimit": str(context.get("posted_within") or "month"),
-            "sortBy": "date",
-            "timeoutSeconds": 240,
-            "profileScraperMode": "main",
-            "scrapeReactions": False,
-            "postNestedReactions": False,
-            "scrapeComments": False,
-            "postNestedComments": False,
-        }
+        # Convert queries to service list for Bright Data discovery
+        services = _normalize_terms(niche) + _normalize_terms(roles)[:3]
 
-        items = _run_sync_actor(HARVEST_POST_SEARCH_ACTOR, payload)
-        logger.info(f"[HyperAgent] HarvestAPI returned {len(items)} items")
+        items = brightdata_scrape_leads(
+            services=services[:6],
+            location=location,
+            max_results=max_posts,
+            posted_limit=str(context.get("posted_within") or "month"),
+        )
+        logger.info(f"[HyperAgent] Bright Data returned {len(items)} items")
         if not items:
-            # Zero results — retry ONCE with a much simpler query set. The
-            # built-in phrases can be too specific for niche services, and a
-            # plain niche query usually still surfaces relevant posts.
-            logger.warning(f"[HyperAgent] 0 items with {len(queries[:10])} phrases — retrying with simple niche queries")
+            # Zero results — retry ONCE with simpler service terms
+            logger.warning(f"[HyperAgent] 0 items — retrying with simple niche queries")
             simple = [q.strip() for q in _normalize_terms(niche) if q.strip()][:3]
             if not simple:
                 simple = [niche or "marketing"]
-            payload["searchQueries"] = simple
-            items = _run_sync_actor(HARVEST_POST_SEARCH_ACTOR, payload)
+            items = brightdata_scrape_leads(
+                services=simple,
+                location=location,
+                max_results=max_posts,
+                posted_limit="month",
+            )
             logger.info(f"[HyperAgent] Simple-query retry returned {len(items)} items")
         return items
 

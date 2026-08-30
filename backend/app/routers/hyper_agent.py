@@ -324,15 +324,23 @@ async def get_results(
 
 @router.get("/health")
 async def health():
-    """HyperAgent health check."""
+    """HyperAgent health check — includes live Apify key validation."""
     from app.config import get_settings
+    from app.services.apify_service import check_apify_keys_health
     settings = get_settings()
+    keys_health = check_apify_keys_health()
 
     return {
-        "status": "healthy",
+        "status": "healthy" if keys_health["valid"] > 0 else "degraded",
         "service": "HyperAgent",
         "apify_key_configured": bool(settings.apify_api_key),
         "openai_key_configured": bool(settings.openai_api_key),
+        "apify_keys": {
+            "configured": keys_health["configured"],
+            "valid": keys_health["valid"],
+            "invalid": keys_health["invalid"],
+            "keys": keys_health["keys"],
+        },
     }
 
 

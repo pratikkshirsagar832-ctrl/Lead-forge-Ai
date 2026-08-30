@@ -39,6 +39,21 @@ RETRYABLE_STATUS_CODES = {401, 402, 403, 407, 429, 500, 502, 503, 504}
 # many seconds before being retried (free Apify plans reset monthly).
 KEY_COOLDOWN_SECONDS = 600
 
+# Permanently revoked keys (user-or-token-not-found / 401) are removed from
+# rotation entirely — a revoked token never recovers, so retrying it only
+# wastes time and keeps other keys from being tried sooner.
+_KEY_PERMA_BLACKLIST: set[str] = set()
+
+
+def _key_blacklisted(key: str) -> bool:
+    return key in _KEY_PERMA_BLACKLIST
+
+
+def _mark_key_blacklisted(key: str) -> None:
+    _KEY_PERMA_BLACKLIST.add(key)
+    _key_cooldown.pop(key, None)
+    logger.error(f"[Apify] Key {key[-6:]} permanently blacklisted (revoked/invalid token)")
+
 
 class ApifyError(Exception):
     """Raised when all configured Apify keys fail."""
@@ -70,7 +85,7 @@ def _mark_key_cooldown(key: str) -> None:
 
 def _ordered_keys() -> list[str]:
     """Rotating view of configured keys: starts from cursor, wraps around,
-    puts healthy (non-cooldown) keys first."""
+    puts healthy (non-cooldown) keys first. Revoked keys are skipped entirely."""
     keys = _get_api_keys()
     if not keys:
         return []
@@ -80,8 +95,9 @@ def _ordered_keys() -> list[str]:
         _key_cursor += 1
     rotated = keys[start:] + keys[:start]
     # healthy first, cooldown keys at the end (so they are only tried as last resort)
-    healthy = [k for k in rotated if not _is_key_in_cooldown(k)]
-    cooling = [k for k in rotated if _is_key_in_cooldown(k)]
+    live = [k for k in rotated if not _key_blacklisted(k)]
+    healthy = [k for k in live if not _is_key_in_cooldown(k)]
+    cooling = [k for k in live if _is_key_in_cooldown(k)]
     return healthy + cooling
 
 
@@ -93,6 +109,45 @@ def _get_api_keys() -> list[str]:
     return keys
 
 
+def check_apify_keys_health() -> dict:
+    """Validate every configured key with a cheap GET /v2/users/me call.
+
+    Returns {configured, valid, invalid, keys: [{last4, valid, detail}]}.
+    Also blacklists revoked keys so rotation skips them immediately.
+    """
+    try:
+        keys = _get_api_keys()
+    except ApifyError as e:
+        return {"configured": 0, "valid": 0, "invalid": 0, "keys": [], "error": str(e)}
+
+    result = []
+    valid = 0
+    for key in keys:
+        last4 = key[-6:] if len(key) > 6 else key
+        try:
+            resp = httpx.get(
+                "https://api.apify.com/v2/users/me",
+                params={"token": key},
+                timeout=15,
+            )
+            if resp.status_code == 200 and resp.json().get("data", {}).get("id"):
+                valid += 1
+                result.append({"last4": last4, "valid": True, "detail": "ok"})
+            else:
+                if resp.status_code == 401:
+                    _mark_key_blacklisted(key)
+                result.append({"last4": last4, "valid": False, "detail": resp.text[:120]})
+        except Exception as e:
+            result.append({"last4": last4, "valid": False, "detail": str(e)[:120]})
+
+    return {
+        "configured": len(keys),
+        "valid": valid,
+        "invalid": len(keys) - valid,
+        "keys": result,
+    }
+
+
 def _run_sync_actor(actor_id: str, payload: dict) -> list[dict]:
     """Run an actor synchronously and return dataset items, with key failover."""
     last_error: ApifyError | None = None
@@ -102,11 +157,21 @@ def _run_sync_actor(actor_id: str, payload: dict) -> list[dict]:
         except ApifyRetryableError as e:
             logger.warning(f"[Apify:{actor_id}] Key failed (HTTP {e.status_code}): {e}. Trying next key...")
             last_error = e
-            if e.status_code in (401, 402, 403, 429):
+            if e.status_code == 401 and "user-or-token-not-found" in str(e):
+                # Token revoked/deleted — permanently remove from rotation.
+                _mark_key_blacklisted(key)
+            elif e.status_code in (401, 402, 403, 429):
                 _mark_key_cooldown(key)
         except ApifyError:
             raise
 
+    if last_error and last_error.status_code == 401:
+        raise ApifyError(
+            "All Apify API keys are invalid or revoked (user-or-token-not-found). "
+            "Please add working keys to the server environment (APIFY_API_KEY*) "
+            "or check console.apify.com for account status.",
+            401,
+        )
     raise last_error or ApifyError("All Apify API keys failed")
 
 

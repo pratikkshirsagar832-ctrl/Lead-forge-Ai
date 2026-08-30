@@ -185,6 +185,10 @@ def _run_sync_actor(actor_id: str, payload: dict) -> list[dict]:
             if e.status_code == 401 and "user-or-token-not-found" in str(e):
                 # Token revoked/deleted — permanently remove from rotation.
                 _mark_key_blacklisted(key)
+            elif e.status_code == 403 and "platform-feature-disabled" in str(e):
+                # Apify disabled the paid-actor feature on this account
+                # (free-account farm restriction) — it will never recover.
+                _mark_key_blacklisted(key)
             elif e.status_code in (401, 402, 403, 429):
                 _mark_key_cooldown(key)
         except ApifyError:
@@ -192,30 +196,27 @@ def _run_sync_actor(actor_id: str, payload: dict) -> list[dict]:
 
     revoked = stat.get("401", 0)
     no_credits = stat.get("402", 0)
+    feature_disabled = stat.get("403", 0)
     net_err = stat.get("net", 0)
     breakdown = " ".join(f"{k}={v}" for k, v in sorted(stat.items()))
     logger.error(f"[Apify:{actor_id}] ALL {attempted} keys failed — statuses: {breakdown}")
-    if no_credits and not revoked:
-        raise ApifyError(
-            f"All Apify API keys are out of credits ({no_credits} tried, "
-            "not-enough-usage-to-run-paid-actor). Top up credits at "
-            "console.apify.com/billing or add keys with remaining credits.",
-            402,
-        )
-    if revoked and no_credits:
-        raise ApifyError(
-            f"Apify keys: {no_credits} out of credits + {revoked} revoked/invalid — "
-            "add keys with credits at console.apify.com/billing.",
-            401,
-        )
-    if revoked and not no_credits and not net_err:
-        raise ApifyError(
-            "All Apify API keys are invalid or revoked (user-or-token-not-found). "
-            "Add working keys to the server environment (APIFY_API_KEY*) or check "
-            "console.apify.com for account status.",
-            401,
-        )
-    raise last_error or ApifyError(f"All Apify API keys failed ({breakdown})")
+
+    parts = []
+    if no_credits:
+        parts.append(f"{no_credits} out of credits")
+    if feature_disabled:
+        parts.append(f"{feature_disabled} feature-disabled (paid actor blocked by Apify)")
+    if revoked:
+        parts.append(f"{revoked} revoked/invalid")
+    if net_err:
+        parts.append(f"{net_err} network errors")
+    detail = "; ".join(parts) if parts else breakdown or "unknown"
+    raise ApifyError(
+        f"All {attempted} Apify keys failed: {detail}. "
+        "Top up credits at console.apify.com/billing and use accounts that can "
+        "run paid actors.",
+        last_error.status_code if last_error else 500,
+    )
 
 
 def _run_with_key(actor_id: str, key: str, payload: dict) -> list[dict]:

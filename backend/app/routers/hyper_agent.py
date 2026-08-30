@@ -20,7 +20,7 @@ from app.middleware.usage_middleware import check_search_limit
 from app.services.hyper_agent import HyperAgentService
 from app.database import get_supabase_admin
 from app.services.plans import resolve_effective_subscription, get_plan_row, get_used_today
-from app.services.brightdata_service import BrightDataError
+from app.services.apify_service import ApifyError
 
 logger = logging.getLogger(__name__)
 
@@ -121,12 +121,12 @@ def run_hyper_agent_job(search_id: str, user_id: str, context: dict) -> None:
         except Exception as e:
             logger.warning(f"[HyperAgent] Usage increment failed: {e}")
 
-    except BrightDataError as e:
+    except ApifyError as e:
         err_msg = str(e)
         if "408" in err_msg or "timeout" in err_msg.lower():
             _mark("failed", "LinkedIn search timed out. Try a simpler query or fewer leads.")
         else:
-            logger.error(f"[HyperAgent] Bright Data error: {e}")
+            logger.error(f"[HyperAgent] Apify error: {e}")
             _mark("failed", f"LinkedIn scraping failed: {err_msg[:200]}")
     except Exception as e:
         logger.error(f"[HyperAgent] Scrape error: {e}", exc_info=True)
@@ -324,18 +324,18 @@ async def get_results(
 
 @router.get("/health")
 async def health():
-    """HyperAgent health check — includes live Bright Data key validation."""
+    """HyperAgent health check — includes live Apify key validation."""
     from app.config import get_settings
-    from app.services.brightdata_service import check_brightdata_health
+    from app.services.apify_service import check_apify_keys_health
     settings = get_settings()
-    keys_health = check_brightdata_health()
+    keys_health = check_apify_keys_health()
 
     return {
         "status": "healthy" if keys_health["valid"] > 0 else "degraded",
         "service": "HyperAgent",
-        "bright_data_key_configured": bool(settings.bright_data_api_key),
+        "apify_key_configured": bool(settings.apify_api_key),
         "openai_key_configured": bool(settings.openai_api_key),
-        "bright_data_keys": {
+        "apify_keys": {
             "configured": keys_health["configured"],
             "valid": keys_health["valid"],
             "invalid": keys_health["invalid"],
@@ -353,7 +353,7 @@ async def backfill_post_urls(current_user: dict = Depends(get_current_user)):
     matches posts back to leads by author URL + post text, and fills post_url.
     """
     from app.services.hyper_agent import HyperAgentService, _extract_post_url
-    from app.services.brightdata_service import scrape_leads as brightdata_scrape_leads
+    from app.services.apify_service import HARVEST_POST_SEARCH_ACTOR, _run_with_key
 
     supabase = get_supabase_admin()
     user_id = current_user["id"]
@@ -392,15 +392,19 @@ async def backfill_post_urls(current_user: dict = Depends(get_current_user)):
 
         try:
             queries = service._build_queries(niche, "", search.get("location", ""))
-            # Convert queries to service list for Bright Data discovery
-            from app.services.linkedin_pipeline import _normalize_terms
-            services = _normalize_terms(niche)[:6]
-            items = brightdata_scrape_leads(
-                services=services,
-                location=search.get("location", ""),
-                max_results=100,
-                posted_limit="year",
-            )
+            payload = {
+                "searchQueries": queries,
+                "maxPosts": 100,
+                "postedLimit": "year",
+                "sortBy": "date",
+                "profileScraperMode": "main",
+                "scrapeReactions": False,
+                "postNestedReactions": False,
+                "scrapeComments": False,
+                "postNestedComments": False,
+            }
+            key = service._get_harvest_key()
+            items = _run_with_key(HARVEST_POST_SEARCH_ACTOR, key, payload)
             for item in items:
                 author = item.get("author") or {}
                 author_url = (author.get("url") or author.get("linkedinUrl") or "").strip()

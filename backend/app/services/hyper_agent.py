@@ -25,8 +25,7 @@ from app.config import get_settings
 from app.database import get_supabase_admin
 from app.services.apify_service import (
     HARVEST_POST_SEARCH_ACTOR,
-    _run_with_key,
-    _ordered_keys,
+    _run_sync_actor,
     ApifyError,
 )
 from app.services.linkedin_pipeline import (

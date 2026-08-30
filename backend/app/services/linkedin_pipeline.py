@@ -1948,7 +1948,9 @@ async def run_linkedin_pipeline_fast(
         # post → deep scoring on survivors → tiered absorption → job-postings
         # filler) until max_results leads are delivered or the wave/time
         # budget is exhausted. Accepted leads ACCUMULATE across waves.
-        overdeliver_cap = max_results * 2
+        # Exact-count policy: the user asked for max_results leads, they get
+        # EXACTLY max_results — no over-delivery, no wasted Apify/OpenAI credits.
+        overdeliver_cap = max_results
         final_leads: list[dict] = []
         chosen_urls: set[str] = set()
         deadline = asyncio.get_event_loop().time() + WAVE_DEADLINE_SECONDS
@@ -2120,7 +2122,7 @@ async def run_linkedin_pipeline_fast(
         if len(final_leads) < max_results:
             await _run_job_filler(max_results - len(final_leads))
 
-        final_leads = final_leads[:overdeliver_cap]
+        final_leads = final_leads[:overdeliver_cap]  # == max_results (exact count)
 
         # ── Phase 7: save (bulk) + optional email enrichment.
         hot = sum(1 for l in final_leads if (l.get("ai_score", 0) or 0) >= 85)

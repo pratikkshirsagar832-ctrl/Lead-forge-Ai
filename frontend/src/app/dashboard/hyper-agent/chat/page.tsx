@@ -240,9 +240,18 @@ I'll understand your needs, confirm the details, then scrape LinkedIn and qualif
           if (selectedLeadTypes.length > 0) {
             contextData.lead_types = selectedLeadTypes
           }
-          if (selectedLeadCount) {
-            contextData.count = parseInt(selectedLeadCount, 10) || 20
+          // ALWAYS inject count: modal selection first, then chat text ("count: 5",
+          // "5 leads"), else AI-extracted count, else default 20.
+          let finalCount = parseInt(selectedLeadCount, 10)
+          if (!finalCount) {
+            const countMatch = content.match(/count:\s*(\d+)/i) || content.match(/(\d+)\s+leads?\b/i)
+            if (countMatch) finalCount = parseInt(countMatch[1], 10)
           }
+          if (!finalCount) {
+            const aiCount = parseInt(String(contextData.count ?? ""), 10)
+            if (aiCount) finalCount = aiCount
+          }
+          contextData.count = finalCount || 20
           if (selectedLocations.length > 0) {
             contextData.locations = selectedLocations.join(",")
           }

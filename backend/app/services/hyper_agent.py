@@ -18,7 +18,7 @@ import asyncio
 from datetime import datetime, timezone
 from typing import Optional
 
-import httpx
+
 from openai import OpenAI
 
 from app.config import get_settings
@@ -512,29 +512,6 @@ class HyperAgentService:
         self.openai = OpenAI(api_key=settings.openai_api_key)
         self.db = get_supabase_admin()
 
-    def _get_harvest_key(self) -> str:
-        """Get a working HarvestAPI key from the key rotation pool."""
-        settings = get_settings()
-
-        # Try the primary key first
-        primary_key = settings.apify_api_key
-        if primary_key:
-            try:
-                httpx.get(
-                    f"https://api.apify.com/v2/acts/{HARVEST_POST_SEARCH_ACTOR}",
-                    params={"token": primary_key},
-                    timeout=10,
-                )
-                return primary_key
-            except Exception:
-                pass
-
-        # Fallback to key rotation
-        keys = _ordered_keys()
-        if keys:
-            return keys[0]
-        raise ApifyError("No Apify keys available")
-
     def chat(self, message: str, history: list[dict], user_id: str, lead_types: list[str] | None = None) -> dict:
         """Process a chat message and return AI response.
 
@@ -779,9 +756,9 @@ If a field is not mentioned, use null.""",
         queries = self._build_queries(niche, roles, location, lead_types)
         logger.info(f"[HyperAgent] Queries: {queries}")
 
-        key = self._get_harvest_key()
-        # For small counts, get way more raw items to compensate for heavy filtering
-        max_posts = max(count * 4, 40) if count <= 10 else count * 3
+        # For small counts, get more raw items to compensate for heavy filtering,
+        # but never over-fetch: fetching 4x for 5 leads wastes credits.
+        max_posts = min(max(count * 4, 20), 60)
 
         payload = {
             "searchQueries": queries[:10],
@@ -796,7 +773,7 @@ If a field is not mentioned, use null.""",
             "postNestedComments": False,
         }
 
-        items = _run_with_key(HARVEST_POST_SEARCH_ACTOR, key, payload)
+        items = _run_sync_actor(HARVEST_POST_SEARCH_ACTOR, payload)
         logger.info(f"[HyperAgent] HarvestAPI returned {len(items)} items")
         return items
 
@@ -1146,7 +1123,7 @@ If a field is not mentioned, use null.""",
 
         # If the user requested a specific location, keep only location-matching
         # leads first; relax to any allowed-country leads only if we fall short.
-        requested_count = context.get("count", 20)
+        requested_count = int(context.get("count") or 20)
         if req_country_codes or req_city:
             loc_matched = [q for q in qualified if q.get("location_match")]
             if len(loc_matched) >= requested_count:

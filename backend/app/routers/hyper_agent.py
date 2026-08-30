@@ -81,7 +81,18 @@ def run_hyper_agent_job(search_id: str, user_id: str, context: dict) -> None:
         # Qualify with AI
         _mark("scraping", "Analyzing and scoring leads with AI")
         qualified = service.qualify_leads(raw_items, context)
-        logger.info(f"[HyperAgent] Qualified {len(qualified)} leads")
+
+        # STRICT count cap: never save more than the user asked for.
+        # qualify_leads already caps, but this guards against any drift
+        # (e.g. context count string/None) so Apify/OpenAI credits are
+        # never wasted on over-delivery.
+        try:
+            requested = int(context.get("count") or 20)
+        except (TypeError, ValueError):
+            requested = 20
+        requested = min(max(requested, 1), 50)
+        qualified = qualified[:requested]
+        logger.info(f"[HyperAgent] Qualified {len(qualified)} leads (requested {requested})")
 
         # Save to database
         saved = service.save_leads(qualified, user_id, search_id)

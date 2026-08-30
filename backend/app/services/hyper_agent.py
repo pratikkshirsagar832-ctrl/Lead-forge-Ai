@@ -776,6 +776,17 @@ If a field is not mentioned, use null.""",
 
         items = _run_sync_actor(HARVEST_POST_SEARCH_ACTOR, payload)
         logger.info(f"[HyperAgent] HarvestAPI returned {len(items)} items")
+        if not items:
+            # Zero results — retry ONCE with a much simpler query set. The
+            # built-in phrases can be too specific for niche services, and a
+            # plain niche query usually still surfaces relevant posts.
+            logger.warning(f"[HyperAgent] 0 items with {len(queries[:10])} phrases — retrying with simple niche queries")
+            simple = [q.strip() for q in _normalize_terms(niche) if q.strip()][:3]
+            if not simple:
+                simple = [niche or "marketing"]
+            payload["searchQueries"] = simple
+            items = _run_sync_actor(HARVEST_POST_SEARCH_ACTOR, payload)
+            logger.info(f"[HyperAgent] Simple-query retry returned {len(items)} items")
         return items
 
     def _build_queries(self, niche: str, roles: str, location: str, lead_types: list[str] | None = None) -> list[str]:
@@ -1009,6 +1020,69 @@ If a field is not mentioned, use null.""",
                     "comments": engagement.get("comments", 0),
                 },
             })
+
+        if not authors:
+            # Country gate dropped EVERYONE (e.g. all posts lacked a usable
+            # location or came from blocked markets). Never return 0 — rerun
+            # extraction without the country gate so the fill logic below can
+            # still deliver the requested count. Quality is still protected by
+            # AI scoring + seller gate + relevance gates.
+            logger.warning(f"[HyperAgent] Country gate dropped all {len(items)} items — rerunning without country gate")
+            for item in items:
+                author = item.get("author") or item.get("profile") or {}
+                if not isinstance(author, dict):
+                    author = {}
+                name = author.get("name") or author.get("fullName") or ""
+                author_url = (author.get("url") or author.get("linkedinUrl") or "").strip()
+                if not name or not author_url:
+                    continue
+                clean_url = author_url.split("?")[0].rstrip("/").lower()
+                if clean_url in seen:
+                    continue
+                seen.add(clean_url)
+                post_content = item.get("content") or item.get("text") or item.get("postContent") or ""
+                if len(post_content) < 20:
+                    continue
+                engagement = item.get("engagement") or {}
+                if not isinstance(engagement, dict):
+                    engagement = {}
+                country_code = ""
+                loc = author.get("location") or {}
+                if isinstance(loc, dict):
+                    country_code = (loc.get("countryCode") or "").strip().upper()
+                company = ""
+                positions = author.get("currentPosition") or []
+                if isinstance(positions, list):
+                    for pos in positions:
+                        if not isinstance(pos, dict):
+                            continue
+                        company = pos.get("companyName") or pos.get("name") or (pos.get("company") or {}).get("name")
+                        if company:
+                            company = str(company)[:100]
+                            break
+                elif isinstance(positions, dict):
+                    company = positions.get("companyName") or positions.get("name") or ""
+                headline = author.get("info") or author.get("headline") or author.get("title") or ""
+                if not company and " at " in headline:
+                    company = headline.split(" at ", 1)[1].split("|")[0].strip()[:100]
+                author_location = self._extract_location(author)
+                loc_match = _location_matches(author_location, country_code, req_country_codes, req_city) if (req_country_codes or req_city) else True
+                authors.append({
+                    "name": name,
+                    "headline": headline,
+                    "company": company,
+                    "location": author_location,
+                    "country_code": country_code,
+                    "location_match": loc_match,
+                    "linkedin_url": author_url,
+                    "post_url": _extract_post_url(item),
+                    "profile_picture_url": self._extract_avatar(author),
+                    "post_content": post_content[:200],
+                    "engagement": {
+                        "likes": engagement.get("likes", 0),
+                        "comments": engagement.get("comments", 0),
+                    },
+                })
 
         # Relevance gate: posts SHOULD mention the service/niche keyword, but
         # never hard-drop everything — if too few posts match, keep the rest

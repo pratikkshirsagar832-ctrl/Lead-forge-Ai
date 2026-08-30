@@ -75,7 +75,7 @@ def run_hyper_agent_job(search_id: str, user_id: str, context: dict) -> None:
         logger.info(f"[HyperAgent] Scraped {len(raw_items)} raw items")
 
         if not raw_items:
-            _mark("failed", "No results found on LinkedIn for this search")
+            _mark("failed", "No results found on LinkedIn for this search. Try a broader service description or different region.")
             return
 
         # Qualify with AI
@@ -92,7 +92,12 @@ def run_hyper_agent_job(search_id: str, user_id: str, context: dict) -> None:
             requested = 20
         requested = min(max(requested, 1), 50)
         qualified = qualified[:requested]
-        logger.info(f"[HyperAgent] Qualified {len(qualified)} leads (requested {requested})")
+        logger.info(f"[HyperAgent] Qualified {len(qualified)} leads (requested {requested}, raw {len(raw_items)})")
+
+        # Diagnostics: if qualification produced nothing, log WHY so the
+        # failure is debuggable from logs (items vs AI-rejected vs gate).
+        if not qualified and raw_items:
+            logger.error(f"[HyperAgent] 0 qualified from {len(raw_items)} raw items — check AI qualification + gates")
 
         # Save to database
         saved = service.save_leads(qualified, user_id, search_id)

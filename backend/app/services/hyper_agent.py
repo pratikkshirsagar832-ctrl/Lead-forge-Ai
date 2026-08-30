@@ -265,7 +265,12 @@ What kind of leads are you looking for?
 
 **Step 2 — Ask Q2: Services Provided**
 After the user answers Q1, ask:
-What services do you provide? (comma-separated, e.g. website banner design, social media post design, email newsletter design)
+What services do you provide?
+
+Start your message with the exact line:
+SERVICES_QUESTION
+
+Then ask the user to pick their services from the list.
 
 **Step 3 — Ask Q3: Buyer Location**
 After the user answers Q2, ask:
@@ -567,6 +572,38 @@ class HyperAgentService:
                         {"id": "hiring", "label": "Hiring posts (Full-time/contractor/Part-time/Freelancers)", "description": "Companies hiring freelancers/contractors"},
                         {"id": "freelancer", "label": "People or Companies Looking for Freelancers", "description": "\"Need a freelancer for X\""},
                         {"id": "agency", "label": "People or Companies Looking for Agencies", "description": "\"Looking for an X agency\", \"recommend a good agency\""},
+                    ],
+                    "context": self._extract_context(history + [{"role": "user", "content": message}]),
+                },
+            }
+
+        # If the AI is asking the services question, return a special action
+        # so the frontend can render service checkboxes.
+        if "SERVICES_QUESTION" in (ai_message or ""):
+            clean = (ai_message or "").replace("SERVICES_QUESTION", "").strip()
+            return {
+                "response": clean,
+                "action": "services",
+                "data": {
+                    "options": [
+                        {"id": "web_development", "label": "Web Development", "description": "Websites, web apps, landing pages, e-commerce"},
+                        {"id": "app_development", "label": "App Development", "description": "Mobile apps, iOS, Android, cross-platform"},
+                        {"id": "ui_ux_design", "label": "UI/UX Design", "description": "User interface, user experience, wireframes, prototypes"},
+                        {"id": "graphic_design", "label": "Graphic Design", "description": "Logos, branding, visual assets, illustrations"},
+                        {"id": "video_editing", "label": "Video Editing", "description": "Video production, motion graphics, animations"},
+                        {"id": "content_writing", "label": "Content Writing", "description": "Copywriting, blog posts, articles, technical writing"},
+                        {"id": "seo", "label": "SEO", "description": "Search engine optimization, keyword research, audits"},
+                        {"id": "social_media_marketing", "label": "Social Media Marketing", "description": "Social media management, content calendar, engagement"},
+                        {"id": "ppc_paid_ads", "label": "PPC / Paid Ads", "description": "Google Ads, Facebook Ads, LinkedIn Ads, PPC management"},
+                        {"id": "email_marketing", "label": "Email Marketing", "description": "Newsletters, drip campaigns, automation, list building"},
+                        {"id": "content_marketing", "label": "Content Marketing", "description": "Content strategy, lead magnets, gated content"},
+                        {"id": "branding", "label": "Branding", "description": "Brand identity, positioning, style guides"},
+                        {"id": "ai_automation", "label": "AI / Automation", "description": "Chatbots, workflows, AI integration, data pipelines"},
+                        {"id": "data_analytics", "label": "Data & Analytics", "description": "Dashboards, reporting, BI, data visualization"},
+                        {"id": "devops_cloud", "label": "DevOps & Cloud", "description": "AWS, Azure, CI/CD, infrastructure, deployment"},
+                        {"id": "cybersecurity", "label": "Cybersecurity", "description": "Security audits, penetration testing, compliance"},
+                        {"id": "consulting", "label": "Consulting", "description": "Strategy, digital transformation, business advisory"},
+                        {"id": "other", "label": "Other (type your services)", "description": "Custom service not listed above"},
                     ],
                     "context": self._extract_context(history + [{"role": "user", "content": message}]),
                 },

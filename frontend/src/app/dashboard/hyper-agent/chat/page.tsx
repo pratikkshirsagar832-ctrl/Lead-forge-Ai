@@ -65,6 +65,9 @@ I'll understand your needs, confirm the details, then scrape LinkedIn and qualif
   const [searchId, setSearchId] = useState<string | null>(null)
   const [leadTypePrompt, setLeadTypePrompt] = useState<any>(null)
   const [selectedLeadTypes, setSelectedLeadTypes] = useState<string[]>([])
+  const [servicesPrompt, setServicesPrompt] = useState<any>(null)
+  const [selectedServices, setSelectedServices] = useState<string[]>([])
+  const [customService, setCustomService] = useState("")
   const [locationPrompt, setLocationPrompt] = useState<any>(null)
   const [selectedLocations, setSelectedLocations] = useState<string[]>([])
   const [leadCountPrompt, setLeadCountPrompt] = useState<any>(null)
@@ -196,6 +199,15 @@ I'll understand your needs, confirm the details, then scrape LinkedIn and qualif
         setLeadTypePrompt(data.data || { options: [] })
         setPendingContext(data.data?.context || null)
         setSelectedLeadTypes([])
+        return
+      }
+
+      // Services question → show checkbox modal
+      if (data.action === "services") {
+        setServicesPrompt(data.data || { options: [] })
+        setPendingContext(data.data?.context || null)
+        setSelectedServices([])
+        setCustomService("")
         return
       }
 
@@ -648,6 +660,98 @@ Here are your top leads (scored 0-100):`,
                   sendMessage(`I want: ${labels} (lead_types: ${selectedLeadTypes.join(",")})`)
                 }}
                 className="flex-1 py-2.5 rounded-xl text-sm font-bold text-white bg-violet hover:bg-violet/80 transition-colors"
+              >
+                Confirm & Continue
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Services Checkbox Modal */}
+      {servicesPrompt && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+          <div className="absolute inset-0 bg-navy/70 backdrop-blur-sm" onClick={() => setServicesPrompt(null)} />
+          <div className="relative w-full max-w-lg bg-ocean border border-amber/30 rounded-2xl p-6 shadow-2xl animate-in fade-in zoom-in-95 duration-200">
+            <h3 className="text-lg font-bold text-offwhite mb-1">🛠️ What services do you provide?</h3>
+            <p className="text-xs text-ice/60 mb-4">Type ANY service — we find leads for every niche. Pick from quick options below or type your own.</p>
+
+            {/* Custom input — always visible at top */}
+            <div className="mb-4">
+              <label className="block text-xs font-semibold text-amber/70 mb-1.5">Your services</label>
+              <input
+                type="text"
+                value={customService}
+                onChange={(e) => setCustomService(e.target.value)}
+                placeholder="e.g. 3D animation, podcast editing, VR development, anything..."
+                className="w-full px-3 py-2.5 rounded-lg bg-navy/60 border border-amber/40 text-offwhite text-sm placeholder-steel/40 focus:outline-none focus:border-amber/60"
+              />
+              <p className="text-[10px] text-ice/40 mt-1">Comma-separated for multiple services. Type anything — not limited to the list below.</p>
+            </div>
+
+            {/* Quick-select chips */}
+            <div className="mb-5">
+              <p className="text-[11px] text-ice/50 mb-2 font-medium">Quick select (adds to your list above):</p>
+              <div className="flex flex-wrap gap-1.5">
+                {(servicesPrompt.options || []).filter((o: any) => o.id !== "other").map((opt: any) => {
+                  const active = selectedServices.includes(opt.id)
+                  return (
+                    <button
+                      key={opt.id}
+                      onClick={() => {
+                        setSelectedServices((prev) =>
+                          active ? prev.filter((x) => x !== opt.id) : [...prev, opt.id]
+                        )
+                        // Auto-append label to custom input
+                        if (!active) {
+                          setCustomService((prev) => {
+                            const existing = prev.trim()
+                            if (!existing) return opt.label
+                            const parts = existing.split(",").map((s: string) => s.trim()).filter(Boolean)
+                            if (parts.some((p: string) => p.toLowerCase() === opt.label.toLowerCase())) return prev
+                            return existing + ", " + opt.label
+                          })
+                        } else {
+                          // Remove label from custom input
+                          setCustomService((prev) => {
+                            const parts = prev.split(",").map((s: string) => s.trim()).filter(Boolean)
+                            return parts
+                              .filter((p: string) => p.toLowerCase() !== opt.label.toLowerCase())
+                              .join(", ")
+                          })
+                        }
+                      }}
+                      className={`px-2.5 py-1 rounded-lg text-[11px] font-medium border transition-all ${
+                        active
+                          ? "border-amber/60 bg-amber/15 text-amber"
+                          : "border-steel/20 bg-navy/40 text-ice/60 hover:border-steel/40 hover:text-ice/80"
+                      }`}
+                    >
+                      {opt.label}
+                    </button>
+                  )
+                })}
+              </div>
+            </div>
+
+            <div className="flex gap-2">
+              <button
+                onClick={() => setServicesPrompt(null)}
+                className="flex-1 py-2.5 rounded-xl text-sm font-medium text-ice/60 hover:text-offwhite border border-steel/20 hover:bg-steel/10 transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => {
+                  const serviceText = customService.trim()
+                  if (!serviceText) {
+                    setServicesPrompt(null)
+                    return
+                  }
+                  setServicesPrompt(null)
+                  sendMessage(`I provide: ${serviceText} (services: ${serviceText})`)
+                }}
+                className="flex-1 py-2.5 rounded-xl text-sm font-bold text-white bg-amber hover:bg-amber/80 transition-colors"
               >
                 Confirm & Continue
               </button>

@@ -952,7 +952,7 @@ async def run_linkedin_pipeline(
         while len(all_leads) < max_results and pass_no < MAX_PASSES:
             pass_no += 1
             remaining = max_results - len(all_leads)
-            fetch_target = min(max(remaining * 12, 200), 500)
+            fetch_target = min(max(remaining * 6, 60), 150)
             logger.info(f"[LinkedInPipeline:{search_id}] Pass {pass_no}/{MAX_PASSES} — firing {len(final_phrases)} queries in parallel across keys (fetch {fetch_target})")
 
             await _update_search(supabase, search_id, {
@@ -1077,7 +1077,7 @@ async def run_linkedin_pipeline(
                             query=job_query,
                             location="United States",
                             time_range="7d",
-                            max_jobs=min(max_results * 2, 40),
+                            max_jobs=min(max_results, 20),
                         ),
                         timeout=60,
                     )
@@ -1887,17 +1887,19 @@ async def run_linkedin_pipeline_fast(
         pool = list(build_boolean_query(query))
         for variant in range(2, 9):
             pool.extend(build_boolean_query_variant(query, variant))
-        n_lanes = max_results
+        # CREDIT BUDGET: max 3 lanes (was one lane per requested lead — 20+
+        # lanes × up to 600 records each burned credits on every search).
+        # Total raw budget ≈ max_results × 4 (capped at 120) across waves.
+        n_lanes = min(max_results, 3)
         lanes_check, _ = split_lane_phrases(pool, n_lanes)
         n_lanes = max(1, len(lanes_check))
-        # Aim to over-deliver (~2x): enough posts per lane for the triage+score
-        # pipeline to clear the request even on strict niches.
-        fetch_per_lane = max(12, min(25, -(-max_results * 12 // n_lanes)))
+        raw_budget = min(max_results * 4, 120)
+        fetch_per_lane = max(8, min(15, -(-raw_budget // n_lanes)))
 
         logger.info(
             f"[LinkedInPipeline:{search_id}] FAST start: {n_lanes} parallel lanes "
-            f"(~{fetch_per_lane} posts each), {len(pool)}-phrase pool, "
-            f"up to {MAX_WAVES} waves / {WAVE_DEADLINE_SECONDS}s"
+            f"(~{fetch_per_lane} posts each, raw budget {n_lanes * fetch_per_lane}), "
+            f"{len(pool)}-phrase pool, up to {MAX_WAVES} waves / {WAVE_DEADLINE_SECONDS}s"
         )
         await _update_search(supabase, search_id, {
             "progress_percent": 8,
@@ -2004,7 +2006,7 @@ async def run_linkedin_pipeline_fast(
                                 query=q,
                                 location=location,
                                 time_range="7d",
-                                max_jobs=min(need * 3, 40),
+                                max_jobs=min(need * 2, 20),
                             ),
                             timeout=60,
                         )
@@ -2114,6 +2116,12 @@ async def run_linkedin_pipeline_fast(
         while len(final_leads) < max_results and wave_no < MAX_WAVES:
             if asyncio.get_event_loop().time() > deadline:
                 logger.warning(f"[LinkedInPipeline:{search_id}] Wave deadline reached after {wave_no} waves")
+                break
+            if raw_count_total >= raw_budget:
+                logger.info(
+                    f"[LinkedInPipeline:{search_id}] Apify raw budget reached "
+                    f"({raw_count_total}/{raw_budget}) — stopping waves"
+                )
                 break
             wave_no += 1
             await _hunt_wave(wave_no, _next_wave_lanes(n_lanes, fetch_per_lane))

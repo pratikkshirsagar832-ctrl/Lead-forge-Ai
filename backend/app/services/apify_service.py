@@ -320,15 +320,17 @@ def run_lane_search(
 
     Each call grabs its own key from the rotating cursor (healthy keys
     first, cooldown keys last resort) with full failover to other keys.
-    Callers (fast pipeline) launch one lane per requested lead, so N
-    selected leads → N concurrent actor runs on N different keys.
+
+    CREDIT BUDGET: harvestapi's maxPosts is PER QUERY, so a lane's raw
+    total = len(queries) × maxPosts. Lanes are capped at 4 queries and
+    15 posts each → ≤60 raw records per lane (was 12 queries × 50 = 600).
     """
-    queries = [q.strip() for q in search_queries if q and q.strip()][:12]
+    queries = [q.strip() for q in search_queries if q and q.strip()][:4]
     if not queries:
         queries = ["marketing"]
     payload = {
         "searchQueries": queries,
-        "maxPosts": max(10, min(max_posts, 50)),
+        "maxPosts": max(10, min(max_posts, 15)),
         "postedLimit": posted_limit if posted_limit in ("1h", "24h", "week", "month") else "month",
         "sortBy": "date",
         "profileScraperMode": "main",

@@ -30,6 +30,7 @@ export function FiltersBar() {
             <select
               value={filters.category}
               onChange={(e) => setFilters({ category: e.target.value })}
+              aria-label="Filter by category"
               className="bg-transparent border-0 text-xs font-semibold text-offwhite focus:ring-0 py-1 pl-1 pr-5 cursor-pointer outline-none appearance-none"
             >
               <option value="" style={{ color: '#cbd5e1', background: '#1e293b' }}>All Categories</option>
@@ -44,6 +45,7 @@ export function FiltersBar() {
             <select
               value={filters.source}
               onChange={(e) => setFilters({ source: e.target.value })}
+              aria-label="Filter by source"
               className="bg-transparent border-0 text-xs font-semibold text-offwhite focus:ring-0 py-1 pl-1 pr-5 cursor-pointer outline-none appearance-none"
             >
               <option value="" style={{ color: '#cbd5e1', background: '#1e293b' }}>All Sources</option>
@@ -58,6 +60,7 @@ export function FiltersBar() {
             <select
               value={filters.postType}
               onChange={(e) => setFilters({ postType: e.target.value })}
+              aria-label="Filter by lead type"
               className="bg-transparent border-0 text-xs font-semibold text-offwhite focus:ring-0 py-1 pl-1 pr-5 cursor-pointer outline-none appearance-none"
             >
               <option value="" style={{ color: '#cbd5e1', background: '#1e293b' }}>All Types</option>
@@ -72,6 +75,7 @@ export function FiltersBar() {
             <select
               value={filters.status}
               onChange={(e) => setFilters({ status: e.target.value })}
+              aria-label="Filter by status"
               className="bg-transparent border-0 text-xs font-semibold text-offwhite focus:ring-0 py-1 pl-1 pr-5 cursor-pointer outline-none appearance-none"
             >
               <option value="" style={{ color: '#cbd5e1', background: '#1e293b' }}>All Statuses</option>
@@ -85,6 +89,7 @@ export function FiltersBar() {
             <select
               value={filters.isFavorite === null ? '' : String(filters.isFavorite)}
               onChange={(e) => setFilters({ isFavorite: e.target.value === '' ? null : e.target.value === 'true' })}
+              aria-label="Filter by favorites"
               className="bg-transparent border-0 text-xs font-semibold text-offwhite focus:ring-0 py-1 cursor-pointer outline-none appearance-none"
             >
               <option value="" style={{ color: '#cbd5e1', background: '#1e293b' }}>All Leads</option>

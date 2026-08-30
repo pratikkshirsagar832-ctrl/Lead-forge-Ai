@@ -54,14 +54,18 @@ async def get_current_user(
             if not sub_exists.data or len(sub_exists.data) == 0:
                 from datetime import datetime, timedelta, timezone
                 now = datetime.now(timezone.utc)
-                supabase.table("user_subscriptions").insert({
-                    "user_id": user.id,
-                    "plan_id": "free",
-                    "status": "trial",
-                    "trial_end": (now + timedelta(days=3)).isoformat(),
-                    "current_period_end": (now + timedelta(days=3)).isoformat(),
-                }).execute()
-                logger.info(f"Created free trial subscription for user {user.id}")
+                try:
+                    supabase.table("user_subscriptions").insert({
+                        "user_id": user.id,
+                        "plan_id": "free",
+                        "status": "trial",
+                        "trial_end": (now + timedelta(days=3)).isoformat(),
+                        "current_period_end": (now + timedelta(days=3)).isoformat(),
+                    }).execute()
+                    logger.info(f"Created free trial subscription for user {user.id}")
+                except Exception:
+                    # Race condition: another request already created the row
+                    pass
         except Exception as sub_err:
             logger.warning(f"Subscription auto-creation failed (non-critical): {sub_err}")
 

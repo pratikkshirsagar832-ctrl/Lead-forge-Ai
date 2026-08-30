@@ -327,7 +327,7 @@ async def razorpay_webhook(request: Request):
         raise
     except Exception as e:
         logger.error(f"Webhook error: {e}", exc_info=True)
-        return {"status": "error", "detail": str(e)}
+        return {"status": "ok"}
 
 
 @router.post("/cancel")

@@ -175,7 +175,7 @@ export default function TeamPage() {
             <div>
               <label className="block text-xs font-semibold text-ice/60 mb-1.5">Password</label>
               <input
-                type="text"
+                type="password"
                 value={form.password}
                 onChange={(e) => setForm(f => ({ ...f, password: e.target.value }))}
                 placeholder="min 6 characters"

@@ -13,9 +13,14 @@ export default function SettingsPage() {
 
   useEffect(() => {
     const fetchUser = async () => {
-      const { data: { user: u } } = await supabase.auth.getUser();
-      setUser(u);
-      setIsLoading(false);
+      try {
+        const { data: { user: u } } = await supabase.auth.getUser();
+        setUser(u);
+      } catch (err) {
+        console.error('Failed to fetch user:', err);
+      } finally {
+        setIsLoading(false);
+      }
     };
     fetchUser();
   }, []);

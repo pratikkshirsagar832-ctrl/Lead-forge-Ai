@@ -1504,7 +1504,7 @@ def _type_ok(lead: dict, allowed_types: set[str] | None) -> bool:
     return lead.get("lead_type") in allowed_types
 
 
-def tier_filter(scored: list[dict], lead_types: list[str], tier: dict) -> tuple[list[dict], set[str]]:
+def tier_filter(scored: list[dict], lead_types: list[str], tier: dict) -> list[dict]:
     """Filter scored leads by a relaxation tier.
 
     Returns (accepted_leads, rejected_author_urls). Rejected URLs are

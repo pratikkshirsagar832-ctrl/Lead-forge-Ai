@@ -83,16 +83,18 @@ export default function LeadDetailPage() {
     try {
       setIsAnalyzingWebsite(true);
       const { data } = await api.post(API_ROUTES.leads.analyzeWebsite(id as string));
-      setLead((prev: any) => prev ? ({
-        ...prev,
-        website_analyses: [{
-          overall_score: data.data.overall_score,
-          issues: data.data.issues,
-          raw_analysis: data.data.raw_analysis,
-        }],
-        website_health_score: data.data.overall_score,
-        lead_category: data.data.category,
-      }) : prev);
+      if (data?.data) {
+        setLead((prev: any) => prev ? ({
+          ...prev,
+          website_analyses: [{
+            overall_score: data.data.overall_score,
+            issues: data.data.issues,
+            raw_analysis: data.data.raw_analysis,
+          }],
+          website_health_score: data.data.overall_score,
+          lead_category: data.data.category,
+        }) : prev);
+      }
       showToast('Website analysis complete!', 'success');
       handleGenerateWebsiteMessage();
     } catch (error: any) {

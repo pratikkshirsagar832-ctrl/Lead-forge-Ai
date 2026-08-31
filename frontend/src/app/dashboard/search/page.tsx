@@ -195,7 +195,7 @@ export default function SearchPage() {
   const [source, setSource] = useState<'google_maps' | 'linkedin'>('google_maps');
   const sourceRef = useRef<'google_maps' | 'linkedin'>('google_maps');
   const [maxResults, setMaxResults] = useState(10);
-  const [leadTypes, setLeadTypes] = useState<string[]>(['hiring', 'buyer', 'agency']);
+  const [leadTypes, setLeadTypes] = useState<('buyer' | 'agency' | 'hiring')[]>(['hiring', 'buyer', 'agency']);
   const requestedCount = useSearchStore((s) => s.requestedCount);
   const isUnlocked = useSearchStore((s) => s.unlocked);
   const unlockResults = useSearchStore((s) => s.unlockResults);
@@ -429,11 +429,11 @@ export default function SearchPage() {
                       Lead Type (select any)
                     </label>
                     <div className="grid grid-cols-3 gap-3">
-                      {[
+                      {([
                         { id: 'hiring', label: 'Hiring Posts', desc: 'Companies hiring freelancers/contractors' },
                         { id: 'buyer', label: 'Freelancers Needed', desc: 'People/companies looking for freelancers' },
                         { id: 'agency', label: 'Agencies Wanted', desc: 'People looking for an agency' },
-                      ].map(opt => {
+                      ] as { id: 'buyer' | 'agency' | 'hiring'; label: string; desc: string }[]).map(opt => {
                         const checked = leadTypes.includes(opt.id);
                         return (
                           <button

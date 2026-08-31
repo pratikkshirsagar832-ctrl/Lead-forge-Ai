@@ -416,6 +416,7 @@ HARD RULES (never violate):
 - R5: Job seekers looking for a role for themselves = NOT a lead.
 - R6: Pure content/thought-leadership ("5 tips", "why you need", "trends", "case study", "opinion") = NOT a lead even if it scores high on service_match.
 - R7: NON-ENGLISH posts (Spanish, German, French, Hindi, Arabic, etc.) = NOT a lead (is_lead=false). We only serve English-speaking markets. If the post is mostly in another language, reject it even if it describes hiring.
+- R8: CAREER/LIFE-UPDATE ANNOUNCEMENTS ("I joined X", "appointed as", "new role", "completed my internship", "milestones worth celebrating", "proud to share", "new beginnings") = NOT a lead, even if they mention the service keyword. These are personal updates, not buying signals.
 
 WHO IS THE SUBJECT? (the single most important question)
 🚫 SELLING (reject): "I'm available for X", "I'm open to remote work", "I'm seeking projects", "Looking to collaborate", "I offer X", "DM me/us for X", "I provide X", "My services include", "We specialize in", "white-label", "outsourcing partner", "extended development partner", "link in bio", "We're looking for agency partners/referrals", "We help businesses with X", "book a call with us". Headline reads "Freelance X", "X Developer/Designer", "X Studio", "X Agency" and the post promotes their availability, portfolio, or services.
@@ -729,6 +730,15 @@ If a field is not mentioned, use null.""",
                 if m2:
                     ctx["count"] = int(m2.group(1))
                     break
+            # Last resort: a bare small number in the most recent user
+            # message ("3", "bhai 3 karo") — in this lead-gen flow it is
+            # almost always the requested lead count.
+            if not ctx.get("count"):
+                for last_user in user_msgs:
+                    m3 = _re.search(r"(?<!\d)(\d{1,2})(?!\d)", last_user)
+                    if m3 and 1 <= int(m3.group(1)) <= 50:
+                        ctx["count"] = int(m3.group(1))
+                        break
         except Exception:
             pass
 
@@ -1098,11 +1108,17 @@ If a field is not mentioned, use null.""",
                     },
                 })
 
-        # Relevance gate: posts SHOULD mention the service/niche keyword, but
-        # never hard-drop everything — if too few posts match, keep the rest
-        # and let the AI judge with service_match instead (avoids 0 results).
+        # Relevance gate: posts SHOULD mention the service/niche keyword.
+        # Only relevant posts may proceed — junk (no service mention) is
+        # never triaged, filled, or saved. Zero matches → last resort:
+        # top-engagement authors so a weird niche still gets a chance.
         niche = context.get("niche", "")
         roles = context.get("roles", "")
+        requested_count_hint = 20
+        try:
+            requested_count_hint = int(context.get("count") or 20)
+        except (TypeError, ValueError):
+            pass
         relevance_kws: set[str] = set()
         for kw in _normalize_terms(niche) + _normalize_terms(roles):
             kw = kw.lower()
@@ -1131,21 +1147,19 @@ If a field is not mentioned, use null.""",
                 if any(kw in text for kw in relevance_kws):
                     authors_filtered.append(a)
             logger.info(f"[HyperAgent] Relevance gate: {len(authors_filtered)}/{len(authors)} matched keywords")
-            # Only hard-filter when we still have at least 2x requested count;
-            # otherwise keep everyone and rely on AI service_match scoring.
-            requested_count_hint = 20
-            try:
-                requested_count_hint = int(context.get("count") or 20)
-            except (TypeError, ValueError):
-                pass
-            # When lead_types are used, be MORE lenient — queries already target
-            # specific buyer-intent phrases, so keep more candidates.
-            lead_types = context.get("lead_types") or []
-            min_keep = max(requested_count_hint * 2, 10) if not lead_types else max(requested_count_hint, 5)
-            if len(authors_filtered) >= min_keep:
+            if authors_filtered:
+                # STRICT: only relevant posts proceed. Junk posts (which never
+                # mention the service) must NOT be triaged, filled, or saved —
+                # they are what made results 'kharab'. If we have fewer than
+                # requested, we return fewer rather than pollute.
                 authors = authors_filtered
             else:
-                logger.info(f"[HyperAgent] Relevance gate: only {len(authors_filtered)} matched, keeping all {len(authors)} to avoid 0 results")
+                # Zero keyword matches — last resort: keep top-engagement
+                # authors so a weird niche still has a chance (AI judges).
+                top = sorted(authors, key=lambda a: a.get("engagement", {}).get("likes", 0), reverse=True)
+                keep_n = max(5, requested_count_hint * 2)
+                authors = top[:keep_n]
+                logger.info(f"[HyperAgent] Relevance gate: 0 matched, keeping top {len(authors)} by engagement (last resort)")
 
         if not authors:
             return []
@@ -1186,6 +1200,15 @@ If a field is not mentioned, use null.""",
             "agency partnerships", "long-term partnership",
             "we help businesses with", "we help brands",
             "get in touch with us", "reach out to us", "partner with us",
+            "we help growing businesses", "what we do",
+            # Career / life-update announcements (NOT buying signals)
+            "i've joined", "ive joined", "i have joined", "joined accenture",
+            "new role", "appointed as", "new leadership journey",
+            "completed my", "virtual internship", "internship completion",
+            "grateful for the journey", "grateful to", "milestones worth celebrating",
+            "proud and excited to share", "exciting to share",
+            "career journey", "new chapter", "new beginnings",
+            "looking forward to learning, growing",
         )
 
         def _is_seller(q: dict) -> bool:

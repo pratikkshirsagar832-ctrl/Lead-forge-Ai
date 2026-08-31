@@ -1521,18 +1521,22 @@ Return ONLY a JSON array of indices of KEEP posts, e.g. [0, 3, 5]. If none, retu
         if context:
             niche = ", ".join(_normalize_terms(context.get("niche", "")))
 
-        verify_prompt = f"""You are a ruthless lead-auditor. The user's SERVICE: {niche or 'unknown'}. For EACH post below, decide: is the author a genuine BUYER of THAT service — or something else?
+        verify_prompt = f"""You are a lead-quality auditor. The user's SERVICE: {niche or 'unknown'}. Your ONLY job: filter out posts that are DEFINITELY not buyers. Do NOT judge quality or demand perfect buyer language — if a post is not clearly a reject, KEEP it.
 
-REJECT (not a buyer):
-- SELLER = a service provider promoting its OWN services: agencies, studios, consultancies, outsourcing firms, freelancers, software houses, or founders of such firms. Signals: "we help businesses", "our services include", "we specialize in", "we provide", "what we do", service lists (→, •), "let's talk / let's have a conversation", "DM us", "book a call", "reach out to us", website links, "partner with us", "white-label", "outsourcing partner", "we deliver". A post that lists CLIENT pain points then offers its solution is PITCH COPY = SELLER. A provider looking for agency partners/referrals = SELLER.
-- FULL-TIME / ON-SITE job posts = NOT buyers: "full-time", "work from office", "on-site", "in office", "in-person" — these are PAYROLL hires, not service buying.
-- RECRUITERS / STAFFING / JOB BOARDS = NOT buyers: "send resumes", "send your cv", "explore opportunities", "apply here", "we are currently engaging with professionals", "executive network", "multiple openings", "recruitment", "staffing", "job board".
-- OFF-NICHE job posts: hiring for roles UNRELATED to {niche or 'the user\'s service'} (e.g. executives, embedded systems, finance, marketing generalists) = reject.
-- Career/life updates, content, thought leadership, job seekers = reject.
+REJECT ONLY when you see a CLEAR signal:
+- SELLER = a service provider promoting its OWN services: "we help businesses", "our services include", "we specialize in", "we provide", "what we do", service lists (→, •), "let's have a conversation", "DM us", "book a call", "partner with us", "white-label", "outsourcing partner", website links, pitch copy that lists client pains then offers its solution.
+- FULL-TIME / ON-SITE payroll posts: "full-time" + ("work from office" / "on-site" / "in office" / "in-person").
+- RECRUITERS / STAFFING / JOB BOARDS: "send resumes", "send your cv", "explore opportunities", "apply here", "executive network", "multiple openings", "we are currently engaging with professionals", "recruitment", "job board".
+- Off-niche job posts for roles totally unrelated to {niche or 'the service'} (executives, embedded systems, finance, etc.).
+- Career/life updates, thought-leadership content, job seekers.
 
-KEEP only genuine BUYERS: an end client actively sourcing {niche or 'the service'} for its own business — "we're looking for", "I need", "hiring a freelance X", "need a designer", "recommendations for X?", "our traffic dropped / our site is slow", "we fired our agency, looking for a replacement".
+KEEP:
+- Anyone hiring freelancers/contractors/agencies ("hiring a freelance X", "looking for a developer", "we need help with X", "recommendations for X?") even if the wording is casual.
+- Companies describing a problem they need solved ("our site is slow", "traffic dropped", "we're launching and need X").
+- "Hiring X" posts that are remote or contract (NOT full-time office).
+- A company looking for partners/agencies to do its work.
 
-Return ONLY a JSON array of indices of BUYERS, e.g. [0, 2]. Reject everything else. When in doubt, reject."""
+Return ONLY a JSON array of indices of KEEP posts, e.g. [0, 2]. Only exclude the clear rejects above."""
 
         batch_text = "\n\n".join(
             f"[{i}] {b.get('name', '')} | {b.get('headline', '')} | {b.get('post_content', '')[:1000]}"

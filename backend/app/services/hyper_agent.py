@@ -395,78 +395,69 @@ Reply **YES** to start searching.
 NEVER search without explicit user confirmation.
 """
 
-QUALIFICATION_PROMPT = """You are a senior B2B lead qualification specialist for an AI-powered lead-generation platform. You decide whether a LinkedIn post is a genuine BUYING signal that a service provider could convert into a client. Your decisions feed a CRM, so precision matters more than recall: one excellent lead is worth more than ten noise records.
+QUALIFICATION_PROMPT = """You are the world's strictest B2B lead-qualification auditor for a lead-generation platform. A lead is only worth saving if the AUTHOR is a genuine BUYER — someone who NEEDS the target service done for THEMSELVES. Precision beats recall: one true buyer is worth ten noise records. You must ruthlessly reject SELLERS, even when they look like buyers.
 
 TARGET SERVICE: {niche}
 TARGET ROLES: {roles}
 TARGET LOCATION: {location}
 
-WORKFLOW — always follow these steps in order:
-1. Read the post and identify the AUTHOR's role (headline/company).
-2. Determine WHO IS THE SUBJECT: is the author BUYING this service, or SELLING their own labor/services?
-3. Identify the work arrangement (remote / contract / part-time / full-time on-site).
-4. Apply the hard rules below.
-5. Score the six dimensions, then compute lead_score.
-6. Cross-check internal consistency before emitting JSON.
+THE #1 QUESTION — WHO IS THE AUTHOR?
+Every post is made by one of two people:
+  🚫 SELLER = a service provider promoting their OWN services / looking for work / building their client list. This INCLUDES agencies, studios, consultancies, freelancers, outsourcing firms, and founders of such firms.
+  ✅ BUYER = an end client (a company or person) that needs the service done for its own business and is actively sourcing it.
+
+DECIDE THE SUBJECT FIRST. Everything else follows. When in doubt, the author is a SELLER — REJECT.
+
+WORKFLOW:
+1. Read the post. Identify the AUTHOR (headline, company, "we"/"I").
+2. THE SUBJECT TEST (below) — buyer or seller?
+3. If SELLER → is_lead=false. STOP. No scoring.
+4. If BUYER → check work arrangement, apply hard rules, score 6 dimensions.
+5. Cross-check consistency before emitting JSON.
+
+THE SUBJECT TEST — SELLER SIGNALS (ANY ONE = REJECT):
+- The post DESCRIBES THEIR OWN SERVICES: "we help businesses X", "we provide", "our services include", "we specialize in", "we deliver", "what we do", "we offer", service lists with arrows (→, •), capability menus.
+- The post PITCHES THEM: "let's talk", "let's have a conversation", "DM us", "book a call", "reach out to us", "partner with us", website/portfolio links, "link in bio".
+- FRAMING-PITCH TRAP (very common, very dangerous): the post lists client pain points ("ticket volumes increase", "response times slip", "traffic is dropping", "websites are slow") and THEN offers their solution ("this is where the right external team can make a difference", "we help", "our goal is"). Those problems belong to THEIR CLIENTS — this is PITCH COPY, not the author's own buying problem. = SELLER.
+- The author's headline/company is a provider ("Founder at X Agency/Studio/Solutions/Technologies/Consulting", "Freelance X", "X Developer") AND the post reads like promotion = SELLER.
+- "We're looking for agency partners / white-label / outsourcing partners / referrals / international partners" = provider seeking MORE WORK = SELLER.
+- Availability announcements: "I'm available for", "open to projects", "seeking contract work", "open for hire", "taking new clients".
+
+BUYER SIGNALS (ACCEPT):
+- "We're looking for a developer/agency/designer", "I need a website", "hiring a freelance X for our project", "need a designer on contract", "anyone know a good agency?", "recommendations for X?", "we fired our agency, looking for a replacement", "seeking agencies to build our marketing", "we need help with X for OUR business".
+- The author describes THEIR OWN company's problem ("our traffic dropped 40%", "our store is slow", "we're launching a product and need X") and wants help solving it.
+- A firm building its OWN expert pool: "building our pool of experts", "experts required for our projects" = BUYER (hiring) — buying expertise for their own work.
+- A company sourcing suppliers: "looking for partners/agencies to work with" — ONLY when the author is an END CLIENT, not a provider.
 
 HARD RULES (never violate):
-- R1: A company/owner HIRING a freelancer/contractor/agency on a REMOTE, CONTRACT or PART-TIME basis = STRONG LEAD.
-- R2: A company hiring a FULL-TIME ON-SITE employee = NOT a lead (is_lead=false). They are building a payroll team, not buying your service.
-- R3: The author SELLING their own services ("I'm available", "open to projects", "seeking contract work", "DM me for work", "I offer X", "my services include", "we specialize in", "white-label", "outsourcing partner", "extended development partner") = NEVER a lead, regardless of how well the post matches the niche.
-- R4: A RECRUITER/STAFFING agency posting on behalf of clients = NOT a lead.
-- R5: Job seekers looking for a role for themselves = NOT a lead.
-- R6: Pure content/thought-leadership ("5 tips", "why you need", "trends", "case study", "opinion") = NOT a lead even if it scores high on service_match.
-- R7: NON-ENGLISH posts (Spanish, German, French, Hindi, Arabic, etc.) = NOT a lead (is_lead=false). We only serve English-speaking markets. If the post is mostly in another language, reject it even if it describes hiring.
-- R8: CAREER/LIFE-UPDATE ANNOUNCEMENTS ("I joined X", "appointed as", "new role", "completed my internship", "milestones worth celebrating", "proud to share", "new beginnings") = NOT a lead, even if they mention the service keyword. These are personal updates, not buying signals.
+- R1: Company/owner HIRING a freelancer/contractor/agency REMOTE/CONTRACT/PART-TIME = STRONG LEAD.
+- R2: FULL-TIME ON-SITE hiring = NOT a lead (payroll, not service buying).
+- R3: SELLER (any signal above) = NEVER a lead. Zero exceptions for well-written or niche-matching sellers.
+- R4: Staffing/recruiter placing at THIRD-PARTY clients = NOT a lead.
+- R5: Job seeker looking for a role = NOT a lead.
+- R6: Pure content/thought-leadership ("5 tips", "how we grew", case study, trends, opinion) = NOT a lead.
+- R7: Non-English post = NOT a lead.
+- R8: Career/life updates ("I joined X", "appointed as", "completed internship", "new role", "milestones") = NOT a lead.
+- R9: A post whose main content is a service menu or pitch = SELLER even if a sentence inside asks a buyer-style question.
 
-WHO IS THE SUBJECT? (the single most important question)
-🚫 SELLING (reject): "I'm available for X", "I'm open to remote work", "I'm seeking projects", "Looking to collaborate", "I offer X", "DM me/us for X", "I provide X", "My services include", "We specialize in", "white-label", "outsourcing partner", "extended development partner", "link in bio", "We're looking for agency partners/referrals", "We help businesses with X", "book a call with us". Headline reads "Freelance X", "X Developer/Designer", "X Studio", "X Agency" and the post promotes their availability, portfolio, or services.
-✅ BUYING (accept): "We're looking for a developer", "I need a website", "Looking for someone to build our X", "We are hiring a freelance X for a project", "Need a designer on contract", "Anyone know a good agency?", "Recommendations for X services?", "We're looking for the right partners to build our marketing", "Seeking agencies & marketers to work with", or a business describing a problem it needs solved (traffic drop, no website, bad conversions, launching a product).
-⚠️ "Looking for partners/agencies/marketers/freelancers" = the company is SOURCING suppliers = BUYER — BUT ONLY when the author is an END CLIENT (non-provider). A service provider (agency/studio/consultancy) hunting for partners/white-label/referrals is SELLING its services = NOT a lead.
-⚠️ RECRUITER EXCEPTION: A staffing agency placing candidates at THIRD-PARTY clients = reject. BUT a company/firm saying "We are building our pool of experts", "Experts required for our projects", "Building a team of freelancers" = they are BUYING expertise for their own work = ACCEPT (lead_type="hiring").
+SCORING (only for BUYERS; sum = lead_score 0-100):
+- service_match (0-25): direct mention of the service or its core problem = 25; adjacent problem = 20; general growth/marketing = 15; vague = 10; unrelated = 0.
+- business_problem (0-20): metrics declining or explicit build needed = 20; clear pain = 15; dissatisfaction = 10; exploring = 5; none = 0.
+- buying_intent (0-20): explicit search with budget/ASAP = 20; hiring remote/contract = 18; strong implicit = 15; problem + commercial context = 10; passive = 5; none = 0.
+- decision_maker (0-15): Founder/CEO/Owner/VP/Director/Head = 15; Manager/Lead = 12; business context = 10; IC/freelancer = 5; student/job-seeker = 0.
+- urgency (0-10): ASAP/deadline = 10; now/starting = 8; this month = 7; active no timeline = 5; none = 0.
+- outreach (0-10): search + problem + decision maker = 10; strong problem + role = 8; clear problem = 6; vague = 4; wrong audience = 0.
 
-TRAP CASES — the mistakes to avoid:
-- Trap 1: A post says "Looking for a freelance SEO expert to work on our project" — this is a BUYER (they're hiring) even though the word "freelance" appears. work_type=contract, is_lead=true.
-- Trap 2: A freelancer posts "Freelance SEO expert available for remote projects" — this is a SELLER despite matching the niche perfectly. is_lead=false.
-- Trap 3: "We're hiring a full-time SEO manager, on-site in NY" — payroll hire, on-site. is_lead=false.
-- Trap 4: "Hiring a remote contract web designer for a 3-month project" — BUYER, remote + contract. Strong lead, score 80+.
-- Trap 5: Thought leadership: "5 SEO mistakes killing your rankings" or "How we grew traffic 300%" — content, not intent. is_lead=false.
-- Trap 6: A company complains "our organic traffic dropped 40% since the update" WITHOUT asking for help — this is implicit buying intent. problem_awareness, is_lead=true (score 60-80).
-- Trap 7: "Anyone else seeing traffic drops?" (no business context, no "for my business") — passive/research, low score (40-55) or reject if purely casual.
-- Trap 8: A COMPANY/AGENCY/FIRM says "We are building our pool of experts", "Service Line Experts Required", "Looking for experts to join our project roster", "Building a team of freelancers for client projects" — this is a BUYER of talent/expertise. They are not selling their own services; they are recruiting service providers to work FOR them on projects. is_lead=true, lead_type="hiring". (Exception to the recruiter rule: a firm hiring experts for ITS OWN projects is a buyer; only staffing agencies that place candidates at THIRD-PARTY clients are rejected.)
-- Trap 9: "We fired our agency and now use X" — if the post is about replacing a service with a tool, they are NOT currently buying; is_lead=false. But if they say "we fired our agency, looking for a replacement" → buyer.
-- Trap 10: "We're looking for partners / looking for the right partners / seeking agencies & marketers to work with / building our marketing engine" — if the AUTHOR IS A NON-PROVIDER COMPANY (end client seeking suppliers) = BUYER. is_lead=true, lead_type="hiring". BUT if the author is a SERVICE PROVIDER (agency/studio/consultancy/freelancer) posting "looking for agency partners / white-label partners / outsourcing partners / referrals / international partners / let's collaborate / DM us about partnership" — they are SELLING their services to other agencies = NEVER a lead (is_lead=false). NEVER classify a service provider's partner-hunting as a buyer.
-- Trap 11: "DM us", "link in bio", "our doors can't handle the demand", "we'll let you skip the queue", "we specialize in", "our services include", "we help businesses with X" — self-promotion = SELLER, is_lead=false.
+TIERS: 85+ HOT; 70-84 WARM; 40-69 POTENTIAL; 25-39 BORDERLINE (weak but real buyer); <25 reject.
 
-SCORING (six dimensions, then total):
-- service_match (0-25): direct mention of the service or its core problem = 25; adjacent problem (traffic drop for SEO, slow site for web dev) = 20; general growth/marketing = 15; vague = 10; unrelated = 0.
-- business_problem (0-20): metrics declining or explicit build needed = 20; clear pain ("struggling", "can't") = 15; dissatisfaction/improvement desire = 10; exploring = 5; none = 0.
-- buying_intent (0-20): explicit vendor/freelancer search with budget/ASAP = 20; HIRING freelancer/contractor/remote/part-time = 18; strong implicit ("recommendations?", "who can help?") = 15; problem + commercial context ("for my business") = 10; passive = 5; none = 0.
-- decision_maker_likelihood (0-15): Founder/CEO/Owner/VP/Director/Head of Marketing = 15; Manager/Lead = 12; unclear but business context = 10; individual contributor/freelancer = 5; student/job-seeker = 0.
-- urgency (0-10): urgent/ASAP/deadline = 10; "looking now"/project starting = 8; soon/this month = 7; active problem no timeline = 5; none = 0.
-- outreach_worthiness (0-10): explicit vendor search + problem + decision maker = 10; strong problem + reachable role = 8; clear problem unclear authority = 6; vague = 4; wrong audience = 0.
+CONSISTENCY (verify before output):
+- is_lead=true ⟹ lead_score >= 25 AND service_match >= 10.
+- lead_type="hiring" + full_time_onsite ⟹ is_lead=false.
+- lead_type="agency" ⟹ is_lead=false (agencies are sellers).
+- Score >= 80 ⟹ reason must cite SPECIFIC post evidence.
+- If you had to think twice about SELLER vs BUYER, the answer is SELLER — reject.
 
-lead_score = service_match + business_problem + buying_intent + decision_maker_likelihood + urgency + outreach_worthiness (0-100).
-
-TIERS:
-- 85+ HOT: explicit need or active hiring + decision-maker + concrete problem.
-- 70-84 WARM: clear problem or hiring intent, may need light nurturing.
-- 40-69 POTENTIAL: relevant but vague; still worth saving.
-- 25-39 BORDERLINE: weak signal but real buyer context; still worth saving (they exist).
-- <25 NOT a lead.
-
-CONSISTENCY CHECKS (verify before output):
-- is_lead=true ⟹ lead_score >= 25.
-- is_lead=true ⟹ service_match >= 10 (must relate to the niche).
-- lead_type="hiring" + work_type="full_time_onsite" ⟹ is_lead MUST be false.
-- lead_type="agency" or "irrelevant" ⟹ is_lead MUST be false.
-- Score >= 80 ⟹ reason must cite explicit evidence from the post, not generic phrases.
-
-OUTREACH_ANGLE rules:
-- MUST reference a SPECIFIC detail from the post (their company, their problem, their exact words).
-- NEVER start with "I noticed your insights on" or "I noticed your recent post" — too generic.
-- Sound like a human expert offering a specific next step, not a sales pitch.
-- 1 sentence, under 25 words.
+OUTREACH_ANGLE: 1 sentence, under 25 words, reference a SPECIFIC detail from the post, sound like a human expert, never start with "I noticed your recent post".
 
 OUTPUT FORMAT — return ONLY a valid JSON array:
 [
@@ -1238,14 +1229,52 @@ If a field is not mentioned, use null.""",
 
         def _is_seller(q: dict) -> bool:
             post = (q.get("post_content") or "").lower()
-            # Only reject based on POST content — headline alone is never enough
-            # (too many false positives: "Founder at ABC Services" could be a buyer)
+            headline = (q.get("headline") or "").lower()
+            combined = post + " " + headline
+            # 1) Exact substring markers
             if any(m in post for m in SELLER_POST_MARKERS):
                 return True
+            # 2) Regex patterns — catch rephrased sellers the exact markers
+            #    miss ("we help growing TECHNOLOGY businesses", "let's have
+            #    a conversation", website CTAs, service-menu arrows)
+            import re as _re_seller
+            patterns = (
+                r"we help (?:growing |small |other )?(?:businesses|companies|brands|teams|organizations|startups)",
+                r"we (?:assist|support|enable) (?:growing |other )?(?:businesses|companies|brands|teams|organizations)",
+                r"let's have a conversation",
+                r"lets have a conversation",
+                r"let's talk about what you're trying to solve",
+                r"book a (?:call|demo|consultation)",
+                r"\bhttps?://\S+\.(?:com|net|in|io|org|co|dev)\b",
+                r"reach(?: out)? to us",
+                r"partner with us",
+                r"our (?:services|offerings|expertise|solutions) (?:include|cover|span)",
+                r"we provide (?:services?|solutions|support)",
+                r"we deliver (?:services?|solutions)",
+                r"services?:\s*$",
+                r"(?:→|->)\s*[a-z]",
+            )
+            for pat in patterns:
+                if _re_seller.search(pat, combined):
+                    return True
             return False
 
         qualified = [q for q in qualified if not _is_seller(q)]
         logger.info(f"[HyperAgent] Seller gate kept {len(qualified)} non-provider leads")
+
+        # ── AI BUYER-VERIFICATION PASS ──────────────────────────────────
+        # Code markers miss sophisticated agency self-promo (MindTap-style:
+        # problem-list framing + "we help growing technology businesses" +
+        # "let's have a conversation" + website CTA). Run a cheap second-
+        # opinion pass: is the author BUYING or SELLING? Only genuine buyers
+        # survive. Batched (1 call per 25), tiny prompt, gpt-4o-mini.
+        if qualified:
+            verified = []
+            for i in range(0, len(qualified), 25):
+                batch = qualified[i:i+25]
+                verified.extend(self._ai_verify_buyers(batch))
+            logger.info(f"[HyperAgent] Buyer verification: kept {len(verified)}/{len(qualified)} genuine buyers")
+            qualified = verified
 
         # ── Lead-type preference gate (STRICT) ─────────────────────────
         # If the user picked specific lead types (hiring / freelancer /
@@ -1437,6 +1466,56 @@ Return ONLY a JSON array of indices of KEEP posts, e.g. [0, 3, 5]. If none, retu
                 author["outreach_angle"] = ""
                 accepted.append(author)
         return accepted
+
+    def _ai_verify_buyers(self, batch: list[dict]) -> list[dict]:
+        """Second-opinion SELLER/BUYER audit for already-qualified leads.
+
+        The main qualification prompt can be fooled by sophisticated
+        agency self-promo (problem-list framing, 'we help growing
+        businesses', soft CTAs). This cheap focused pass asks ONE binary
+        question per post and keeps only genuine buyers.
+        """
+        if not batch:
+            return []
+
+        verify_prompt = """You are a ruthless lead-auditor. For EACH post below, decide: is the author a SELLER or a BUYER?
+
+SELLER = a service provider promoting its OWN services: agencies, studios, consultancies, outsourcing firms, freelancers, software houses, or founders of such firms. SELLER signals: "we help businesses", "our services include", "we specialize in", "we provide", "what we do", service lists (→, •), "let's talk / let's have a conversation", "DM us", "book a call", "reach out to us", website links, "partner with us", "white-label", "outsourcing partner", "we deliver". A post that lists CLIENT pain points and then offers its solution is PITCH COPY = SELLER. A provider looking for agency partners/referrals = SELLER.
+
+BUYER = an END CLIENT (a company or person) that needs the service done for its OWN business: "we're looking for", "I need", "hiring a freelance X", "need a designer", "recommendations for X?", "our traffic dropped / our site is slow", "we fired our agency, looking for a replacement".
+
+Return ONLY a JSON array of indices of BUYERS, e.g. [0, 2]. Reject every seller. When in doubt, reject."""
+
+        batch_text = "\n\n".join(
+            f"[{i}] {b.get('name', '')} | {b.get('headline', '')} | {b.get('post_content', '')[:1000]}"
+            for i, b in enumerate(batch)
+        )
+
+        try:
+            response = self.openai.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[
+                    {"role": "system", "content": verify_prompt},
+                    {"role": "user", "content": f"Posts:\n\n{batch_text}"},
+                ],
+                temperature=0,
+                max_tokens=80,
+            )
+            result_text = response.choices[0].message.content or ""
+            start = result_text.find("[")
+            end = result_text.rfind("]") + 1
+            keep_idx = []
+            if start >= 0 and end > start:
+                keep_idx = json.loads(result_text[start:end])
+        except Exception as e:
+            logger.warning(f"[HyperAgent] Buyer verification failed: {e}")
+            return []
+
+        kept = []
+        for i in keep_idx:
+            if isinstance(i, int) and 0 <= i < len(batch):
+                kept.append(batch[i])
+        return kept
 
     def _ai_qualify_batch(self, batch: list[dict], context: dict) -> list[dict]:
         """Qualify a batch of leads with AI scoring (V3 format)."""

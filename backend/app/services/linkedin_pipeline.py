@@ -1656,7 +1656,10 @@ def tier_filter(scored: list[dict], lead_types: list[str], tier: dict, req_count
     authors whose ONLY post failed this tier — they may pass a looser tier.
     """
     type_map = {
-        "buyer": ["explicit_need", "problem_awareness", "research"],
+        # "buyer" = people/companies needing freelancers — includes
+        # contract/freelance hiring posts (a company hiring a freelance
+        # designer IS a freelancer-need).
+        "buyer": ["explicit_need", "problem_awareness", "research", "hiring"],
         "agency": ["agency"],
         "hiring": ["hiring"],
     }
@@ -2260,6 +2263,13 @@ async def run_linkedin_pipeline_fast(
             # STAGE 2 — full semantic scoring on the best survivors only.
             survivors = promising[:DEEP_SCORE_CAP]
             scored_w = await qualify_leads_with_ai_async(survivors, query, openai_client)
+            if scored_w:
+                for sw in scored_w:
+                    logger.info(
+                        f"[LinkedInPipeline:{search_id}] scored: "
+                        f"{sw.get('full_name', '?')[:20]} | type={sw.get('lead_type')} "
+                        f"score={sw.get('ai_score')} cc={sw.get('country_code') or '?'}"
+                    )
 
             for tier_idx, tier in enumerate(TIERS, 1):
                 if len(final_leads) >= max_results:

@@ -1313,6 +1313,14 @@ If a field is not mentioned, use null.""",
 
         requested_count = int(context.get("count") or 20)
 
+        # Relevance check used by triage + fill — must be defined BEFORE
+        # either runs. A candidate must mention the service keyword.
+        def _relevant(a: dict) -> bool:
+            if not relevance_kws:
+                return True
+            text = ((a.get("post_content") or "") + " " + (a.get("headline") or "")).lower()
+            return any(kw in text for kw in relevance_kws)
+
         # ── Triage fallback — STRICT gates applied to triage output ────
         if len(qualified) < requested_count:
             qualified_urls = {l.get("linkedin_url", "").lower() for l in qualified}
@@ -1334,12 +1342,6 @@ If a field is not mentioned, use null.""",
         # ── Fill to exact count — ONLY gate-passing candidates ─────────
         # Never pollute with wrong type/location/relevance just to hit the
         # number. A filled lead must mention the service keyword too.
-        def _relevant(a: dict) -> bool:
-            if not relevance_kws:
-                return True
-            text = ((a.get("post_content") or "") + " " + (a.get("headline") or "")).lower()
-            return any(kw in text for kw in relevance_kws)
-
         if len(qualified) < requested_count:
             qualified_urls = {l.get("linkedin_url", "").lower() for l in qualified}
             remaining = [

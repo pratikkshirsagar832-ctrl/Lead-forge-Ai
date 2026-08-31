@@ -710,20 +710,22 @@ If a field is not mentioned, use null.""",
         # Reliability fallbacks (the AI often drops or mangles these)
         # 1. count: the USER's explicit number ALWAYS wins over the AI's
         #    guess. The AI likes to default to 20 even when the user said 5
-        #    ("5 leads", "count: 5", "I need 5") — so the regex runs FIRST
-        #    and unconditionally overrides any AI-extracted count.
+        #    ("5 leads", "count: 5", "I need 5"). Scan ALL user messages —
+        #    the count may have been typed earlier while the LAST message is
+        #    just "yes"/"go" (confirmation), which contains no number.
         try:
-            last_user = ""
-            for m in reversed(history[-10:]):
-                if m.get("role") == "user":
-                    last_user = m.get("content", "")
+            # history's LAST item is the current user message; scan all
+            # user messages newest-first (count may sit in an earlier one)
+            user_msgs = [m.get("content", "") for m in reversed(history[-10:]) if m.get("role") == "user"]
+            for last_user in user_msgs:
+                m = _re.search(r"(?:count[:\s]*|need\s+|want\s+)(\d+)\s*(?:leads?)?", last_user, _re.IGNORECASE)
+                m2 = _re.search(r"(\d+)\s*leads?", last_user, _re.IGNORECASE)
+                if m:
+                    ctx["count"] = int(m.group(1))
                     break
-            m = _re.search(r"(?:count[:\s]*|need\s+|want\s+)(\d+)\s*(?:leads?)?", last_user, _re.IGNORECASE)
-            m2 = _re.search(r"(\d+)\s*leads?", last_user, _re.IGNORECASE)
-            if m:
-                ctx["count"] = int(m.group(1))
-            elif m2:
-                ctx["count"] = int(m2.group(1))
+                if m2:
+                    ctx["count"] = int(m2.group(1))
+                    break
         except Exception:
             pass
 

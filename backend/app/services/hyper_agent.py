@@ -1363,14 +1363,20 @@ If a field is not mentioned, use null.""",
             for i in range(0, len(remaining), 25):
                 batch = remaining[i:i+25]
                 batch_qualified = self._ai_triage_batch(batch, context)
-                qualified.extend([q for q in batch_qualified if _matches_type(q) and _location_ok(q)])
+                batch_qualified = [q for q in batch_qualified if _matches_type(q) and _location_ok(q)]
+                # Triage survivors must ALSO pass the buyer-verification audit
+                batch_qualified = self._ai_verify_buyers(batch_qualified)
+                qualified.extend(batch_qualified)
                 if len(qualified) >= requested_count:
                     break
             qualified.sort(key=lambda x: (x.get("location_match") or False, x.get("score", 0)), reverse=True)
 
-        # ── Fill to exact count — ONLY gate-passing candidates ─────────
-        # Never pollute with wrong type/location/relevance just to hit the
-        # number. A filled lead must mention the service keyword too.
+        # ── Fill to exact count — ONLY VERIFIED buyers ─────────────────
+        # The fill was the last leak: unverified authors (MindTap-style
+        # sellers) were dumped back in to hit the number. Now fill
+        # candidates must pass the SAME AI buyer-verification as qualified
+        # leads. If verified candidates are still short, we return FEWER
+        # leads — never junk.
         if len(qualified) < requested_count:
             qualified_urls = {l.get("linkedin_url", "").lower() for l in qualified}
             remaining = [
@@ -1379,6 +1385,10 @@ If a field is not mentioned, use null.""",
                 and _matches_type(a) and _location_ok(a) and _relevant(a)
             ]
             remaining.sort(key=lambda a: (a.get("location_match") or False, a.get("engagement", {}).get("likes", 0)), reverse=True)
+            # AI-verify the fill pool (batched); only verified buyers may fill
+            verified_pool = self._ai_verify_buyers(remaining[: max(requested_count * 3, 25)])
+            verified_urls = {v.get("linkedin_url", "").lower() for v in verified_pool}
+            remaining = [a for a in remaining if a.get("linkedin_url", "").lower() in verified_urls]
             for author in remaining:
                 if len(qualified) >= requested_count:
                     break
@@ -1388,13 +1398,14 @@ If a field is not mentioned, use null.""",
                 author["lead_type"] = author.get("lead_type") or _type_from_text(author.get("post_content") or "")
                 author["work_type"] = "unknown"
                 author["evidence_strength"] = "moderate"
-                author["reason"] = "Filled to your requested count — strong engagement, relevant to your service"
+                author["reason"] = "Filled to your requested count — verified buyer, relevant to your service"
                 author["outreach_angle"] = ""
                 qualified.append(author)
             if len(qualified) < requested_count:
                 logger.warning(
                     f"[HyperAgent] Only {len(qualified)}/{requested_count} leads passed "
-                    f"type={lead_types or 'any'} location={context.get('location', 'any')} gates"
+                    f"type={lead_types or 'any'} location={context.get('location', 'any')} "
+                    f"+ buyer verification — returning fewer, NEVER junk"
                 )
 
         return qualified[:min(requested_count, 50)]

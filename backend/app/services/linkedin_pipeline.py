@@ -1953,6 +1953,24 @@ async def _save_leads_bulk(supabase, search_id: str, user_id: str, leads: list[d
     if not rows:
         return []
 
+    # DEDUPLICATION: before inserting, remove leads whose linkedin_url
+    # already exists for this user. Prevents duplicates across searches.
+    try:
+        existing = await asyncio.to_thread(
+            lambda: supabase.table("leads").select("linkedin_url")
+            .eq("user_id", user_id).neq("linkedin_url", "").execute()
+        )
+        existing_urls = {
+            (r.get("linkedin_url") or "").split("?")[0].rstrip("/").lower()
+            for r in (existing.data or [])
+        }
+        rows = [r for r in rows if (r.get("linkedin_url") or "").split("?")[0].rstrip("/").lower() not in existing_urls]
+        if not rows:
+            logger.info(f"[LinkedInPipeline:{search_id}] All {len(rows)} leads already exist for user — skipping insert")
+            return []
+    except Exception as e:
+        logger.warning(f"[LinkedInPipeline:{search_id}] Dedup check failed ({e}) — proceeding with insert")
+
     try:
         response = await asyncio.to_thread(
             lambda: supabase.table("leads").insert(rows).execute()

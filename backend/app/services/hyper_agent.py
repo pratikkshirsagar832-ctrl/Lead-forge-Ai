@@ -15,6 +15,7 @@ Only available for Pro and Agency plans.
 import json
 import logging
 import asyncio
+import re
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -506,6 +507,30 @@ RULES:
 """
 
 
+def _extract_requested_count(messages: list[dict]) -> int | None:
+    """Extract the USER's requested lead count from conversation messages.
+
+    Scans user messages newest-first. Returns None when no number is found.
+    Order of preference:
+      1. "count: N" / "need N" / "want N" (+ optional 'leads')
+      2. "N leads"
+      3. A bare small number (1-50) in a user message ("3", "bhai 3 karo")
+    """
+    user_msgs = [m.get("content", "") for m in reversed(messages[-10:]) if m.get("role") == "user"]
+    for last_user in user_msgs:
+        m = re.search(r"(?:count[:\s]*|need\s+|want\s+)(\d+)\s*(?:leads?)?", last_user, re.IGNORECASE)
+        m2 = re.search(r"(\d+)\s*leads?", last_user, re.IGNORECASE)
+        if m:
+            return int(m.group(1))
+        if m2:
+            return int(m2.group(1))
+    for last_user in user_msgs:
+        m3 = re.search(r"(?<!\d)(\d{1,2})(?!\d)", last_user)
+        if m3 and 1 <= int(m3.group(1)) <= 50:
+            return int(m3.group(1))
+    return None
+
+
 class HyperAgentService:
     """Main HyperAgent service for conversational lead discovery."""
 
@@ -718,27 +743,9 @@ If a field is not mentioned, use null.""",
         #    the count may have been typed earlier while the LAST message is
         #    just "yes"/"go" (confirmation), which contains no number.
         try:
-            # history's LAST item is the current user message; scan all
-            # user messages newest-first (count may sit in an earlier one)
-            user_msgs = [m.get("content", "") for m in reversed(history[-10:]) if m.get("role") == "user"]
-            for last_user in user_msgs:
-                m = _re.search(r"(?:count[:\s]*|need\s+|want\s+)(\d+)\s*(?:leads?)?", last_user, _re.IGNORECASE)
-                m2 = _re.search(r"(\d+)\s*leads?", last_user, _re.IGNORECASE)
-                if m:
-                    ctx["count"] = int(m.group(1))
-                    break
-                if m2:
-                    ctx["count"] = int(m2.group(1))
-                    break
-            # Last resort: a bare small number in the most recent user
-            # message ("3", "bhai 3 karo") — in this lead-gen flow it is
-            # almost always the requested lead count.
-            if not ctx.get("count"):
-                for last_user in user_msgs:
-                    m3 = _re.search(r"(?<!\d)(\d{1,2})(?!\d)", last_user)
-                    if m3 and 1 <= int(m3.group(1)) <= 50:
-                        ctx["count"] = int(m3.group(1))
-                        break
+            n = _extract_requested_count(history)
+            if n:
+                ctx["count"] = n
         except Exception:
             pass
 
@@ -773,16 +780,34 @@ If a field is not mentioned, use null.""",
         logger.info(f"[HyperAgent] Queries: {queries}")
 
         # CREDIT BUDGET: harvestapi's maxPosts is PER QUERY, so total raw =
-        # maxPosts × len(searchQueries). Fetching 10 queries × 60 posts = 600
-        # records burns credits on every search. Budget the TOTAL to ~count×3
-        # (never more than needed — the gates + fill logic deliver exactly
-        # `count` leads, so extra raw items are pure waste):
-        #   count=5   → 2 queries × 10  = 20 raw
-        #   count=20  → 4 queries × 15  = 60 raw
-        #   count=50  → 6 queries × 25  = 150 raw
-        n_queries = max(2, min(6, -(-count // 10)))
-        per_query = max(10, min(25, -(-count * 3 // n_queries)))
-        selected = queries[:n_queries]
+        # maxPosts × len(searchQueries). Budget the TOTAL to ~count×3.
+        # QUERY SELECTION MATTERS: harvestapi matches natural phrases
+        # poorly, so we must send the STRONGEST buyer-intent queries — not
+        # just the first 2. Priority order: role-based buyer phrases
+        # ("looking for a freelance X developer", "hiring X") first, then
+        # generic niche phrases. Location-embedded queries are EXCLUDED
+        # here — the location gate filters authors downstream, and "in
+        # India" phrasing rarely appears in real buyer posts (it kills
+        # recall and returns junk).
+        n_queries = max(3, min(5, -(-count // 10)))
+        per_query = max(10, min(20, -(-count * 3 // n_queries)))
+
+        # Priority reorder: buyer phrases without location first
+        def _buyer_priority(q: str) -> tuple[int, str]:
+            low = q.lower()
+            score = 0
+            if " in " in low:
+                score += 100  # location-embedded — push to end (or drop)
+            if any(k in low for k in ("freelance", "hiring", "looking for", "need", "recommend", "agency")):
+                score -= 10   # buyer-intent — pull to front
+            return score, low
+
+        ordered = sorted(queries, key=_buyer_priority)
+        # Drop location-embedded queries entirely (gate filters them later)
+        ordered = [q for q in ordered if " in " not in q.lower()]
+        selected = ordered[:n_queries]
+        if not selected:
+            selected = queries[:n_queries]
 
         payload = {
             "searchQueries": selected,

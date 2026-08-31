@@ -44,6 +44,7 @@ class ChatResponse(BaseModel):
 
 class ScrapeRequest(BaseModel):
     context: dict = Field(..., description="ICP context: niche, roles, location, count")
+    conversation: list[dict] = Field(default_factory=list, description="Full chat history — backend re-derives the lead count from it")
 
 
 class ScrapeResponse(BaseModel):
@@ -237,6 +238,17 @@ async def hyper_agent_scrape(
         context["count"] = min(int(context.get("count") or 20), 50)
     except (TypeError, ValueError):
         context["count"] = 20
+
+    # BACKEND IS THE COUNT AUTHORITY: the frontend may have defaulted to 20.
+    # If the user explicitly asked for a number anywhere in the conversation
+    # ("3 leads", "count: 3", bare "3"), that number wins — no more
+    # 3→20 surprises.
+    if request.conversation:
+        from app.services.hyper_agent import _extract_requested_count
+        conv_count = _extract_requested_count(request.conversation)
+        if conv_count:
+            context["count"] = max(1, min(conv_count, 50))
+            logger.info(f"[HyperAgent] count from conversation: {context['count']}")
 
     if not context.get("niche") or not context.get("location"):
         raise HTTPException(

@@ -267,7 +267,7 @@ I'll understand your needs, confirm the details, then scrape LinkedIn and qualif
           if (selectedLocations.length > 0) {
             contextData.locations = selectedLocations.join(",")
           }
-          const scrapeRes = await api.post("/api/hyper-agent/scrape", { context: contextData })
+          const scrapeRes = await api.post("/api/hyper-agent/scrape", { context: contextData, conversation: messages })
 
           if (scrapeRes.status !== 200) {
             throw new Error("Failed to start search")

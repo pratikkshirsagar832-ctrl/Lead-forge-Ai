@@ -41,7 +41,7 @@ MAX_RESULTS_CAP = 50
 AI_QUALIFY_CONCURRENCY = 5
 
 # Profile enrichment bills per row on pay-per-event actors — cap it.
-PROFILE_ENRICHMENT_CAP = 60
+PROFILE_ENRICHMENT_CAP = 30
 
 # Countries to keep leads from — English-speaking + key EU markets.
 # Country codes come from author.location.countryCode in harvestapi "main" mode.
@@ -1097,7 +1097,7 @@ async def run_linkedin_pipeline(
                     seen_post_urls.add(pid)
             logger.info(f"[LinkedInPipeline:{search_id}] Fresh posts this pass: {len(fresh)} (of {raw_count})")
 
-            leads, skipped = process_items(fresh, max_results * 3, req_country_codes)
+            leads, skipped = process_items(fresh, max_results * 2, req_country_codes)
             all_skipped += skipped
             logger.info(f"[LinkedInPipeline:{search_id}] Candidates after parsing: {len(leads)} (skipped {skipped})")
 
@@ -1526,11 +1526,11 @@ TIER_FINAL = {"min_score": 10, "country": "any"}   # last resort
 TIERS = [TIER_1, TIER_FINAL]
 
 # ── Persistent guarantee loop limits ──────────────────────────────────────
-MAX_WAVES = 5                 # hunt up to 5 waves until count is met
+MAX_WAVES = 3                 # hunt up to 3 waves (down from 5 — saves Apify credits)
 WAVE_DEADLINE_SECONDS = 480   # never hunt longer than 8 minutes total
 TRIAGE_BATCH_SIZE = 20        # posts per cheap triage call
 TRIAGE_CONCURRENCY = 12
-DEEP_SCORE_CAP = 90           # max survivors sent to full GPT scoring
+DEEP_SCORE_CAP = 40           # max survivors sent to full GPT scoring (down from 90)
 
 
 async def triage_candidates_async(
@@ -2047,14 +2047,14 @@ async def run_linkedin_pipeline_fast(
         pool = list(build_boolean_query(query))
         for variant in range(2, 9):
             pool.extend(build_boolean_query_variant(query, variant))
-        # CREDIT BUDGET: max 3 lanes (was one lane per requested lead — 20+
-        # lanes × up to 600 records each burned credits on every search).
-        # Total raw budget ≈ max_results × 4 (capped at 120) across waves.
-        n_lanes = min(max_results, 3)
+        # CREDIT BUDGET: scale lanes and fetch count with request size.
+        # 3 leads → 1 lane, 5 → 2, 10 → 2, 20 → 3, 50 → 3
+        n_lanes = min(max_results, 3) if max_results >= 10 else (2 if max_results >= 5 else 1)
         lanes_check, _ = split_lane_phrases(pool, n_lanes)
         n_lanes = max(1, len(lanes_check))
-        raw_budget = min(max_results * 4, 120)
-        fetch_per_lane = max(8, min(15, -(-raw_budget // n_lanes)))
+        # raw_budget: tight cap — count×2 items (down from ×4), max 60
+        raw_budget = min(max_results * 2, 60)
+        fetch_per_lane = max(5, min(10, -(-raw_budget // n_lanes)))
 
         logger.info(
             f"[LinkedInPipeline:{search_id}] FAST start: {n_lanes} parallel lanes "

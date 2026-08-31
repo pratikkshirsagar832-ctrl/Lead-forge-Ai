@@ -85,6 +85,106 @@ def _looks_south_asian(name: str) -> bool:
     return any(marker in low for marker in SOUTH_ASIA_NAME_MARKERS)
 
 
+# ── Location helpers (ported from HyperAgent) ──────────────────────────────
+COUNTRY_NAME_TO_CODE = {
+    "usa": "US", "united states": "US", "united states of america": "US", "america": "US", "us": "US",
+    "canada": "CA",
+    "uk": "GB", "united kingdom": "GB", "england": "GB", "britain": "GB", "scotland": "GB",
+    "ireland": "IE",
+    "australia": "AU", "new zealand": "NZ",
+    "germany": "DE", "netherlands": "NL", "france": "FR", "belgium": "BE", "switzerland": "CH",
+    "austria": "AT", "sweden": "SE", "norway": "NO", "denmark": "DK", "finland": "FI",
+    "spain": "ES", "italy": "IT", "portugal": "PT", "luxembourg": "LU", "iceland": "IS",
+    "uae": "AE", "united arab emirates": "AE", "dubai": "AE", "abu dhabi": "AE",
+    "saudi arabia": "SA", "qatar": "QA", "kuwait": "KW", "singapore": "SG", "israel": "IL",
+    "india": "IN", "pakistan": "PK", "bangladesh": "BD", "philippines": "PH", "nigeria": "NG",
+    "vietnam": "VN", "indonesia": "ID", "thailand": "TH", "malaysia": "MY", "kenya": "KE",
+    "ghana": "GH", "south africa": "ZA", "egypt": "EG", "mexico": "MX", "brazil": "BR",
+    "sri lanka": "LK", "nepal": "NP", "turkey": "TR",
+}
+
+CITY_COUNTRY_HINTS = {
+    "new york": "US", "nyc": "US", "san francisco": "US", "sf": "US", "los angeles": "US",
+    "chicago": "US", "austin": "US", "miami": "US", "seattle": "US", "boston": "US",
+    "denver": "US", "dallas": "US", "houston": "US", "phoenix": "US", "atlanta": "US",
+    "toronto": "CA", "vancouver": "CA", "montreal": "CA",
+    "london": "GB", "manchester": "GB", "birmingham": "GB", "leeds": "GB", "edinburgh": "GB",
+    "dublin": "IE", "sydney": "AU", "melbourne": "AU", "brisbane": "AU", "perth": "AU",
+    "auckland": "NZ", "berlin": "DE", "munich": "DE", "hamburg": "DE", "frankfurt": "DE",
+    "amsterdam": "NL", "rotterdam": "NL", "paris": "FR", "lyon": "FR", "brussels": "BE",
+    "zurich": "CH", "geneva": "CH", "vienna": "AT", "stockholm": "SE", "oslo": "NO",
+    "copenhagen": "DK", "helsinki": "FI", "madrid": "ES", "barcelona": "ES", "milan": "IT",
+    "rome": "IT", "lisbon": "PT", "dubai": "AE", "abu dhabi": "AE", "riyadh": "SA",
+    "doha": "QA", "kuwait city": "KW", "singapore": "SG", "tel aviv": "IL",
+    "mumbai": "IN", "delhi": "IN", "new delhi": "IN", "bangalore": "IN", "bengaluru": "IN",
+    "hyderabad": "IN", "pune": "IN", "chennai": "IN", "karachi": "PK", "lahore": "PK",
+    "dhaka": "BD", "manila": "PH", "lagos": "NG", "nairobi": "KE", "cape town": "ZA",
+    "johannesburg": "ZA", "cairo": "EG", "mexico city": "MX", "sao paulo": "BR",
+}
+
+# Countries users may explicitly request (even if normally gated out)
+USER_REQUESTABLE_COUNTRIES = {
+    "IN", "PK", "BD", "PH", "NG", "VN", "ID", "TH", "MY", "KE", "GH", "ZA", "EG",
+    "LK", "NP", "TR", "AE", "SA", "QA", "KW", "IL", "BR", "MX",
+}
+
+
+def _parse_location_request(location: str) -> tuple[set[str], str | None]:
+    """Parse a user location request into (country_codes, city).
+
+    'Mumbai' → ({"IN"}, "mumbai") | 'US' → ({"US"}, None)
+    'Asia'   → region set | 'Europe' → region set
+    """
+    if not location:
+        return set(), None
+    loc = location.strip().lower()
+    region_map = {
+        "asia": {"IN", "PK", "BD", "PH", "VN", "ID", "TH", "MY", "SG", "JP", "KR", "TW"},
+        "europe": {"GB", "DE", "FR", "NL", "BE", "CH", "AT", "SE", "NO", "DK", "FI", "ES", "IT", "PT", "IE"},
+        "united states": {"US"}, "usa": {"US"}, "america": {"US"},
+        "india": {"IN"}, "africa": {"NG", "KE", "GH", "ZA", "EG"},
+        "australia": {"AU", "NZ"}, "canada": {"CA"},
+        "south america": {"BR", "MX", "AR", "CL", "CO"},
+        "uk": {"GB"}, "united kingdom": {"GB"}, "uae": {"AE"}, "dubai": {"AE"},
+    }
+    if loc in region_map:
+        return region_map[loc], None
+    if loc in COUNTRY_NAME_TO_CODE:
+        return {COUNTRY_NAME_TO_CODE[loc]}, None
+    # City check (exact or first-word match)
+    if loc in CITY_COUNTRY_HINTS:
+        return {CITY_COUNTRY_HINTS[loc]}, loc
+    for city, code in CITY_COUNTRY_HINTS.items():
+        if loc.startswith(city) or city in loc:
+            return {code}, loc
+    return set(), loc
+
+
+def _location_matches(author_location: str, author_country_code: str, country_codes: set[str], city: str | None) -> bool:
+    """Does an author's location match the user's requested location?"""
+    if not country_codes and not city:
+        return True
+    loc_low = (author_location or "").lower()
+    cc = (author_country_code or "").upper()
+    if city:
+        if city in loc_low:
+            return True
+        if cc and cc in country_codes:
+            return True
+        return False
+    if country_codes:
+        if cc and cc in country_codes:
+            return True
+        if loc_low:
+            if any(city_name in loc_low for city_name, code in CITY_COUNTRY_HINTS.items() if code in country_codes):
+                return True
+            for name, code in COUNTRY_NAME_TO_CODE.items():
+                if code in country_codes and name in loc_low:
+                    return True
+        return False
+    return True
+
+
 def _get_author_location(author: dict) -> tuple[str, str]:
     """Extract (country_code, location_text) from harvestapi author data."""
     location = author.get("location") or {}
@@ -903,11 +1003,18 @@ async def run_linkedin_pipeline(
     enrich_emails: bool,
     max_results: int,
     lead_types: list[str] = None,
+    location: str = "",
 ) -> None:
     supabase = get_supabase_admin()
     max_results = max(1, min(max_results, MAX_RESULTS_CAP))
     if lead_types is None:
         lead_types = ["buyer", "agency", "hiring"]
+
+    req_country_codes, req_city = _parse_location_request(location or "")
+    logger.info(
+        f"[LinkedInPipeline:{search_id}] location='{location}' → "
+        f"countries={req_country_codes or 'default-allowed'} city={req_city or ''}"
+    )
 
     settings = get_settings()
     openai_client = None
@@ -1124,6 +1231,12 @@ async def run_linkedin_pipeline(
         # Trim to max_results
         if len(all_leads) > max_results:
             all_leads = all_leads[:max_results]
+
+        # User-requested country filter (slow pipeline)
+        if req_country_codes:
+            before = len(all_leads)
+            all_leads = [l for l in all_leads if _country_ok(l, "requested", req_country_codes)]
+            logger.info(f"[LinkedInPipeline:{search_id}] Country filter: {len(all_leads)}/{before} matched requested countries")
 
         # Count by lead_category based on ai_score
         hot = sum(1 for l in all_leads if l.get("ai_score", 0) >= 85)
@@ -1484,10 +1597,19 @@ Return JSON: {{"keep": [post numbers showing buying/hiring intent]}}"""
     return kept
 
 
-def _country_ok(lead: dict, mode: str) -> bool:
+def _country_ok(lead: dict, mode: str, req_country_codes: set[str] | None = None) -> bool:
+    """Country gate. mode='any' → always OK.
+    req_country_codes set → lead must match one of those countries
+    (unknown-country leads are rejected only if they look like a blocked
+    market; otherwise allowed — queries are location-scoped)."""
     if mode == "any":
         return True
     cc = lead.get("country_code") or ""
+    if req_country_codes:
+        if cc:
+            return cc in req_country_codes
+        # Unknown country: reject only if obviously from another market
+        return not _looks_south_asian(lead.get("full_name") or "")
     if not cc:
         # Unknown country: apply the cheap heuristics from discovery phase.
         return not (
@@ -1504,7 +1626,7 @@ def _type_ok(lead: dict, allowed_types: set[str] | None) -> bool:
     return lead.get("lead_type") in allowed_types
 
 
-def tier_filter(scored: list[dict], lead_types: list[str], tier: dict) -> list[dict]:
+def tier_filter(scored: list[dict], lead_types: list[str], tier: dict, req_country_codes: set[str] | None = None) -> list[dict]:
     """Filter scored leads by a relaxation tier.
 
     Returns (accepted_leads, rejected_author_urls). Rejected URLs are
@@ -1527,7 +1649,7 @@ def tier_filter(scored: list[dict], lead_types: list[str], tier: dict) -> list[d
         score = lead.get("ai_score", 0) or 0
         if score < tier["min_score"]:
             continue
-        if not _country_ok(lead, tier["country"]):
+        if not _country_ok(lead, tier["country"], req_country_codes):
             continue
         if not _type_ok(lead, allowed):
             continue
@@ -1829,6 +1951,7 @@ async def run_linkedin_pipeline_fast(
     enrich_emails: bool,
     max_results: int,
     lead_types: list[str] = None,
+    location: str = "",
 ) -> None:
     """GUARANTEED-COUNT fast pipeline.
 
@@ -1842,6 +1965,17 @@ async def run_linkedin_pipeline_fast(
     max_results = max(1, min(max_results, MAX_RESULTS_CAP))
     if lead_types is None:
         lead_types = ["buyer", "agency", "hiring"]
+
+    # User-requested location → country codes (e.g. "Mumbai" → IN, "US" → US)
+    req_country_codes, req_city = _parse_location_request(location or "")
+    if req_country_codes & USER_REQUESTABLE_COUNTRIES:
+        country_gate_mode = "requested"
+    else:
+        country_gate_mode = "requested" if req_country_codes else "default"
+    logger.info(
+        f"[LinkedInPipeline:{search_id}] location='{location}' → "
+        f"countries={req_country_codes or 'default-allowed'} city={req_city or ''}"
+    )
 
     settings = get_settings()
     openai_client = None
@@ -2100,7 +2234,7 @@ async def run_linkedin_pipeline_fast(
             for tier_idx, tier in enumerate(TIERS, 1):
                 if len(final_leads) >= max_results:
                     break
-                got = _absorb(tier_filter(scored_w, lead_types, tier))
+                got = _absorb(tier_filter(scored_w, lead_types, tier, req_country_codes))
                 logger.info(
                     f"[LinkedInPipeline:{search_id}] Wave {wave_no} Tier {tier_idx}: "
                     f"+{got} (total {len(final_leads)}/{max_results}, cap {overdeliver_cap})"

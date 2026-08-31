@@ -108,6 +108,7 @@ async def create_search(
             enrich_emails=request.enrich_emails,
             max_results=request.max_results,
             lead_types=request.lead_types,
+            location=location_term,
         )
 
         return search

@@ -74,7 +74,7 @@ function PipelineCard({ lead, isDragOverlay }: { lead: LeadListItem; isDragOverl
     ? Array.from({ length: 5 }, (_, i) => i < Math.round(lead.rating!))
     : null;
 
-  const isLinkedinSource = lead.source === 'linkedin' || lead.source === 'hyper_agent';
+  const isLinkedinSource = lead.source === 'linkedin';
   const aiScore = lead.ai_confidence_score != null ? Math.round(lead.ai_confidence_score * 100) : null;
   const workMatch = lead.headline?.match(/^(🌍 Remote|📄 Contract|⏱️ Part-time|🏢 On-site)\s*—?\s*(.*)$/);
   const workLabel = workMatch?.[1];

@@ -50,7 +50,7 @@ export default function PlanGuard({ children }: { children: React.ReactNode }) {
               Pro or Agency Plan Required
             </DialogTitle>
             <DialogDescription className="text-center text-steel mt-2">
-              HyperAgent is exclusively available on <span className="text-cyan font-semibold">Pro</span> and <span className="text-emerald font-semibold">Agency</span> plans.
+              AI-powered LinkedIn lead generation is exclusively available on <span className="text-cyan font-semibold">Pro</span> and <span className="text-emerald font-semibold">Agency</span> plans.
               Upgrade now to unlock AI-powered lead generation.
             </DialogDescription>
           </DialogHeader>
@@ -60,14 +60,14 @@ export default function PlanGuard({ children }: { children: React.ReactNode }) {
               <Crown className="h-5 w-5 text-cyan shrink-0" />
               <div>
                 <p className="text-sm text-offwhite font-medium">Pro Plan</p>
-                <p className="text-xs text-steel">HyperAgent + 50 leads/day</p>
+                <p className="text-xs text-steel">50 leads/day</p>
               </div>
             </div>
             <div className="flex items-center gap-3 bg-navy/60 rounded-lg p-3 border border-steel/10">
               <Zap className="h-5 w-5 text-emerald shrink-0" />
               <div>
                 <p className="text-sm text-offwhite font-medium">Agency Plan</p>
-                <p className="text-xs text-steel">HyperAgent + 100 leads/day + priority</p>
+                <p className="text-xs text-steel">100 leads/day + priority</p>
               </div>
             </div>
           </div>

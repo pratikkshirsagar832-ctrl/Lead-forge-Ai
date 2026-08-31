@@ -168,7 +168,7 @@ export default function LeadDetailPage() {
   const categoryConfig = LEAD_CATEGORIES[leadCatKey as keyof typeof LEAD_CATEGORIES]
     || { label: leadCatKey, color: '#94a3b8', bg: '#f1f5f9' };
 
-  const isLinkedinSource = lead.source === 'linkedin' || lead.source === 'hyper_agent';
+  const isLinkedinSource = lead.source === 'linkedin';
 
   return (
     <div className="space-y-6 animate-in fade-in duration-500 pb-12">

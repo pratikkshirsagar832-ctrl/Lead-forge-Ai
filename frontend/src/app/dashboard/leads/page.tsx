@@ -9,7 +9,6 @@ import { LeadCard } from '@/components/dashboard/LeadCard';
 import { EmptyState } from '@/components/dashboard/EmptyState';
 import { CardSkeleton } from '@/components/shared/Skeleton';
 import { motion } from 'framer-motion';
-import api from '@/lib/api';
 
 function LeadsContent() {
   const searchParams = useSearchParams();
@@ -56,24 +55,6 @@ function LeadsContent() {
             <span className="text-steel">{totalCount.toLocaleString()}</span> total found
           </div>
         </div>
-      </div>
-
-      <div className="flex justify-end">
-        <button
-          onClick={async () => {
-            try {
-              const { data } = await api.post('/api/hyper-agent/backfill-post-urls');
-              showToast(`Repaired ${data.updated} post links`, 'success');
-              fetchLeads();
-            } catch (e: any) {
-              showToast(e?.response?.data?.detail || 'Repair failed', 'error');
-            }
-          }}
-          className="text-xs text-violet hover:underline"
-          title="Re-scrape LinkedIn to fill missing post URLs on old leads"
-        >
-          Repair missing LinkedIn post links
-        </button>
       </div>
 
       <FiltersBar />

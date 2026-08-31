@@ -38,7 +38,7 @@ export function LeadCard({ lead, onToggleFavorite, isUpdatingFav }: LeadCardProp
 
   const { workType, cleanHeadline } = extractWorkType(lead.headline);
 
-  const isLinkedinSource = lead.source === 'linkedin' || lead.source === 'hyper_agent';
+  const isLinkedinSource = lead.source === 'linkedin';
 
   const scoreColor = lead.website_health_score != null
     ? lead.website_health_score >= 70 ? 'text-emerald-400'

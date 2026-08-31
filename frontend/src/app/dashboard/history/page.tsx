@@ -8,7 +8,7 @@ import { Badge } from '@/components/shared/Badge';
 import { Skeleton } from '@/components/shared/Skeleton';
 import { EmptyState } from '@/components/dashboard/EmptyState';
 import { formatDistanceToNow } from 'date-fns';
-import { Search, MapPin, ChevronRight, Linkedin, Zap } from 'lucide-react';
+import { Search, MapPin, ChevronRight, Linkedin } from 'lucide-react';
 import Link from 'next/link';
 import { motion } from 'framer-motion';
 
@@ -97,8 +97,8 @@ export default function HistoryPage() {
                           {item.status}
                         </Badge>
                         <Badge variant="outline" className="text-[10px] gap-1">
-                          {item.source === 'linkedin' ? <Linkedin className="w-3 h-3 text-sky-400" /> : item.source === 'hyper_agent' ? <Zap className="w-3 h-3 text-violet" /> : <MapPin className="w-3 h-3 text-emerald-400" />}
-                          {item.source === 'linkedin' ? 'LinkedIn' : item.source === 'hyper_agent' ? 'HyperAgent' : 'Maps'}
+                          {item.source === 'linkedin' ? <Linkedin className="w-3 h-3 text-sky-400" /> : <MapPin className="w-3 h-3 text-emerald-400" />}
+                          {item.source === 'linkedin' ? 'LinkedIn' : 'Maps'}
                         </Badge>
                       </div>
                       <div className="flex items-center gap-4 text-sm text-ice/60">

@@ -118,6 +118,12 @@ function LiveResultCard({ lead, index }: { lead: any; index: number }) {
                       <span className="truncate text-emerald-400">{lead.email_found}</span>
                     </div>
                   )}
+                  {lead.full_address && (
+                    <div className="flex items-center gap-1.5 text-ice/50">
+                      <MapPin className="w-3 h-3 text-steel/60 shrink-0" />
+                      <span className="truncate">{lead.full_address}</span>
+                    </div>
+                  )}
                   {lead.post_text && (
                     <p className="line-clamp-2 italic text-ice/50 border-l-2 border-steel/30 pl-2">
                       {lead.post_text}
@@ -189,6 +195,7 @@ export default function SearchPage() {
   const [source, setSource] = useState<'google_maps' | 'linkedin'>('google_maps');
   const sourceRef = useRef<'google_maps' | 'linkedin'>('google_maps');
   const [maxResults, setMaxResults] = useState(10);
+  const [leadTypes, setLeadTypes] = useState<string[]>(['hiring', 'buyer', 'agency']);
   const requestedCount = useSearchStore((s) => s.requestedCount);
   const isUnlocked = useSearchStore((s) => s.unlocked);
   const unlockResults = useSearchStore((s) => s.unlockResults);
@@ -258,7 +265,7 @@ export default function SearchPage() {
     if (isAtLimit) { setShowUpgradeModal(true); return; }
     try {
       if (source === 'linkedin') {
-        await startSearch(data.niche, '', { source: 'linkedin', enrichEmails: false, maxResults, leadTypes: ['buyer', 'agency', 'hiring'] });
+        await startSearch(data.niche, data.location ?? '', { source: 'linkedin', enrichEmails: false, maxResults, leadTypes });
       } else {
         await startSearch(data.niche, data.location ?? '');
       }
@@ -386,6 +393,23 @@ export default function SearchPage() {
                   <>
                   <div>
                     <label className="block text-sm font-medium text-ice/70 mb-2 flex items-center gap-2">
+                      <MapPin className="w-4 h-4 text-steel" />
+                      Country / Location
+                    </label>
+                    <div className="relative group">
+                      <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                        <Globe className="h-5 w-5 text-steel/60 group-focus-within:text-steel transition-colors" />
+                      </div>
+                      <input
+                        {...mapsForm.register('location')}
+                        type="text"
+                        placeholder="e.g. India, US, UK, Europe, Mumbai"
+                        className="w-full pl-10 pr-4 py-3 rounded-xl border border-ocean/30 bg-navy/60 focus:bg-navy/80 focus:ring-2 focus:ring-steel/40 focus:border-steel/50 transition-all text-offwhite text-lg placeholder-ice/30 outline-none"
+                      />
+                    </div>
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-ice/70 mb-2 flex items-center gap-2">
                       <Users className="w-4 h-4 text-steel" />
                       Max Leads
                     </label>
@@ -394,18 +418,55 @@ export default function SearchPage() {
                       onChange={(e) => setMaxResults(Number(e.target.value))}
                       className="w-full px-3 py-3 rounded-xl border border-ocean/30 bg-navy/60 text-offwhite outline-none focus:ring-2 focus:ring-steel/40"
                     >
-                      {[3, 5, 8, 10].map(n => (
+                      {[3, 5, 10, 20, 50].map(n => (
                         <option key={n} value={n}>{n} leads</option>
                       ))}
                     </select>
                   </div>
-                  <div>
+                  <div className="md:col-span-2">
                     <label className="block text-sm font-medium text-ice/70 mb-2 flex items-center gap-2">
-                      <Sparkles className="w-4 h-4 text-steel" />
-                      What we find
+                      <Briefcase className="w-4 h-4 text-steel" />
+                      Lead Type (select any)
                     </label>
+                    <div className="grid grid-cols-3 gap-3">
+                      {[
+                        { id: 'hiring', label: 'Hiring Posts', desc: 'Companies hiring freelancers/contractors' },
+                        { id: 'buyer', label: 'Freelancers Needed', desc: 'People/companies looking for freelancers' },
+                        { id: 'agency', label: 'Agencies Wanted', desc: 'People looking for an agency' },
+                      ].map(opt => {
+                        const checked = leadTypes.includes(opt.id);
+                        return (
+                          <button
+                            key={opt.id}
+                            type="button"
+                            onClick={() => {
+                              setLeadTypes(prev => checked ? prev.filter(t => t !== opt.id) : [...prev, opt.id]);
+                            }}
+                            className={`p-3 rounded-xl border text-left transition-all ${
+                              checked
+                                ? 'bg-sky-500/10 border-sky-500/40'
+                                : 'bg-navy/40 border-ocean/20 hover:border-ocean/40'
+                            }`}
+                          >
+                            <div className="flex items-center gap-2">
+                              <div className={`w-4 h-4 shrink-0 rounded border-2 flex items-center justify-center transition-colors ${
+                                checked ? 'border-sky-400 bg-sky-400' : 'border-steel/50'
+                              }`}>
+                                {checked && <svg className="w-3 h-3 text-navy" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="4"><path d="M5 13l4 4L19 7" strokeLinecap="round" strokeLinejoin="round"/></svg>}
+                              </div>
+                              <span className="text-sm font-semibold text-offwhite">{opt.label}</span>
+                            </div>
+                            <p className="text-[10px] text-ice/50 mt-1.5">{opt.desc}</p>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                  <div className="md:col-span-2">
                     <p className="text-xs text-ice/60 leading-relaxed">
-                      We will search LinkedIn posts for people looking to hire — remote, contract-basis and part-time opportunities, plus businesses with an active need globally. To find filtered leads, use <a href="/dashboard/hyper-agent/chat" className="text-cyan-400 underline hover:text-cyan-300">Hyperagent</a>.
+                      We search LinkedIn posts for buying signals matching your service — remote/contract hiring,
+                      people & companies looking for freelancers or agencies — filtered to your country, and
+                      deliver exactly the number of leads you ask for.
                     </p>
                   </div>
                   </>

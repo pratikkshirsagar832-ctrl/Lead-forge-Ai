@@ -2147,7 +2147,7 @@ async def run_linkedin_pipeline_fast(
 
         async def _run_job_filler(need: int) -> int:
             """Hiring-intent filler from live job postings (strong buying signal)."""
-            if need <= 0 or "hiring" not in lead_types:
+            if need <= 0 or ("hiring" not in lead_types and "buyer" not in lead_types):
                 return 0
             await _update_search(supabase, search_id, {
                 "progress_percent": 70,
@@ -2292,17 +2292,56 @@ async def run_linkedin_pipeline_fast(
                 logger.warning(f"[LinkedInPipeline:{search_id}] Wave deadline reached after {wave_no} waves")
                 break
             if raw_count_total >= raw_budget:
-                logger.info(
-                    f"[LinkedInPipeline:{search_id}] Apify raw budget reached "
-                    f"({raw_count_total}/{raw_budget}) — stopping waves"
-                )
-                break
+                # DYNAMIC BUDGET: if still short, expand budget by 50% and continue
+                remaining_needed = max_results - len(final_leads)
+                if remaining_needed > 0 and wave_no < MAX_WAVES:
+                    raw_budget = int(raw_budget * 1.5)
+                    logger.info(
+                        f"[LinkedInPipeline:{search_id}] Budget expanded to {raw_budget} "
+                        f"(still need {remaining_needed} leads)"
+                    )
+                else:
+                    logger.info(
+                        f"[LinkedInPipeline:{search_id}] Apify raw budget reached "
+                        f"({raw_count_total}/{raw_budget}) — stopping waves"
+                    )
+                    break
             wave_no += 1
             await _hunt_wave(wave_no, _next_wave_lanes(n_lanes, fetch_per_lane))
 
         # Final safety net: one last filler pass if somehow still short.
         if len(final_leads) < max_results:
             await _run_job_filler(max_results - len(final_leads))
+
+        # FINAL RELAXATION: if still short after all waves, do one more pass
+        # with relaxed gates (accept all lead types, lower score threshold).
+        # This ensures the user gets EXACTLY the count they requested.
+        if len(final_leads) < max_results:
+            remaining_needed = max_results - len(final_leads)
+            logger.info(
+                f"[LinkedInPipeline:{search_id}] Final relaxation pass: "
+                f"need {remaining_needed} more leads, relaxing gates"
+            )
+            # Collect ALL scored candidates from last wave (not just tier-filtered)
+            all_scored = [s for s in scored_w if s.get("linkedin_url")]
+            # Relax: accept any lead type, score >= 50 (down from 65)
+            for s in all_scored:
+                if len(final_leads) >= max_results:
+                    break
+                if (s.get("ai_score") or 0) < 50:
+                    continue
+                key = (s.get("linkedin_url") or "").split("?")[0].rstrip("/").lower()
+                if not key or key in chosen_urls or key in known_urls:
+                    continue
+                # Country gate still applies (don't violate user's location request)
+                if not _country_ok(s, "any", req_country_codes):
+                    continue
+                final_leads.append(s)
+                chosen_urls.add(key)
+            if final_leads:
+                logger.info(
+                    f"[LinkedInPipeline:{search_id}] Final relaxation: +{len(final_leads)} total"
+                )
 
         final_leads = final_leads[:overdeliver_cap]  # == max_results (exact count)
 

@@ -1556,9 +1556,11 @@ async def triage_candidates_async(
 
     SYSTEM = """You triage LinkedIn posts for a B2B lead-generation CRM. For each numbered post decide if the AUTHOR shows BUYING signal for the given service: they need it done, are hiring a freelancer/contractor/agency (remote/contract/part-time), ask for recommendations of providers, or describe a business problem needing this service.
 
-REJECT (do NOT keep): freelancers/agents SELLING their own services ("I offer", "available for", portfolio posts); pure content/tips/opinions/case-studies; job-seekers describing their own availability; students; non-English posts; companies hiring FULL-TIME ON-SITE employees.
+KEEP (always include): posts mentioning "hiring", "looking for", "need", "want", "seeking", "we're hiring", "urgent hiring", "freelance", "contract", "remote", "part-time", "join our team", "we are looking for", "join us"; posts from companies/individuals actively recruiting for roles related to the service niche; posts asking for recommendations of service providers.
 
-Keep only genuine prospective CLIENTS. Output strict JSON."""
+REJECT (do NOT keep): freelancers/agents SELLING their own services ("I offer", "available for", portfolio posts, "I'm a [service] specialist"); pure content/tips/opinions/case-studies; job-seekers describing their own availability; students; non-English posts.
+
+When in doubt, KEEP — better to pass a marginal lead than lose a genuine buyer. Output strict JSON."""
 
     USER_TMPL = """Service niche: {query}
 
@@ -2156,9 +2158,21 @@ async def run_linkedin_pipeline_fast(
             })
             job_queries = get_job_queries_for_niche(query)[: min(4, max(2, need))]
             added = 0
-            # Use the user's requested location when given (country filter
-            # below keeps only matching jobs); else fall back to global.
-            job_locations = [location] if (location or "").strip() else ["United States", "Remote"]
+            # Expand location for better coverage: user's location → major
+            # cities in that country → Remote (global). For India, try
+            # Bangalore/Mumbai/Delhi since LinkedIn job search is city-level.
+            raw_loc = (location or "").strip()
+            if raw_loc:
+                expanded = [raw_loc]
+                if "india" in raw_loc.lower():
+                    expanded.extend(["Bangalore", "Mumbai", "Delhi", "Remote"])
+                elif "united states" in raw_loc.lower():
+                    expanded.extend(["New York", "San Francisco", "Remote"])
+                else:
+                    expanded.append("Remote")
+                job_locations = expanded
+            else:
+                job_locations = ["United States", "Remote"]
             for job_loc in job_locations:
                 if added >= need:
                     break

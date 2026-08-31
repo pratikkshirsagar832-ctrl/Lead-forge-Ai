@@ -539,11 +539,13 @@ def run_job_search(
 
 
 def filter_jobs_by_work_type(jobs: list[dict], allowed_types: list[str]) -> list[dict]:
-    """Filter jobs to only include allowed work types (Remote, Part-time, Contract)."""
+    """Filter jobs to only include allowed work types (Remote, Part-time, Contract).
+    Jobs without a workType field are KEPT — they may still be relevant."""
     allowed = set(t.lower() for t in allowed_types)
     filtered = []
     for job in jobs:
         work_type = (job.get("workType") or "").lower()
-        if any(t in work_type for t in allowed):
+        # Keep jobs with no workType data (can't verify, might be relevant)
+        if not work_type or any(t in work_type for t in allowed):
             filtered.append(job)
     return filtered

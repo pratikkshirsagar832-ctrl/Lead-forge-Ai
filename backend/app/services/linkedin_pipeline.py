@@ -1597,6 +1597,18 @@ Return JSON: {{"keep": [post numbers showing buying/hiring intent]}}"""
     return kept
 
 
+def _job_country_ok(job: dict, req_country_codes: set[str]) -> bool:
+    """Does a job posting's location text match the requested countries?"""
+    loc = (job.get("location") or "").lower()
+    if not loc or "remote" in loc:
+        return True  # Remote — could be anywhere, allow
+    if any(name in loc for name, code in COUNTRY_NAME_TO_CODE.items() if code in req_country_codes):
+        return True
+    if any(city in loc for city, code in CITY_COUNTRY_HINTS.items() if code in req_country_codes):
+        return True
+    return True  # Unknown location — allow (cannot verify)
+
+
 def _country_ok(lead: dict, mode: str, req_country_codes: set[str] | None = None) -> bool:
     """Country gate. mode='any' → always OK.
     req_country_codes set → lead must match one of those countries
@@ -2129,7 +2141,10 @@ async def run_linkedin_pipeline_fast(
             })
             job_queries = get_job_queries_for_niche(query)[: min(4, max(2, need))]
             added = 0
-            for location in ("United States", "Remote"):
+            # Use the user's requested location when given (country filter
+            # below keeps only matching jobs); else fall back to global.
+            job_locations = [location] if (location or "").strip() else ["United States", "Remote"]
+            for location in job_locations:
                 if added >= need:
                     break
                 try:
@@ -2151,6 +2166,10 @@ async def run_linkedin_pipeline_fast(
                     continue
                 for jobs in job_lists:
                     filtered = filter_jobs_by_work_type(jobs, ["Remote", "Part-time", "Contract"])
+                    # Country filter: drop jobs whose location text clearly
+                    # doesn't match the user's requested country.
+                    if req_country_codes:
+                        filtered = [j for j in filtered if _job_country_ok(j, req_country_codes)]
                     logger.info(f"[LinkedInPipeline:{search_id}] job filler ({location}): {len(filtered)} remote/contract jobs")
                     for job in filtered:
                         if len(final_leads) >= overdeliver_cap or added >= need:

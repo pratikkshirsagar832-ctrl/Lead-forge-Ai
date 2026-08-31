@@ -1526,7 +1526,7 @@ TIER_FINAL = {"min_score": 10, "country": "any"}   # last resort
 TIERS = [TIER_1, TIER_FINAL]
 
 # ── Persistent guarantee loop limits ──────────────────────────────────────
-MAX_WAVES = 3                 # hunt up to 3 waves (down from 5 — saves Apify credits)
+MAX_WAVES = 4                 # hunt up to 4 waves (down from 5 — saves Apify credits)
 WAVE_DEADLINE_SECONDS = 480   # never hunt longer than 8 minutes total
 TRIAGE_BATCH_SIZE = 20        # posts per cheap triage call
 TRIAGE_CONCURRENCY = 12
@@ -2052,8 +2052,8 @@ async def run_linkedin_pipeline_fast(
         n_lanes = min(max_results, 3) if max_results >= 10 else (2 if max_results >= 5 else 1)
         lanes_check, _ = split_lane_phrases(pool, n_lanes)
         n_lanes = max(1, len(lanes_check))
-        # raw_budget: tight cap — count×2 items (down from ×4), max 60
-        raw_budget = min(max_results * 2, 60)
+        # raw_budget: generous cap — count×3 items, max 90
+        raw_budget = min(max_results * 3, 90)
         fetch_per_lane = max(5, min(10, -(-raw_budget // n_lanes)))
 
         logger.info(
@@ -2069,6 +2069,7 @@ async def run_linkedin_pipeline_fast(
         seen_post_ids: set[str] = set()
         raw_count_total = 0
         all_skipped = 0
+        last_scored_candidates: list[dict] = []  # track scored candidates for final relaxation
 
         async def _run_wave_async(lane_list: list[list[str]]) -> list[dict]:
             results = await asyncio.gather(*[
@@ -2158,7 +2159,7 @@ async def run_linkedin_pipeline_fast(
             # Use the user's requested location when given (country filter
             # below keeps only matching jobs); else fall back to global.
             job_locations = [location] if (location or "").strip() else ["United States", "Remote"]
-            for location in job_locations:
+            for job_loc in job_locations:
                 if added >= need:
                     break
                 try:
@@ -2167,7 +2168,7 @@ async def run_linkedin_pipeline_fast(
                             asyncio.to_thread(
                                 run_job_search,
                                 query=q,
-                                location=location,
+                                location=job_loc,
                                 time_range="7d",
                                 max_jobs=min(need * 2, 20),
                             ),
@@ -2176,7 +2177,7 @@ async def run_linkedin_pipeline_fast(
                         for q in job_queries
                     ])
                 except Exception as e:
-                    logger.warning(f"[LinkedInPipeline:{search_id}] job filler ({location}) failed: {e}")
+                    logger.warning(f"[LinkedInPipeline:{search_id}] job filler ({job_loc}) failed: {e}")
                     continue
                 for jobs in job_lists:
                     filtered = filter_jobs_by_work_type(jobs, ["Remote", "Part-time", "Contract"])
@@ -2184,7 +2185,7 @@ async def run_linkedin_pipeline_fast(
                     # doesn't match the user's requested country.
                     if req_country_codes:
                         filtered = [j for j in filtered if _job_country_ok(j, req_country_codes)]
-                    logger.info(f"[LinkedInPipeline:{search_id}] job filler ({location}): {len(filtered)} remote/contract jobs")
+                    logger.info(f"[LinkedInPipeline:{search_id}] job filler ({job_loc}): {len(filtered)} remote/contract jobs")
                     for job in filtered:
                         if len(final_leads) >= overdeliver_cap or added >= need:
                             break
@@ -2263,6 +2264,7 @@ async def run_linkedin_pipeline_fast(
             # STAGE 2 — full semantic scoring on the best survivors only.
             survivors = promising[:DEEP_SCORE_CAP]
             scored_w = await qualify_leads_with_ai_async(survivors, query, openai_client)
+            last_scored_candidates.extend(scored_w)  # track for final relaxation
             if scored_w:
                 for sw in scored_w:
                     logger.info(
@@ -2323,7 +2325,7 @@ async def run_linkedin_pipeline_fast(
                 f"need {remaining_needed} more leads, relaxing gates"
             )
             # Collect ALL scored candidates from last wave (not just tier-filtered)
-            all_scored = [s for s in scored_w if s.get("linkedin_url")]
+            all_scored = [s for s in last_scored_candidates if s.get("linkedin_url")]
             # Relax: accept any lead type, score >= 50 (down from 65)
             for s in all_scored:
                 if len(final_leads) >= max_results:

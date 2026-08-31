@@ -298,6 +298,7 @@ LEAD_COUNT_QUESTION
 
 Then list the options:
 📊 Select one:
+- 3 leads (Tiny sample)
 - 5 leads (Quick sample)
 - 10 leads (Small batch)
 - 20 leads (Standard — recommended)
@@ -616,6 +617,7 @@ class HyperAgentService:
                 "action": "lead_count",
                 "data": {
                     "options": [
+                        {"id": "3", "label": "3 leads", "description": "Tiny sample — try before you commit"},
                         {"id": "5", "label": "5 leads", "description": "Quick sample — test the waters"},
                         {"id": "10", "label": "10 leads", "description": "Small batch — good starting point"},
                         {"id": "20", "label": "20 leads", "description": "Standard — recommended for most users"},
@@ -1184,63 +1186,98 @@ If a field is not mentioned, use null.""",
         qualified = [q for q in qualified if not _is_seller(q)]
         logger.info(f"[HyperAgent] Seller gate kept {len(qualified)} non-provider leads")
 
-        # Lead-type preference gate: if the user only wants certain kinds of
-        # leads (hiring / freelancer-seekers / agency-seekers), filter here.
-        # This fixes: an agency user should NEVER get hiring posts.
+        # ── Lead-type preference gate (STRICT) ─────────────────────────
+        # If the user picked specific lead types (hiring / freelancer /
+        # agency), ONLY those types may be delivered — at every stage
+        # (initial qualify, triage fallback, fill). No mixing.
         lead_types = context.get("lead_types") or []
-        if lead_types:
-            want_hiring = "hiring" in lead_types
-            want_freelancer = "freelancer" in lead_types
-            want_agency = "agency" in lead_types
+        want_hiring = "hiring" in lead_types
+        want_freelancer = "freelancer" in lead_types
+        want_agency = "agency" in lead_types
+        has_type_filter = bool(lead_types)
 
-            def _type_ok(q: dict) -> bool:
-                lt = (q.get("lead_type") or "").lower()
-                if lt == "hiring":
-                    return want_hiring
-                if lt == "agency":
-                    return want_agency
-                # explicit_need / problem_awareness / research — seekers
-                return want_freelancer or want_agency
+        def _type_ok(q: dict) -> bool:
+            lt = (q.get("lead_type") or "").lower()
+            if lt == "hiring":
+                return want_hiring
+            if lt == "agency":
+                return want_agency
+            # explicit_need / problem_awareness / research / unknown /
+            # freelancer — generic service-seekers belong to the
+            # "looking for freelancers" bucket only (NEVER agency).
+            return want_freelancer
 
-            qualified = [q for q in qualified if _type_ok(q)]
+        def _type_from_text(text: str) -> str:
+            t = (text or "").lower()
+            if "agency" in t:
+                return "agency"
+            if any(k in t for k in ("hiring", "hire ", "vacancy", "position", "recruit")):
+                return "hiring"
+            if "freelance" in t:
+                return "freelancer"
+            # "looking for", "need", "we need", "recommend" — project-based seeker
+            return "freelancer"
+
+        def _matches_type(q: dict) -> bool:
+            if not has_type_filter:
+                return True
+            lt = (q.get("lead_type") or "").lower()
+            if lt in ("", "unknown", "research"):
+                lt = _type_from_text(q.get("post_content") or "")
+                q["lead_type"] = lt
+            return _type_ok(q)
+
+        # ── Location gate (STRICT) ─────────────────────────────────────
+        # If the user asked for a specific country/city, leads with a KNOWN
+        # mismatching location are rejected. Leads with NO location data are
+        # allowed through (cannot verify — and the scrape queries are already
+        # scoped to the requested location). This prevents dumping leads from
+        # clearly wrong countries while never zeroing out the result set.
+        has_location_filter = bool(req_country_codes or req_city)
+
+        def _location_ok(q: dict) -> bool:
+            if not has_location_filter:
+                return True
+            cc = (q.get("country_code") or "").strip().upper()
+            loc = (q.get("location") or "").strip()
+            if not cc and not loc:
+                return True  # unknown location — cannot verify, allow
+            return bool(q.get("location_match"))
+
+        qualified = [q for q in qualified if _matches_type(q) and _location_ok(q)]
+        logger.info(f"[HyperAgent] Type+location gate kept {len(qualified)} leads")
 
         # Sort by score
         qualified.sort(key=lambda x: x.get("score", 0), reverse=True)
 
-        # If the user requested a specific location, keep only location-matching
-        # leads first; relax to any allowed-country leads only if we fall short.
         requested_count = int(context.get("count") or 20)
-        if req_country_codes or req_city:
-            loc_matched = [q for q in qualified if q.get("location_match")]
-            if len(loc_matched) >= requested_count:
-                qualified = loc_matched
-            else:
-                qualified = loc_matched + [q for q in qualified if not q.get("location_match")]
 
-        # If we have fewer than requested, run an AI triage pass on the
-        # remaining authors instead of blindly accepting them. Location
-        # matches are prioritized in the triage order.
+        # ── Triage fallback — STRICT gates applied to triage output ────
         if len(qualified) < requested_count:
             qualified_urls = {l.get("linkedin_url", "").lower() for l in qualified}
             remaining = [
                 a for a in authors
                 if a.get("linkedin_url", "").lower() not in qualified_urls
             ]
+            # Only candidates that can still pass the type + location gates
+            remaining = [a for a in remaining if _matches_type(a) and _location_ok(a)]
             remaining.sort(key=lambda a: (a.get("location_match") or False, a.get("engagement", {}).get("likes", 0)), reverse=True)
             for i in range(0, len(remaining), 25):
                 batch = remaining[i:i+25]
                 batch_qualified = self._ai_triage_batch(batch, context)
-                qualified.extend(batch_qualified)
+                qualified.extend([q for q in batch_qualified if _matches_type(q) and _location_ok(q)])
+                if len(qualified) >= requested_count:
+                    break
             qualified.sort(key=lambda x: (x.get("location_match") or False, x.get("score", 0)), reverse=True)
 
-        # FILL TO EXACT COUNT: if still short of what the user asked for,
-        # promote the best remaining candidates as research leads so the
-        # user ALWAYS gets exactly the requested number (never fewer).
-        if len(qualified) < requested_count and authors:
+        # ── Fill to exact count — ONLY gate-passing candidates ─────────
+        # Never pollute with wrong type/location just to hit the number.
+        if len(qualified) < requested_count:
             qualified_urls = {l.get("linkedin_url", "").lower() for l in qualified}
             remaining = [
                 a for a in authors
                 if a.get("linkedin_url", "").lower() not in qualified_urls
+                and _matches_type(a) and _location_ok(a)
             ]
             remaining.sort(key=lambda a: (a.get("location_match") or False, a.get("engagement", {}).get("likes", 0)), reverse=True)
             for author in remaining:
@@ -1249,13 +1286,17 @@ If a field is not mentioned, use null.""",
                 author = dict(author)
                 author["score"] = 40
                 author["is_lead"] = True
-                author["lead_type"] = "research"
+                author["lead_type"] = author.get("lead_type") or _type_from_text(author.get("post_content") or "")
                 author["work_type"] = "unknown"
                 author["evidence_strength"] = "moderate"
                 author["reason"] = "Filled to your requested count — strong engagement, relevant to your service"
                 author["outreach_angle"] = ""
                 qualified.append(author)
-            logger.info(f"[HyperAgent] Filled {min(requested_count, len(authors))} leads to exactly {requested_count} (triage+fill)")
+            if len(qualified) < requested_count:
+                logger.warning(
+                    f"[HyperAgent] Only {len(qualified)}/{requested_count} leads passed "
+                    f"type={lead_types or 'any'} location={context.get('location', 'any')} gates"
+                )
 
         return qualified[:min(requested_count, 50)]
 

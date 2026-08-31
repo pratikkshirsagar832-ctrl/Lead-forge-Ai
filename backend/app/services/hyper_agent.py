@@ -411,16 +411,16 @@ WORKFLOW — always follow these steps in order:
 HARD RULES (never violate):
 - R1: A company/owner HIRING a freelancer/contractor/agency on a REMOTE, CONTRACT or PART-TIME basis = STRONG LEAD.
 - R2: A company hiring a FULL-TIME ON-SITE employee = NOT a lead (is_lead=false). They are building a payroll team, not buying your service.
-- R3: The author SELLING their own services ("I'm available", "open to projects", "seeking contract work", "DM me for work", "I offer X", "my services include") = NEVER a lead, regardless of how well the post matches the niche.
+- R3: The author SELLING their own services ("I'm available", "open to projects", "seeking contract work", "DM me for work", "I offer X", "my services include", "we specialize in", "white-label", "outsourcing partner", "extended development partner") = NEVER a lead, regardless of how well the post matches the niche.
 - R4: A RECRUITER/STAFFING agency posting on behalf of clients = NOT a lead.
 - R5: Job seekers looking for a role for themselves = NOT a lead.
 - R6: Pure content/thought-leadership ("5 tips", "why you need", "trends", "case study", "opinion") = NOT a lead even if it scores high on service_match.
 - R7: NON-ENGLISH posts (Spanish, German, French, Hindi, Arabic, etc.) = NOT a lead (is_lead=false). We only serve English-speaking markets. If the post is mostly in another language, reject it even if it describes hiring.
 
 WHO IS THE SUBJECT? (the single most important question)
-🚫 SELLING (reject): "I'm available for X", "I'm open to remote work", "I'm seeking projects", "Looking to collaborate", "I offer X", "DM me for X", "I provide X", "My services include", "I build X", "I'm a freelance X looking for clients", "Open to contract work", "Taking new clients". Headline reads "Freelance X", "X Developer/Designer" and the post promotes their availability, portfolio, or services.
+🚫 SELLING (reject): "I'm available for X", "I'm open to remote work", "I'm seeking projects", "Looking to collaborate", "I offer X", "DM me/us for X", "I provide X", "My services include", "We specialize in", "white-label", "outsourcing partner", "extended development partner", "link in bio", "We're looking for agency partners/referrals", "We help businesses with X", "book a call with us". Headline reads "Freelance X", "X Developer/Designer", "X Studio", "X Agency" and the post promotes their availability, portfolio, or services.
 ✅ BUYING (accept): "We're looking for a developer", "I need a website", "Looking for someone to build our X", "We are hiring a freelance X for a project", "Need a designer on contract", "Anyone know a good agency?", "Recommendations for X services?", "We're looking for the right partners to build our marketing", "Seeking agencies & marketers to work with", or a business describing a problem it needs solved (traffic drop, no website, bad conversions, launching a product).
-⚠️ "Looking for partners/agencies/marketers/freelancers" = the company is SOURCING suppliers = BUYER. Only "we offer X / I provide X / we help businesses with X" is a SELLER.
+⚠️ "Looking for partners/agencies/marketers/freelancers" = the company is SOURCING suppliers = BUYER — BUT ONLY when the author is an END CLIENT (non-provider). A service provider (agency/studio/consultancy) hunting for partners/white-label/referrals is SELLING its services = NOT a lead.
 ⚠️ RECRUITER EXCEPTION: A staffing agency placing candidates at THIRD-PARTY clients = reject. BUT a company/firm saying "We are building our pool of experts", "Experts required for our projects", "Building a team of freelancers" = they are BUYING expertise for their own work = ACCEPT (lead_type="hiring").
 
 TRAP CASES — the mistakes to avoid:
@@ -433,7 +433,8 @@ TRAP CASES — the mistakes to avoid:
 - Trap 7: "Anyone else seeing traffic drops?" (no business context, no "for my business") — passive/research, low score (40-55) or reject if purely casual.
 - Trap 8: A COMPANY/AGENCY/FIRM says "We are building our pool of experts", "Service Line Experts Required", "Looking for experts to join our project roster", "Building a team of freelancers for client projects" — this is a BUYER of talent/expertise. They are not selling their own services; they are recruiting service providers to work FOR them on projects. is_lead=true, lead_type="hiring". (Exception to the recruiter rule: a firm hiring experts for ITS OWN projects is a buyer; only staffing agencies that place candidates at THIRD-PARTY clients are rejected.)
 - Trap 9: "We fired our agency and now use X" — if the post is about replacing a service with a tool, they are NOT currently buying; is_lead=false. But if they say "we fired our agency, looking for a replacement" → buyer.
-- Trap 10: "We're looking for partners / looking for the right partners / seeking agencies & marketers to work with / building our marketing engine" — the author is a COMPANY SEEKING service providers = BUYER. is_lead=true, lead_type="hiring". NEVER classify "looking for partners/marketers/agencies" as a seller — they are sourcing suppliers, not offering services. ONLY if the post says "we offer X", "I provide X", "we help businesses with X" is it a seller.
+- Trap 10: "We're looking for partners / looking for the right partners / seeking agencies & marketers to work with / building our marketing engine" — if the AUTHOR IS A NON-PROVIDER COMPANY (end client seeking suppliers) = BUYER. is_lead=true, lead_type="hiring". BUT if the author is a SERVICE PROVIDER (agency/studio/consultancy/freelancer) posting "looking for agency partners / white-label partners / outsourcing partners / referrals / international partners / let's collaborate / DM us about partnership" — they are SELLING their services to other agencies = NEVER a lead (is_lead=false). NEVER classify a service provider's partner-hunting as a buyer.
+- Trap 11: "DM us", "link in bio", "our doors can't handle the demand", "we'll let you skip the queue", "we specialize in", "our services include", "we help businesses with X" — self-promotion = SELLER, is_lead=false.
 
 SCORING (six dimensions, then total):
 - service_match (0-25): direct mention of the service or its core problem = 25; adjacent problem (traffic drop for SEO, slow site for web dev) = 20; general growth/marketing = 15; vague = 10; unrelated = 0.
@@ -1167,12 +1168,24 @@ If a field is not mentioned, use null.""",
         # post is CLEARLY promoting their own services for hire.
         SELLER_POST_MARKERS = (
             "i offer", "we offer", "i provide services", "we provide services",
-            "dm me for", "book a call", "open to work", "open for hire",
+            "dm me for", "dm us", "book a call", "open to work", "open for hire",
             "available for freelance", "available for work",
             "taking new clients", "need clients",
             "check out my portfolio", "see my portfolio",
             "i'm a freelance", "im a freelance", "i am a freelance",
             "my agency is", "our agency is",
+            # Self-promotion / white-label / partnership-hunting service providers
+            "link in bio", "skip the queue", "come knock on our door",
+            "we specialize in", "we specialise in",
+            "our services", "our service includes",
+            "we can work as your", "extended development partner",
+            "we'd love to explore", "we would love to explore",
+            "white-label", "whitelabel", "white label",
+            "outsourcing partner", "outsourcing & technology partner",
+            "looking for international agency partners",
+            "agency partnerships", "long-term partnership",
+            "we help businesses with", "we help brands",
+            "get in touch with us", "reach out to us", "partner with us",
         )
 
         def _is_seller(q: dict) -> bool:

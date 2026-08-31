@@ -1272,9 +1272,37 @@ If a field is not mentioned, use null.""",
             verified = []
             for i in range(0, len(qualified), 25):
                 batch = qualified[i:i+25]
-                verified.extend(self._ai_verify_buyers(batch))
+                verified.extend(self._ai_verify_buyers(batch, context))
             logger.info(f"[HyperAgent] Buyer verification: kept {len(verified)}/{len(qualified)} genuine buyers")
             qualified = verified
+
+        # ── CODE-LEVEL R2/R4 HARD CHECKS (post-verification net) ───────
+        # The AI can still miss full-time/on-site payroll posts and
+        # recruiter/job-board posts. These substring checks are exact.
+        def _is_fulltime_onsite(q: dict) -> bool:
+            t = ((q.get("post_content") or "") + " " + (q.get("headline") or "")).lower()
+            if not any(k in t for k in ("full-time", "full time", "fulltime")):
+                return False
+            return any(k in t for k in ("on-site", "on site", "work from office", "in-office", "in office", "in-person", "in person"))
+
+        def _is_recruiter_jobboard(q: dict) -> bool:
+            t = ((q.get("post_content") or "") + " " + (q.get("headline") or "")).lower()
+            return any(k in t for k in (
+                "send resumes", "send your resume", "send your cv", "send cv",
+                "explore opportunities", "apply here", "apply now",
+                "we are currently engaging with professionals",
+                "executive network", "multiple openings",
+                "recruitment", "staffing agency", "job board", "recruiter",
+                "career opportunities within",
+            ))
+
+        def _hard_gate_ok(q: dict) -> bool:
+            return not _is_fulltime_onsite(q) and not _is_recruiter_jobboard(q)
+
+        if qualified:
+            before = len(qualified)
+            qualified = [q for q in qualified if _hard_gate_ok(q)]
+            logger.info(f"[HyperAgent] R2/R4 hard gate: kept {len(qualified)}/{before}")
 
         # ── Lead-type preference gate (STRICT) ─────────────────────────
         # If the user picked specific lead types (hiring / freelancer /
@@ -1363,9 +1391,9 @@ If a field is not mentioned, use null.""",
             for i in range(0, len(remaining), 25):
                 batch = remaining[i:i+25]
                 batch_qualified = self._ai_triage_batch(batch, context)
-                batch_qualified = [q for q in batch_qualified if _matches_type(q) and _location_ok(q)]
+                batch_qualified = [q for q in batch_qualified if _matches_type(q) and _location_ok(q) and _hard_gate_ok(q)]
                 # Triage survivors must ALSO pass the buyer-verification audit
-                batch_qualified = self._ai_verify_buyers(batch_qualified)
+                batch_qualified = self._ai_verify_buyers(batch_qualified, context)
                 qualified.extend(batch_qualified)
                 if len(qualified) >= requested_count:
                     break
@@ -1386,9 +1414,9 @@ If a field is not mentioned, use null.""",
             ]
             remaining.sort(key=lambda a: (a.get("location_match") or False, a.get("engagement", {}).get("likes", 0)), reverse=True)
             # AI-verify the fill pool (batched); only verified buyers may fill
-            verified_pool = self._ai_verify_buyers(remaining[: max(requested_count * 3, 25)])
+            verified_pool = self._ai_verify_buyers(remaining[: max(requested_count * 3, 25)], context)
             verified_urls = {v.get("linkedin_url", "").lower() for v in verified_pool}
-            remaining = [a for a in remaining if a.get("linkedin_url", "").lower() in verified_urls]
+            remaining = [a for a in remaining if a.get("linkedin_url", "").lower() in verified_urls and _hard_gate_ok(a)]
             for author in remaining:
                 if len(qualified) >= requested_count:
                     break
@@ -1478,7 +1506,7 @@ Return ONLY a JSON array of indices of KEEP posts, e.g. [0, 3, 5]. If none, retu
                 accepted.append(author)
         return accepted
 
-    def _ai_verify_buyers(self, batch: list[dict]) -> list[dict]:
+    def _ai_verify_buyers(self, batch: list[dict], context: dict | None = None) -> list[dict]:
         """Second-opinion SELLER/BUYER audit for already-qualified leads.
 
         The main qualification prompt can be fooled by sophisticated
@@ -1489,13 +1517,22 @@ Return ONLY a JSON array of indices of KEEP posts, e.g. [0, 3, 5]. If none, retu
         if not batch:
             return []
 
-        verify_prompt = """You are a ruthless lead-auditor. For EACH post below, decide: is the author a SELLER or a BUYER?
+        niche = ""
+        if context:
+            niche = ", ".join(_normalize_terms(context.get("niche", "")))
 
-SELLER = a service provider promoting its OWN services: agencies, studios, consultancies, outsourcing firms, freelancers, software houses, or founders of such firms. SELLER signals: "we help businesses", "our services include", "we specialize in", "we provide", "what we do", service lists (→, •), "let's talk / let's have a conversation", "DM us", "book a call", "reach out to us", website links, "partner with us", "white-label", "outsourcing partner", "we deliver". A post that lists CLIENT pain points and then offers its solution is PITCH COPY = SELLER. A provider looking for agency partners/referrals = SELLER.
+        verify_prompt = f"""You are a ruthless lead-auditor. The user's SERVICE: {niche or 'unknown'}. For EACH post below, decide: is the author a genuine BUYER of THAT service — or something else?
 
-BUYER = an END CLIENT (a company or person) that needs the service done for its OWN business: "we're looking for", "I need", "hiring a freelance X", "need a designer", "recommendations for X?", "our traffic dropped / our site is slow", "we fired our agency, looking for a replacement".
+REJECT (not a buyer):
+- SELLER = a service provider promoting its OWN services: agencies, studios, consultancies, outsourcing firms, freelancers, software houses, or founders of such firms. Signals: "we help businesses", "our services include", "we specialize in", "we provide", "what we do", service lists (→, •), "let's talk / let's have a conversation", "DM us", "book a call", "reach out to us", website links, "partner with us", "white-label", "outsourcing partner", "we deliver". A post that lists CLIENT pain points then offers its solution is PITCH COPY = SELLER. A provider looking for agency partners/referrals = SELLER.
+- FULL-TIME / ON-SITE job posts = NOT buyers: "full-time", "work from office", "on-site", "in office", "in-person" — these are PAYROLL hires, not service buying.
+- RECRUITERS / STAFFING / JOB BOARDS = NOT buyers: "send resumes", "send your cv", "explore opportunities", "apply here", "we are currently engaging with professionals", "executive network", "multiple openings", "recruitment", "staffing", "job board".
+- OFF-NICHE job posts: hiring for roles UNRELATED to {niche or 'the user\'s service'} (e.g. executives, embedded systems, finance, marketing generalists) = reject.
+- Career/life updates, content, thought leadership, job seekers = reject.
 
-Return ONLY a JSON array of indices of BUYERS, e.g. [0, 2]. Reject every seller. When in doubt, reject."""
+KEEP only genuine BUYERS: an end client actively sourcing {niche or 'the service'} for its own business — "we're looking for", "I need", "hiring a freelance X", "need a designer", "recommendations for X?", "our traffic dropped / our site is slow", "we fired our agency, looking for a replacement".
+
+Return ONLY a JSON array of indices of BUYERS, e.g. [0, 2]. Reject everything else. When in doubt, reject."""
 
         batch_text = "\n\n".join(
             f"[{i}] {b.get('name', '')} | {b.get('headline', '')} | {b.get('post_content', '')[:1000]}"

@@ -85,9 +85,6 @@ if final and final.get('search', {}).get('status') == 'completed':
         print(f"   post_url: {str(l.get('post_url',''))[:80]}")
         print()
 
-# Cleanup test user
-try:
-    httpx.delete(URL + '/auth/v1/admin/users/' + user_id, headers=H_ADMIN, timeout=30)
-    print("test user cleaned up")
-except Exception as e:
-    print("cleanup skipped:", e)
+# Keep test user + search in DB so we can audit actual posts afterwards
+print("\nSearch ID for audit:", search_id)
+print("Test user kept for audit:", email, "|", password)

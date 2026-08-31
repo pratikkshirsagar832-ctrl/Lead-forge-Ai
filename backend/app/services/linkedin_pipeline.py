@@ -1556,9 +1556,9 @@ async def triage_candidates_async(
 
     SYSTEM = """You triage LinkedIn posts for a B2B lead-generation CRM. For each numbered post decide if the AUTHOR shows BUYING signal for the given service: they need it done, are hiring a freelancer/contractor/agency (remote/contract/part-time), ask for recommendations of providers, or describe a business problem needing this service.
 
-KEEP (always include): posts mentioning "hiring", "looking for", "need", "want", "seeking", "we're hiring", "urgent hiring", "freelance", "contract", "remote", "part-time", "join our team", "we are looking for", "join us"; posts from companies/individuals actively recruiting for roles related to the service niche; posts asking for recommendations of service providers.
+KEEP (always include): posts mentioning "hiring", "looking for", "need", "want", "seeking", "we're hiring", "urgent hiring", "freelance", "contract", "remote", "part-time", "join our team", "we are looking for", "join us"; posts from companies/individuals actively recruiting for roles related to the service niche; posts asking for recommendations of service providers; posts looking for agency partners, need an agency, seeking agency help, looking for a team/company to handle this, need someone to manage/build/create this; posts from businesses needing external help with their service niche.
 
-REJECT (do NOT keep): freelancers/agents SELLING their own services ("I offer", "available for", portfolio posts, "I'm a [service] specialist"); pure content/tips/opinions/case-studies; job-seekers describing their own availability; students; non-English posts.
+REJECT (do NOT keep): freelancers/agents SELLING their own services ("I offer", "available for", portfolio posts, "I'm a [service] specialist", "we are a [service] agency"); pure content/tips/opinions/case-studies; job-seekers describing their own availability; students; non-English posts.
 
 When in doubt, KEEP — better to pass a marginal lead than lose a genuine buyer. Output strict JSON."""
 
@@ -1749,7 +1749,7 @@ HARD RULES (never violate):
 
 WHO IS THE SUBJECT? (the single most important question)
 SELLING (reject): "I'm available for X", "I'm open to remote work", "I'm seeking projects", "Looking to collaborate", "I offer X", "DM me for X", "I provide X", "My services include", "I build X". Headline reads "Freelance X" and the post promotes their availability.
-BUYING (accept): "We're looking for a developer", "I need a website", "Looking for someone to build our X", "We are hiring a freelance X for a project", "Need a designer on contract", "Anyone know a good agency?", "Recommendations for X services?", or a business describing a problem it needs solved (traffic drop, no website, bad conversions, launching a product).
+BUYING (accept): "We're looking for a developer", "I need a website", "Looking for someone to build our X", "We are hiring a freelance X for a project", "Need a designer on contract", "Anyone know a good agency?", "Recommendations for X services?", "Need an agency to handle our X", "Looking for agency partners", "Seeking a team to build/manage/create this", or a business describing a problem it needs solved (traffic drop, no website, bad conversions, launching a product).
 "Looking for partners/agencies/marketers/freelancers" = SOURCING suppliers = BUYER.
 RECRUITER EXCEPTION: staffing agency placing candidates at THIRD-PARTY clients = reject. BUT a firm saying "Experts required for our projects" = BUYING expertise = ACCEPT (lead_type="hiring").
 
@@ -1764,7 +1764,7 @@ SCORING (six dimensions, then total):
 lead_score = sum (0-100).
 TIERS: 85+ HOT, 70-84 WARM, 40-69 POTENTIAL, 25-39 BORDERLINE, <25 NOT a lead.
 
-CONSISTENCY: is_lead=true requires lead_score>=25 AND service_match>=10. hiring+full_time_onsite => is_lead=false. agency/irrelevant => is_lead=false.
+CONSISTENCY: is_lead=true requires lead_score>=25 AND service_match>=10. hiring+full_time_onsite => is_lead=false. irrelevant => is_lead=false.
 
 OUTREACH_ANGLE: reference a SPECIFIC detail from their post/company; never generic; 1 sentence under 25 words.
 

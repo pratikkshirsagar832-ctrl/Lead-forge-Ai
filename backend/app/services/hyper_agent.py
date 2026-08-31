@@ -1063,7 +1063,7 @@ If a field is not mentioned, use null.""",
                 "linkedin_url": author_url,
                 "post_url": _extract_post_url(item),
                 "profile_picture_url": self._extract_avatar(author),
-                "post_content": post_content[:200],
+                "post_content": post_content[:1200],
                 "engagement": {
                     "likes": engagement.get("likes", 0),
                     "comments": engagement.get("comments", 0),
@@ -1126,7 +1126,7 @@ If a field is not mentioned, use null.""",
                     "linkedin_url": author_url,
                     "post_url": _extract_post_url(item),
                     "profile_picture_url": self._extract_avatar(author),
-                    "post_content": post_content[:200],
+                    "post_content": post_content[:1200],
                     "engagement": {
                         "likes": engagement.get("likes", 0),
                         "comments": engagement.get("comments", 0),
@@ -1320,8 +1320,8 @@ If a field is not mentioned, use null.""",
                 a for a in authors
                 if a.get("linkedin_url", "").lower() not in qualified_urls
             ]
-            # Only candidates that can still pass the type + location gates
-            remaining = [a for a in remaining if _matches_type(a) and _location_ok(a)]
+            # Only candidates that can still pass the type + location + relevance gates
+            remaining = [a for a in remaining if _matches_type(a) and _location_ok(a) and _relevant(a)]
             remaining.sort(key=lambda a: (a.get("location_match") or False, a.get("engagement", {}).get("likes", 0)), reverse=True)
             for i in range(0, len(remaining), 25):
                 batch = remaining[i:i+25]
@@ -1332,13 +1332,20 @@ If a field is not mentioned, use null.""",
             qualified.sort(key=lambda x: (x.get("location_match") or False, x.get("score", 0)), reverse=True)
 
         # ── Fill to exact count — ONLY gate-passing candidates ─────────
-        # Never pollute with wrong type/location just to hit the number.
+        # Never pollute with wrong type/location/relevance just to hit the
+        # number. A filled lead must mention the service keyword too.
+        def _relevant(a: dict) -> bool:
+            if not relevance_kws:
+                return True
+            text = ((a.get("post_content") or "") + " " + (a.get("headline") or "")).lower()
+            return any(kw in text for kw in relevance_kws)
+
         if len(qualified) < requested_count:
             qualified_urls = {l.get("linkedin_url", "").lower() for l in qualified}
             remaining = [
                 a for a in authors
                 if a.get("linkedin_url", "").lower() not in qualified_urls
-                and _matches_type(a) and _location_ok(a)
+                and _matches_type(a) and _location_ok(a) and _relevant(a)
             ]
             remaining.sort(key=lambda a: (a.get("location_match") or False, a.get("engagement", {}).get("likes", 0)), reverse=True)
             for author in remaining:
@@ -1381,6 +1388,9 @@ TRAPS:
 - "Freelance X available for remote projects" = SELLER, reject it.
 - A firm "building our pool of experts / experts required for our projects" = BUYER of expertise, keep it.
 - "Looking for partners/agencies/marketers to work with" = sourcing suppliers = BUYER, keep it.
+- WHITE-LABEL / OUTSOURCING HUNTERS: "white-label partner", "outsourcing partner", "extended development partner", "looking for international agency partners", "we can work as your X partner", "agency partnerships" = a SERVICE PROVIDER selling itself = SELLER, reject.
+- SELF-PROMO: "DM us", "link in bio", "we specialize in", "our services", "we help growing businesses", "skip the queue" = SELLER, reject.
+- CAREER/LIFE UPDATES: "I've joined X", "appointed as", "new role", "completed my internship", "milestones worth celebrating", "proud to share" = NOT a buyer, reject.
 - Full-time on-site hiring = reject. Non-English posts = reject. Content/tips = reject.
 
 When in doubt, REJECT — better to return fewer, higher-quality leads.
@@ -1388,7 +1398,7 @@ When in doubt, REJECT — better to return fewer, higher-quality leads.
 Return ONLY a JSON array of indices of KEEP posts, e.g. [0, 3, 5]. If none, return []."""
 
         batch_text = "\n\n".join(
-            f"[{i}] {b.get('name', '')} | {b.get('headline', '')} | {b.get('post_content', '')[:300]}"
+            f"[{i}] {b.get('name', '')} | {b.get('headline', '')} | {b.get('post_content', '')[:1000]}"
             for i, b in enumerate(batch)
         )
 

@@ -2194,7 +2194,9 @@ async def run_linkedin_pipeline_fast(
                     logger.warning(f"[LinkedInPipeline:{search_id}] job filler ({job_loc}) failed: {e}")
                     continue
                 for jobs in job_lists:
-                    filtered = filter_jobs_by_work_type(jobs, ["Remote", "Part-time", "Contract"])
+                    # Accept ALL jobs — work type filter is unreliable for
+                    # India locations. Country filter below handles quality.
+                    filtered = jobs
                     # Country filter: drop jobs whose location text clearly
                     # doesn't match the user's requested country.
                     if req_country_codes:

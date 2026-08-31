@@ -1651,26 +1651,29 @@ def _type_ok(lead: dict, allowed_types: set[str] | None) -> bool:
     return lead.get("lead_type") in allowed_types
 
 
+# Lead type mapping: UI selection → AI lead_type values
+_LEAD_TYPE_MAP = {
+    # "buyer" = people/companies needing freelancers — includes
+    # contract/freelance hiring posts (a company hiring a freelance
+    # designer IS a freelancer-need).
+    "buyer": ["explicit_need", "problem_awareness", "research", "hiring"],
+    "agency": ["agency"],
+    "hiring": ["hiring"],
+}
+
+
 def tier_filter(scored: list[dict], lead_types: list[str], tier: dict, req_country_codes: set[str] | None = None) -> list[dict]:
     """Filter scored leads by a relaxation tier.
 
     Returns (accepted_leads, rejected_author_urls). Rejected URLs are
     authors whose ONLY post failed this tier — they may pass a looser tier.
     """
-    type_map = {
-        # "buyer" = people/companies needing freelancers — includes
-        # contract/freelance hiring posts (a company hiring a freelance
-        # designer IS a freelancer-need).
-        "buyer": ["explicit_need", "problem_awareness", "research", "hiring"],
-        "agency": ["agency"],
-        "hiring": ["hiring"],
-    }
     all_types = lead_types is None or set(lead_types) == {"buyer", "agency", "hiring"}
     allowed = None
     if not all_types:
         allowed = set()
         for lt in lead_types or []:
-            allowed.update(type_map.get(lt, [lt]))
+            allowed.update(_LEAD_TYPE_MAP.get(lt, [lt]))
 
     accepted: list[dict] = []
     for lead in scored:
@@ -2342,11 +2345,18 @@ async def run_linkedin_pipeline_fast(
             )
             # Collect ALL scored candidates from last wave (not just tier-filtered)
             all_scored = [s for s in last_scored_candidates if s.get("linkedin_url")]
-            # Relax: accept any lead type, score >= 50 (down from 65)
+            # Relax: lower score threshold (50), but STILL respect lead type.
+            # User asked for specific types — don't give them wrong types.
+            relax_allowed = set()
+            for lt in (lead_types or []):
+                relax_allowed.update(_LEAD_TYPE_MAP.get(lt, [lt]))
             for s in all_scored:
                 if len(final_leads) >= max_results:
                     break
                 if (s.get("ai_score") or 0) < 50:
+                    continue
+                # Type gate: still enforce user's requested types
+                if relax_allowed and s.get("lead_type") not in relax_allowed:
                     continue
                 key = (s.get("linkedin_url") or "").split("?")[0].rstrip("/").lower()
                 if not key or key in chosen_urls or key in known_urls:

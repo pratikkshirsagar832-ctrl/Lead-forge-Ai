@@ -597,13 +597,16 @@ def _post_strength(lead: dict) -> int:
     return likes * 2 + comments * 3 + min(len(lead.get("post_text") or ""), 2000)
 
 
-def process_items(items: list[dict], max_results: int) -> tuple[list[dict], int]:
+def process_items(items: list[dict], max_results: int, req_country_codes: set[str] | None = None) -> tuple[list[dict], int]:
     """Parse raw all-in-one post items into candidate lead records.
 
     NO keyword classification here — the LLM scores intent later.
     Keeps ONE post per author (strongest by engagement) so profile
     enrichment isn't wasted on duplicate rows.
 
+    Country filter: when the user requested specific countries
+    (req_country_codes), leads from those countries are KEPT even if
+    they're outside the default ALLOWED list (e.g. user asks for India).
     Returns (candidates, skipped_count).
     """
     best_by_author: dict[str, dict] = {}
@@ -625,10 +628,16 @@ def process_items(items: list[dict], max_results: int) -> tuple[list[dict], int]
             continue
 
         # Country filter — harvestapi "main" mode gives location.countryCode.
-        # Only keep leads from English-speaking / target markets.
+        # Keep leads from the user's requested countries OR the default
+        # English-speaking / target markets.
         country_code, location_text = _get_author_location(author)
         if country_code:
-            if country_code not in ALLOWED_COUNTRY_CODES:
+            if req_country_codes:
+                if country_code not in req_country_codes:
+                    logger.info(f"[CountryFilter] skipped {author.get('name')} ({country_code} - {location_text[:40]})")
+                    skipped += 1
+                    continue
+            elif country_code not in ALLOWED_COUNTRY_CODES:
                 logger.info(f"[CountryFilter] skipped {author.get('name')} ({country_code} - {location_text[:40]})")
                 skipped += 1
                 continue
@@ -637,13 +646,13 @@ def process_items(items: list[dict], max_results: int) -> tuple[list[dict], int]
             # If headline hints a blocked market, skip it.
             hint = (author.get("info") or author.get("headline") or "").lower()
             name_hint = (author.get("name") or "")
-            if any(k in hint for k in ("bengaluru", "mumbai", "new delhi", "hyderabad", "pune", "india", "pakistan", "bangladesh", "manila", "lagos", "nairobi")):
+            if not req_country_codes and any(k in hint for k in ("bengaluru", "mumbai", "new delhi", "hyderabad", "pune", "india", "pakistan", "bangladesh", "manila", "lagos", "nairobi")):
                 logger.info(f"[CountryFilter] skipped {author.get('name')} (region hint in headline)")
                 skipped += 1
                 continue
             # Company pages are fine (prime targets). Individuals with South-Asian
             # names and no country data are most likely from blocked markets.
-            if "/company/" not in author_url and _looks_south_asian(name_hint):
+            if not req_country_codes and "/company/" not in author_url and _looks_south_asian(name_hint):
                 logger.info(f"[CountryFilter] skipped {author.get('name')} (South-Asian name, no country data)")
                 skipped += 1
                 continue
@@ -1088,7 +1097,7 @@ async def run_linkedin_pipeline(
                     seen_post_urls.add(pid)
             logger.info(f"[LinkedInPipeline:{search_id}] Fresh posts this pass: {len(fresh)} (of {raw_count})")
 
-            leads, skipped = process_items(fresh, max_results * 3)
+            leads, skipped = process_items(fresh, max_results * 3, req_country_codes)
             all_skipped += skipped
             logger.info(f"[LinkedInPipeline:{search_id}] Candidates after parsing: {len(leads)} (skipped {skipped})")
 
@@ -1620,8 +1629,10 @@ def _country_ok(lead: dict, mode: str, req_country_codes: set[str] | None = None
     if req_country_codes:
         if cc:
             return cc in req_country_codes
-        # Unknown country: reject only if obviously from another market
-        return not _looks_south_asian(lead.get("full_name") or "")
+        # Unknown country + user explicitly requested a location — allow
+        # (cannot verify; the scrape queries were location-scoped and the
+        # AI gates still judge relevance).
+        return True
     if not cc:
         # Unknown country: apply the cheap heuristics from discovery phase.
         return not (
@@ -2083,7 +2094,7 @@ async def run_linkedin_pipeline_fast(
             # Keep EVERY parsed post (cap 400) — Stage-1 triage screens all of
             # them cheaply, so genuine low-engagement buyers are never lost to
             # viral-noise ranking.
-            candidates, skipped = process_items(deduped, 400)
+            candidates, skipped = process_items(deduped, 400, req_country_codes)
             # Drop authors the user already has — BEFORE scoring (saves tokens).
             candidates = [
                 c for c in candidates

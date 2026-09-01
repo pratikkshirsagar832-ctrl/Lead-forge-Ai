@@ -1766,6 +1766,15 @@ TIERS: 85+ HOT, 70-84 WARM, 40-69 POTENTIAL, 25-39 BORDERLINE, <25 NOT a lead.
 
 CONSISTENCY: is_lead=true requires lead_score>=25 AND service_match>=10. hiring+full_time_onsite => is_lead=false. irrelevant => is_lead=false.
 
+LEAD_TYPE CLASSIFICATION (critical — determines which user sees the lead):
+- lead_type="hiring": author is hiring a specific ROLE (freelancer, contractor, part-time, remote employee for a specific job). Posts like "WE ARE HIRING a [role]", "looking for a [role] to join", "need a [role] for X months".
+- lead_type="agency": author is looking for an AGENCY/TEAM/COMPANY to handle a PROJECT or ongoing work. Posts like "looking for an agency to handle our X", "need a team to build/manage/create this", "seeking agency partners", "who can help us with X?", "need someone to manage our X".
+- lead_type="explicit_need": author has a SPECIFIC BUSINESS PROBLEM needing a service. Posts like "our X is broken", "need help with Y", "looking for someone to fix/improve Z".
+- lead_type="problem_awareness": author describes a PROBLEM but hasn't started searching yet. Posts like "struggling with X", "anyone else dealing with Y?".
+- lead_type="research": author is RESEARCHING options. Posts like "comparing X vs Y", "what do you recommend?".
+
+When a post could be "hiring" OR "agency", prefer "agency" if the author is looking for an external team/company to handle work (not hiring an individual for a role).
+
 OUTREACH_ANGLE: reference a SPECIFIC detail from their post/company; never generic; 1 sentence under 25 words.
 
 Always output valid JSON only."""

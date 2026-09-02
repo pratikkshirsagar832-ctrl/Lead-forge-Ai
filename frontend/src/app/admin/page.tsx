@@ -10,8 +10,8 @@ export const metadata = {
   robots: { index: false, follow: false },
 };
 
-export default function AdminPage() {
-  const store = cookies();
+export default async function AdminPage() {
+  const store = await cookies();
   if (store.get('hc_admin_session')?.value !== sessionToken()) {
     redirect('/admin/login');
   }

@@ -16,6 +16,7 @@ Flow (scrapeforge/linkedin-all-in-one):
 import asyncio
 import json
 import logging
+import re
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 
@@ -43,46 +44,13 @@ AI_QUALIFY_CONCURRENCY = 5
 # Profile enrichment bills per row on pay-per-event actors — cap it.
 PROFILE_ENRICHMENT_CAP = 30
 
-# Countries to keep leads from — English-speaking + key EU markets.
+# Geography is fully user-driven: the caller passes the exact country codes
+# the user selected (req_country_codes). We do NOT keep a hardcoded allow/block
+# list of "good" vs "bad" markets, and we never infer nationality/ethnicity
+# from a person's name. When the user selects no country, leads from anywhere
+# are kept. See `_country_match` for the matching policy.
+#
 # Country codes come from author.location.countryCode in harvestapi "main" mode.
-ALLOWED_COUNTRY_CODES = {
-    # North America
-    "US", "CA", "MX",
-    # UK & Ireland
-    "GB", "IE", "UK",
-    # Oceania
-    "AU", "NZ",
-    # Western Europe (English-friendly business markets)
-    "DE", "NL", "FR", "BE", "CH", "AT", "SE", "NO", "DK", "FI", "ES", "IT", "PT", "LU", "IS",
-    # Middle East business hubs (often English-speaking clients)
-    "AE", "SA", "QA", "KW",
-    # Singapore
-    "SG",
-}
-
-# If no country code is available, fall back to rejecting known low-value markets.
-BLOCKED_COUNTRY_CODES = {"IN", "PK", "BD", "PH", "NG", "LK", "NP", "EG", "MA", "DZ", "VN", "ID", "TH", "MY", "KE", "GH", "ZA"}
-
-# Common Indian/Pakistani/Bangladeshi surname & name markers — used only when
-# countryCode is missing, to keep individual leads to English-speaking markets.
-SOUTH_ASIA_NAME_MARKERS = (
-    "kumar", "sharma", "singh", "patel", "gupta", "reddy", "rao", "iya",
-    "meskat", "khurana", "malhotra", "kapoor", "mehta", "shah", "jain",
-    "agarwal", "bhatt", "desai", "joshi", "kulkarni", "nair", "menon",
-    "pillai", "iyer", "chowdhury", "rahman", "khan", "ahmed", "hussain",
-    "ali", "hasan", "rana", "akram", "iftikhar", "naseem", "abbas",
-    "zahra", "hassan", "hussain", "mirza", "sheikh", "syed", "zaidi",
-    "imran", "adnan", "bilal", "tahir", "saifi", "rafiq", "waqas",
-    "baig", "chaudhry", "aslam", "anjum", "farooq", "iqbal", "jamal",
-)
-
-
-def _looks_south_asian(name: str) -> bool:
-    """Heuristic: is this likely an Indian/Pakistani/Bangladeshi name?"""
-    if not name:
-        return False
-    low = name.lower()
-    return any(marker in low for marker in SOUTH_ASIA_NAME_MARKERS)
 
 
 # ── Location helpers (ported from HyperAgent) ──────────────────────────────
@@ -122,33 +90,24 @@ CITY_COUNTRY_HINTS = {
     "johannesburg": "ZA", "cairo": "EG", "mexico city": "MX", "sao paulo": "BR",
 }
 
-# Countries users may explicitly request (even if normally gated out)
-USER_REQUESTABLE_COUNTRIES = {
-    "IN", "PK", "BD", "PH", "NG", "VN", "ID", "TH", "MY", "KE", "GH", "ZA", "EG",
-    "LK", "NP", "TR", "AE", "SA", "QA", "KW", "IL", "BR", "MX",
+_REGION_MAP = {
+    "asia": {"IN", "PK", "BD", "PH", "VN", "ID", "TH", "MY", "SG", "JP", "KR", "TW"},
+    "europe": {"GB", "DE", "FR", "NL", "BE", "CH", "AT", "SE", "NO", "DK", "FI", "ES", "IT", "PT", "IE"},
+    "united states": {"US"}, "usa": {"US"}, "america": {"US"},
+    "india": {"IN"}, "africa": {"NG", "KE", "GH", "ZA", "EG"},
+    "australia": {"AU", "NZ"}, "canada": {"CA"},
+    "south america": {"BR", "MX", "AR", "CL", "CO"},
+    "uk": {"GB"}, "united kingdom": {"GB"}, "uae": {"AE"}, "dubai": {"AE"},
 }
 
 
-def _parse_location_request(location: str) -> tuple[set[str], str | None]:
-    """Parse a user location request into (country_codes, city).
-
-    'Mumbai' → ({"IN"}, "mumbai") | 'US' → ({"US"}, None)
-    'Asia'   → region set | 'Europe' → region set
-    """
-    if not location:
+def _parse_one_location(loc: str) -> tuple[set[str], str | None]:
+    """Parse a SINGLE location token into (country_codes, city)."""
+    loc = loc.strip().lower()
+    if not loc:
         return set(), None
-    loc = location.strip().lower()
-    region_map = {
-        "asia": {"IN", "PK", "BD", "PH", "VN", "ID", "TH", "MY", "SG", "JP", "KR", "TW"},
-        "europe": {"GB", "DE", "FR", "NL", "BE", "CH", "AT", "SE", "NO", "DK", "FI", "ES", "IT", "PT", "IE"},
-        "united states": {"US"}, "usa": {"US"}, "america": {"US"},
-        "india": {"IN"}, "africa": {"NG", "KE", "GH", "ZA", "EG"},
-        "australia": {"AU", "NZ"}, "canada": {"CA"},
-        "south america": {"BR", "MX", "AR", "CL", "CO"},
-        "uk": {"GB"}, "united kingdom": {"GB"}, "uae": {"AE"}, "dubai": {"AE"},
-    }
-    if loc in region_map:
-        return region_map[loc], None
+    if loc in _REGION_MAP:
+        return set(_REGION_MAP[loc]), None
     if loc in COUNTRY_NAME_TO_CODE:
         return {COUNTRY_NAME_TO_CODE[loc]}, None
     # City check (exact or first-word match)
@@ -158,6 +117,36 @@ def _parse_location_request(location: str) -> tuple[set[str], str | None]:
         if loc.startswith(city) or city in loc:
             return {code}, loc
     return set(), loc
+
+
+def _parse_location_request(location: str) -> tuple[set[str], str | None]:
+    """Parse a user location request into (country_codes, city).
+
+    Accepts a single location OR several separated by comma / slash / ';' /
+    ' and ', so a user can pick multiple countries at once:
+
+    'Mumbai'            → ({"IN"}, "mumbai")
+    'US'                → ({"US"}, None)
+    'US, UK, Germany'   → ({"US", "GB", "DE"}, None)
+    'Asia'              → region set
+    ''                  → (set(), None)  # no country → global search
+    """
+    if not location:
+        return set(), None
+
+    # Split on common multi-value separators.
+    parts = re.split(r"[,/;]| and ", location)
+    codes: set[str] = set()
+    cities: list[str] = []
+    for part in parts:
+        part_codes, part_city = _parse_one_location(part)
+        codes |= part_codes
+        if part_city:
+            cities.append(part_city)
+
+    # City is only meaningful when the user gave a single, unambiguous location.
+    city = cities[0] if (len(cities) == 1 and len(parts) == 1) else None
+    return codes, city
 
 
 def _location_matches(author_location: str, author_country_code: str, country_codes: set[str], city: str | None) -> bool:
@@ -597,6 +586,41 @@ def _post_strength(lead: dict) -> int:
     return likes * 2 + comments * 3 + min(len(lead.get("post_text") or ""), 2000)
 
 
+def _country_match(
+    country_code: str,
+    location_text: str,
+    req_country_codes: set[str] | None,
+) -> bool:
+    """User-driven country gate. No hardcoded allow/block lists, no name-based
+    guessing.
+
+    - No countries requested → keep everything (global search).
+    - Country code known → keep only if it's one the user asked for.
+    - Country code missing but location text names a requested country/city →
+      keep.
+    - No usable location signal at all → keep (we cannot verify, and dropping
+      would silently lose real leads the user may want).
+    """
+    if not req_country_codes:
+        return True
+
+    cc = (country_code or "").strip().upper()
+    if cc:
+        return cc in req_country_codes
+
+    loc = (location_text or "").strip().lower()
+    if not loc:
+        # No country code and no location text — unverifiable. Keep it.
+        return True
+
+    if any(city in loc for city, code in CITY_COUNTRY_HINTS.items() if code in req_country_codes):
+        return True
+    if any(name in loc for name, code in COUNTRY_NAME_TO_CODE.items() if code in req_country_codes):
+        return True
+    # Location text exists but matches none of the requested markets → drop.
+    return False
+
+
 def process_items(items: list[dict], max_results: int, req_country_codes: set[str] | None = None) -> tuple[list[dict], int]:
     """Parse raw all-in-one post items into candidate lead records.
 
@@ -604,10 +628,9 @@ def process_items(items: list[dict], max_results: int, req_country_codes: set[st
     Keeps ONE post per author (strongest by engagement) so profile
     enrichment isn't wasted on duplicate rows.
 
-    Country filter: when the user requested specific countries
-    (req_country_codes), leads from those countries are KEPT even if
-    they're outside the default ALLOWED list (e.g. user asks for India).
-    Returns (candidates, skipped_count).
+    Country filter: fully user-driven via `_country_match`. When the user
+    requests specific countries, only those markets are kept; when none are
+    requested, leads from anywhere are kept. Returns (candidates, skipped_count).
     """
     best_by_author: dict[str, dict] = {}
     skipped = 0
@@ -627,35 +650,16 @@ def process_items(items: list[dict], max_results: int, req_country_codes: set[st
             skipped += 1
             continue
 
-        # Country filter — harvestapi "main" mode gives location.countryCode.
-        # Keep leads from the user's requested countries OR the default
-        # English-speaking / target markets.
+        # Country filter — fully user-driven. harvestapi "main" mode gives
+        # location.countryCode; we fall back to location text when it's absent.
         country_code, location_text = _get_author_location(author)
-        if country_code:
-            if req_country_codes:
-                if country_code not in req_country_codes:
-                    logger.info(f"[CountryFilter] skipped {author.get('name')} ({country_code} - {location_text[:40]})")
-                    skipped += 1
-                    continue
-            elif country_code not in ALLOWED_COUNTRY_CODES:
-                logger.info(f"[CountryFilter] skipped {author.get('name')} ({country_code} - {location_text[:40]})")
-                skipped += 1
-                continue
-        else:
-            # No country data: if scrapeforge fallback, keep (unknown); we can't filter.
-            # If headline hints a blocked market, skip it.
-            hint = (author.get("info") or author.get("headline") or "").lower()
-            name_hint = (author.get("name") or "")
-            if not req_country_codes and any(k in hint for k in ("bengaluru", "mumbai", "new delhi", "hyderabad", "pune", "india", "pakistan", "bangladesh", "manila", "lagos", "nairobi")):
-                logger.info(f"[CountryFilter] skipped {author.get('name')} (region hint in headline)")
-                skipped += 1
-                continue
-            # Company pages are fine (prime targets). Individuals with South-Asian
-            # names and no country data are most likely from blocked markets.
-            if not req_country_codes and "/company/" not in author_url and _looks_south_asian(name_hint):
-                logger.info(f"[CountryFilter] skipped {author.get('name')} (South-Asian name, no country data)")
-                skipped += 1
-                continue
+        # When country code is missing, let location text include the headline
+        # so a "based in Berlin" headline can still match a requested market.
+        loc_signal = location_text or (author.get("info") or author.get("headline") or "")
+        if not _country_match(country_code, loc_signal, req_country_codes):
+            logger.info(f"[CountryFilter] skipped {author.get('name')} ({country_code or '?'} - {loc_signal[:40]})")
+            skipped += 1
+            continue
 
         eng = item.get("engagement") or {}
         lead = {
@@ -729,7 +733,7 @@ HARD RULES (never violate):
 - R4: A RECRUITER/STAFFING agency posting on behalf of clients = NOT a lead.
 - R5: Job seekers looking for a role for themselves = NOT a lead.
 - R6: Pure content/thought-leadership ("5 tips", "why you need", "trends", "case study", "opinion") = NOT a lead even if it scores high on service_match.
-- R7: NON-ENGLISH posts (Spanish, German, French, Hindi, Arabic, etc.) = NOT a lead (is_lead=false). We only serve English-speaking markets. If the post is mostly in another language, reject it even if it describes hiring.
+- R7: Posts may be written in ANY language — evaluate buying intent regardless of language. A genuine buyer writing in Spanish, German, French, Hindi, Arabic, etc. is STILL a lead. Do NOT reject on language. (Which countries to include is handled separately by the country filter, not by you.) Always write `reason` and `outreach_angle` in English.
 
 WHO IS THE SUBJECT? (the single most important question)
 🚫 SELLING (reject): "I'm available for X", "I'm open to remote work", "I'm seeking projects", "Looking to collaborate", "I offer X", "DM me for X", "I provide X", "My services include", "I build X", "I'm a freelance X looking for clients", "Open to contract work", "Taking new clients". Headline reads "Freelance X", "X Developer/Designer" and the post promotes their availability, portfolio, or services.
@@ -833,7 +837,7 @@ REMEMBER:
 - Full-time on-site = never a lead. Content/tips/opinions = never a lead.
 - A firm building a "pool of experts" or saying "experts required for our projects" is BUYING expertise = lead (hiring). Only staffing agencies placing candidates at third-party clients are rejected.
 - "Looking for partners/agencies/marketers" = company sourcing suppliers = BUYER, never a seller.
-- NON-ENGLISH posts = reject (we serve English-speaking markets only).
+- Posts in any language are fine — never reject on language; write output in English.
 - If lead_type is "agency" or "irrelevant", is_lead MUST be false regardless of score.
 
 Return ONLY valid JSON, nothing else."""
@@ -1519,10 +1523,12 @@ async def _update_search(supabase, search_id: str, data: dict) -> None:
 AI_ASYNC_CONCURRENCY = 12
 
 # Acceptance tiers for the guarantee loop. Applied to ALREADY-SCORED leads,
-# so relaxing costs zero extra API calls. Only two gates: strict quality
-# first (25), absolute last resort (10).
-TIER_1 = {"min_score": 25, "country": "allowed"}   # strict — best quality
-TIER_FINAL = {"min_score": 10, "country": "any"}   # last resort
+# so relaxing costs zero extra API calls. Both tiers ENFORCE the user's
+# country selection — only the SCORE threshold is relaxed to fill the count.
+# We never pad the count with leads from countries the user did not ask for
+# (better to return fewer real in-country leads than the wrong country).
+TIER_1 = {"min_score": 25, "country": "requested"}   # strict quality + country
+TIER_FINAL = {"min_score": 10, "country": "requested"}  # relax SCORE only, keep country
 TIERS = [TIER_1, TIER_FINAL]
 
 # ── Persistent guarantee loop limits ──────────────────────────────────────
@@ -1543,7 +1549,7 @@ async def triage_candidates_async(
 
     Batches of 20 posts per call ask gpt-4o-mini ONLY one question: does the
     author show BUYING/HIRING intent for this service? Sellers, thought-
-    leadership, job-seekers and non-English posts are dropped here so the
+    leadership, and job-seekers are dropped here so the
     expensive deep scorer only sees genuine prospects. Costs ~500 tokens per
     batch — screening 300 posts costs less than deep-scoring 15.
     """
@@ -1558,7 +1564,9 @@ async def triage_candidates_async(
 
 KEEP (always include): posts mentioning "hiring", "looking for", "need", "want", "seeking", "we're hiring", "urgent hiring", "freelance", "contract", "remote", "part-time", "join our team", "we are looking for", "join us"; posts from companies/individuals actively recruiting for roles related to the service niche; posts asking for recommendations of service providers; posts looking for agency partners, need an agency, seeking agency help, looking for a team/company to handle this, need someone to manage/build/create this; posts from businesses needing external help with their service niche.
 
-REJECT (do NOT keep): freelancers/agents SELLING their own services ("I offer", "available for", portfolio posts, "I'm a [service] specialist", "we are a [service] agency"); pure content/tips/opinions/case-studies; job-seekers describing their own availability; students; non-English posts.
+REJECT (do NOT keep): freelancers/agents SELLING their own services ("I offer", "available for", portfolio posts, "I'm a [service] specialist", "we are a [service] agency"); pure content/tips/opinions/case-studies; job-seekers describing their own availability; students.
+
+Posts may be in ANY language — never reject a post just because it isn't in English; judge the intent, not the language.
 
 When in doubt, KEEP — better to pass a marginal lead than lose a genuine buyer. Output strict JSON."""
 
@@ -1609,40 +1617,36 @@ Return JSON: {{"keep": [post numbers showing buying/hiring intent]}}"""
 
 
 def _job_country_ok(job: dict, req_country_codes: set[str]) -> bool:
-    """Does a job posting's location text match the requested countries?"""
+    """Does a job posting's location match the user's requested countries?
+
+    Strict: when a country is requested, the job's location text must name one
+    of the requested countries or a city in it. A location we cannot tie to a
+    requested country (empty, or bare "Remote" with no country) is REJECTED —
+    we never serve a job as an in-country lead unless we can verify it.
+    """
+    if not req_country_codes:
+        return True  # No country requested → global, keep all.
     loc = (job.get("location") or "").lower()
-    if not loc or "remote" in loc:
-        return True  # Remote — could be anywhere, allow
+    if not loc:
+        return False  # Unverifiable against the requested country.
     if any(name in loc for name, code in COUNTRY_NAME_TO_CODE.items() if code in req_country_codes):
         return True
     if any(city in loc for city, code in CITY_COUNTRY_HINTS.items() if code in req_country_codes):
         return True
-    return True  # Unknown location — allow (cannot verify)
+    return False
 
 
 def _country_ok(lead: dict, mode: str, req_country_codes: set[str] | None = None) -> bool:
-    """Country gate. mode='any' → always OK.
-    req_country_codes set → lead must match one of those countries
-    (unknown-country leads are rejected only if they look like a blocked
-    market; otherwise allowed — queries are location-scoped)."""
+    """Country gate — fully user-driven (see `_country_match`).
+
+    mode='any' relaxes the gate entirely (last-resort acceptance tier).
+    Otherwise the lead must match one of the user's requested countries; with
+    no countries requested, every market is allowed.
+    """
     if mode == "any":
         return True
-    cc = lead.get("country_code") or ""
-    if req_country_codes:
-        if cc:
-            return cc in req_country_codes
-        # Unknown country + user explicitly requested a location — allow
-        # (cannot verify; the scrape queries were location-scoped and the
-        # AI gates still judge relevance).
-        return True
-    if not cc:
-        # Unknown country: apply the cheap heuristics from discovery phase.
-        return not (
-            _looks_south_asian(lead.get("full_name") or "")
-            or any(k in (lead.get("headline") or "").lower() for k in (
-                "india", "pakistan", "bangladesh", "manila", "lagos", "nairobi"))
-        )
-    return cc in ALLOWED_COUNTRY_CODES
+    loc_signal = lead.get("location") or lead.get("headline") or ""
+    return _country_match(lead.get("country_code") or "", loc_signal, req_country_codes)
 
 
 def _type_ok(lead: dict, allowed_types: set[str] | None) -> bool:
@@ -1745,7 +1749,7 @@ HARD RULES (never violate):
 - R4: A RECRUITER/STAFFING agency posting on behalf of clients = NOT a lead.
 - R5: Job seekers looking for a role for themselves = NOT a lead.
 - R6: Pure content/thought-leadership ("5 tips", "why you need", "trends", "case study", "opinion") = NOT a lead even if it scores high on service_match.
-- R7: NON-ENGLISH posts (Spanish, German, French, Hindi, Arabic, etc.) = NOT a lead (is_lead=false). We only serve English-speaking markets. If the post is mostly in another language, reject it even if it describes hiring.
+- R7: Posts may be written in ANY language — evaluate buying intent regardless of language. A genuine buyer writing in Spanish, German, French, Hindi, Arabic, etc. is STILL a lead. Do NOT reject on language. (Which countries to include is handled separately by the country filter, not by you.) Always write `reason` and `outreach_angle` in English.
 
 WHO IS THE SUBJECT? (the single most important question)
 SELLING (reject): "I'm available for X", "I'm open to remote work", "I'm seeking projects", "Looking to collaborate", "I offer X", "DM me for X", "I provide X", "My services include", "I build X". Headline reads "Freelance X" and the post promotes their availability.
@@ -2024,15 +2028,12 @@ async def run_linkedin_pipeline_fast(
     if lead_types is None:
         lead_types = ["buyer", "agency", "hiring"]
 
-    # User-requested location → country codes (e.g. "Mumbai" → IN, "US" → US)
+    # User-requested location → country codes (e.g. "Mumbai" → IN, "US" → US).
+    # Empty set means the user chose no country → search every market.
     req_country_codes, req_city = _parse_location_request(location or "")
-    if req_country_codes & USER_REQUESTABLE_COUNTRIES:
-        country_gate_mode = "requested"
-    else:
-        country_gate_mode = "requested" if req_country_codes else "default"
     logger.info(
         f"[LinkedInPipeline:{search_id}] location='{location}' → "
-        f"countries={req_country_codes or 'default-allowed'} city={req_city or ''}"
+        f"countries={req_country_codes or 'any (global)'} city={req_city or ''}"
     )
 
     settings = get_settings()
@@ -2084,8 +2085,17 @@ async def run_linkedin_pipeline_fast(
         n_lanes = min(max_results, 3) if max_results >= 10 else (2 if max_results >= 5 else 1)
         lanes_check, _ = split_lane_phrases(pool, n_lanes)
         n_lanes = max(1, len(lanes_check))
-        # raw_budget: generous cap — count×3 items, max 90
-        raw_budget = min(max_results * 3, 90)
+        # raw_budget: generous cap — count×3 items, max 90. When the user
+        # requested specific countries the post-search is still global (the
+        # actor has no geo filter), so only a fraction of fetched posts survive
+        # the country gate — fetch a larger raw sample so we can still deliver
+        # in-country leads instead of under-filling. Wider markets (region
+        # selections) survive more, so they don't need the extra headroom.
+        country_scoped = bool(req_country_codes) and len(req_country_codes) <= 3
+        if country_scoped:
+            raw_budget = min(max_results * 6, 180)
+        else:
+            raw_budget = min(max_results * 3, 90)
         fetch_per_lane = max(5, min(10, -(-raw_budget // n_lanes)))
 
         logger.info(
@@ -2362,8 +2372,10 @@ async def run_linkedin_pipeline_fast(
             await _run_job_filler(max_results - len(final_leads))
 
         # FINAL RELAXATION: if still short after all waves, do one more pass
-        # with relaxed gates (accept all lead types, lower score threshold).
-        # This ensures the user gets EXACTLY the count they requested.
+        # with a lower SCORE threshold only. The lead-type and country gates
+        # are NEVER relaxed — a user who asked for a specific country/type must
+        # not be topped up with the wrong country or type just to hit a count.
+        # (So the final count may be < max_results when the market is thin.)
         if len(final_leads) < max_results:
             remaining_needed = max_results - len(final_leads)
             logger.info(
@@ -2389,7 +2401,7 @@ async def run_linkedin_pipeline_fast(
                 if not key or key in chosen_urls or key in known_urls:
                     continue
                 # Country gate still applies (don't violate user's location request)
-                if not _country_ok(s, "any", req_country_codes):
+                if not _country_ok(s, "requested", req_country_codes):
                     continue
                 final_leads.append(s)
                 chosen_urls.add(key)

@@ -192,10 +192,9 @@ async def _save_maps_leads(
         )
         remaining_leads = int((reservation.data or [{}])[0].get("reserved_leads", 0) or 0)
     except Exception:
-        try:
-            logger.exception("Could not read search quota reservation")
-        except Exception:
-            pass
+        # Column may not exist — allow unlimited saves (no quota enforcement).
+        remaining_leads = len(raw_results) + 100
+        logger.debug(f"[Pipeline:{search_id}] reserved_leads column unavailable, saving all results")
 
     lead_ids = []
     hit_limit = False

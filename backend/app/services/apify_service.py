@@ -315,6 +315,7 @@ def run_lane_search(
     search_queries: list[str],
     max_posts: int = 50,
     posted_limit: str = "month",
+    buyer_mode: bool = False,
 ) -> list[dict]:
     """ONE harvestapi actor run — designed to be fired N times IN PARALLEL.
 
@@ -324,10 +325,26 @@ def run_lane_search(
     CREDIT BUDGET: harvestapi's maxPosts is PER QUERY, so a lane's raw
     total = len(queries) × maxPosts. Lanes are capped at 4 queries and
     15 posts each → ≤60 raw records per lane (was 12 queries × 50 = 600).
+
+    buyer_mode: target genuine BUYERS — append boolean NOT operators that
+    exclude seller language ("I offer", "available for", "my services",
+    "portfolio") and restrict authors to decision-maker roles via
+    authorKeywords (Founder/CEO/Owner/Director/Manager) so freelancer
+    sellers never reach the AI scorer.
     """
     queries = [q.strip() for q in search_queries if q and q.strip()][:4]
     if not queries:
         queries = ["marketing"]
+    if buyer_mode:
+        # LinkedIn boolean: NOT excludes posts containing those exact phrases.
+        # Keep queries under the 5-boolean-operator / 500-char limit: append
+        # at most 3 NOT clauses to the two most promising queries.
+        for i, q in enumerate(queries):
+            if i >= 2:
+                break
+            nots = ' NOT "I offer" NOT "available for" NOT "my services"'
+            if len(q) + len(nots) < 490:
+                queries[i] = q + nots
     payload = {
         "searchQueries": queries,
         "maxPosts": max(10, min(max_posts, 15)),
@@ -339,6 +356,10 @@ def run_lane_search(
         "scrapeComments": False,
         "postNestedComments": False,
     }
+    if buyer_mode:
+        # Only surface posts from decision makers / companies — sellers
+        # (freelancers) usually have "Freelance X" or service headlines.
+        payload["authorKeywords"] = "Founder,CEO,Owner,Director,Manager,VP,Head,President,Co-founder,Managing Director"
     return _run_sync_actor(HARVEST_POST_SEARCH_ACTOR, payload)
 
 

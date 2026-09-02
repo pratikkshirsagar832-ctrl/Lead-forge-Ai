@@ -68,12 +68,10 @@ function LiveResultCard({ lead, index }: { lead: any; index: number }) {
                   {lead.source === 'linkedin' && (
                     <span className={`text-[9px] px-1.5 py-0.5 rounded font-semibold border ${
                       lead.post_type === 'buyer' ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20'
-                      : lead.post_type === 'agency' ? 'bg-violet-500/10 text-violet-400 border-violet-500/20'
                       : lead.post_type === 'hiring' ? 'bg-amber-500/10 text-amber-400 border-amber-500/20'
                       : 'bg-white/5 text-ice/50 border-white/10'
                     }`}>
                       {lead.post_type === 'buyer' ? 'Needs Service'
-                        : lead.post_type === 'agency' ? 'Agency'
                         : lead.post_type === 'hiring' ? 'Hiring' : 'Post'}
                     </span>
                   )}
@@ -195,7 +193,7 @@ export default function SearchPage() {
   const [source, setSource] = useState<'google_maps' | 'linkedin'>('google_maps');
   const sourceRef = useRef<'google_maps' | 'linkedin'>('google_maps');
   const [maxResults, setMaxResults] = useState(10);
-  const [leadTypes, setLeadTypes] = useState<('buyer' | 'agency' | 'hiring')[]>(['hiring', 'buyer', 'agency']);
+  const [leadTypes, setLeadTypes] = useState<('buyer' | 'hiring')[]>(['hiring', 'buyer']);
   const requestedCount = useSearchStore((s) => s.requestedCount);
   const isUnlocked = useSearchStore((s) => s.unlocked);
   const unlockResults = useSearchStore((s) => s.unlockResults);
@@ -428,12 +426,11 @@ export default function SearchPage() {
                       <Briefcase className="w-4 h-4 text-steel" />
                       Lead Type (select any)
                     </label>
-                    <div className="grid grid-cols-3 gap-3">
+                    <div className="grid grid-cols-2 gap-3">
                       {([
                         { id: 'hiring', label: 'Hiring Posts', desc: 'Companies hiring freelancers/contractors' },
                         { id: 'buyer', label: 'Freelancers Needed', desc: 'People/companies looking for freelancers' },
-                        { id: 'agency', label: 'Agencies Wanted', desc: 'People looking for an agency' },
-                      ] as { id: 'buyer' | 'agency' | 'hiring'; label: string; desc: string }[]).map(opt => {
+                      ] as { id: 'buyer' | 'hiring'; label: string; desc: string }[]).map(opt => {
                         const checked = leadTypes.includes(opt.id);
                         return (
                           <button
@@ -465,7 +462,7 @@ export default function SearchPage() {
                   <div className="md:col-span-2">
                     <p className="text-xs text-ice/60 leading-relaxed">
                       We search LinkedIn posts for buying signals matching your service — remote/contract hiring,
-                      people & companies looking for freelancers or agencies — filtered to your country, and
+                      people & companies looking for freelancers — filtered to your country, and
                       deliver exactly the number of leads you ask for.
                     </p>
                   </div>

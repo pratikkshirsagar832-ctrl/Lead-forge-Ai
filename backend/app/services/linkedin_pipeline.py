@@ -16,6 +16,7 @@ Flow (scrapeforge/linkedin-all-in-one):
 import asyncio
 import json
 import logging
+import re
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 
@@ -35,6 +36,10 @@ from app.services.apify_service import (
 logger = logging.getLogger(__name__)
 
 MAX_RESULTS_CAP = 50
+
+# Matches LinkedIn job URLs (both the jobs-guest API endpoint and the
+# /jobs/view/ page) to extract the numeric job id.
+_re_job_id = re.compile(r"/jobPosting/(\d+)", re.IGNORECASE)
 
 # Concurrent OpenAI calls during AI qualification. Kept low (5) for
 # reliability — free-tier OpenAI accounts rate-limit quickly when hammered.
@@ -628,16 +633,12 @@ def process_items(items: list[dict], max_results: int, req_country_codes: set[st
             continue
 
         # Country filter — harvestapi "main" mode gives location.countryCode.
-        # Keep leads from the user's requested countries OR the default
-        # English-speaking / target markets.
+        # When user requested specific countries, SKIP early filter here and
+        # let tier_filter/_country_ok handle it after scoring. This ensures
+        # candidates get tracked in last_scored_candidates for relaxation.
         country_code, location_text = _get_author_location(author)
         if country_code:
-            if req_country_codes:
-                if country_code not in req_country_codes:
-                    logger.info(f"[CountryFilter] skipped {author.get('name')} ({country_code} - {location_text[:40]})")
-                    skipped += 1
-                    continue
-            elif country_code not in ALLOWED_COUNTRY_CODES:
+            if not req_country_codes and country_code not in ALLOWED_COUNTRY_CODES:
                 logger.info(f"[CountryFilter] skipped {author.get('name')} ({country_code} - {location_text[:40]})")
                 skipped += 1
                 continue
@@ -770,7 +771,7 @@ CONSISTENCY CHECKS (verify before output):
 - is_lead=true ⟹ lead_score >= 25.
 - is_lead=true ⟹ service_match >= 10 (must relate to the niche).
 - lead_type="hiring" + work_type="full_time_onsite" ⟹ is_lead MUST be false.
-- lead_type="agency" or "irrelevant" ⟹ is_lead MUST be false.
+- lead_type="irrelevant" ⟹ is_lead MUST be false.
 - Score >= 80 ⟹ reason must cite explicit evidence from the post, not generic phrases.
 
 OUTREACH_ANGLE rules:
@@ -801,7 +802,7 @@ STEP 1 — Who is the subject?
   A) Author is BUYING/hiring this service (company/owner/manager looking to get work done)
   B) Author is SELLING their own services/availability
   C) Author is a recruiter/staffing agency, job seeker, student, or pure content creator
-  If B or C → is_lead=false, lead_type="agency" or "irrelevant", and STOP (still fill all fields).
+  If B or C → is_lead=false, lead_type="irrelevant", and STOP (still fill all fields).
 
 STEP 2 — If A (buying), what arrangement?
   - remote / contract / freelance / project basis / part-time / hourly → VALID lead
@@ -821,7 +822,7 @@ Output EXACTLY this JSON:
   "decision_maker_likelihood": 0-15,
   "urgency": 0-10,
   "outreach_worthiness": 0-10,
-  "lead_type": "explicit_need|problem_awareness|research|hiring|agency|irrelevant",
+  "lead_type": "explicit_need|problem_awareness|research|hiring|irrelevant",
   "work_type": "remote|contract|part_time|full_time_onsite|unknown",
   "reason": "1-2 sentences with SPECIFIC quoted evidence from the post or headline that justify lead_score",
   "outreach_angle": "one specific, human, actionable opening line referencing their exact situation (max 25 words)"
@@ -834,7 +835,7 @@ REMEMBER:
 - A firm building a "pool of experts" or saying "experts required for our projects" is BUYING expertise = lead (hiring). Only staffing agencies placing candidates at third-party clients are rejected.
 - "Looking for partners/agencies/marketers" = company sourcing suppliers = BUYER, never a seller.
 - NON-ENGLISH posts = reject (we serve English-speaking markets only).
-- If lead_type is "agency" or "irrelevant", is_lead MUST be false regardless of score.
+- If lead_type is "irrelevant", is_lead MUST be false regardless of score.
 
 Return ONLY valid JSON, nothing else."""
 
@@ -926,7 +927,6 @@ async def generate_search_queries(client, niche: str, lead_types: list[str], ite
         found_summary = f"Already found: {types_found}. Need more of: {', '.join(lead_types)}. "
 
     wants_buyer = "buyer" in lead_types
-    wants_agency = "agency" in lead_types
     wants_hiring = "hiring" in lead_types
 
     prompt = f"""Generate 8 HIGHLY EFFECTIVE LinkedIn search queries to find '{niche}' posts.
@@ -942,11 +942,6 @@ CRITICAL: Generate queries that match EXACT phrases real people type on LinkedIn
 {"- \"Can anyone recommend a good " + niche + "?\" | \"Who does " + niche + "?\" | \"Looking to hire " + niche + "\"" if wants_buyer else ""}
 {"- \"Need help with " + niche + "\" | \"Struggling with " + niche + "\" | \"Budget for " + niche + "\"" if wants_buyer else ""}
 {"- \"Urgent: need " + niche + "\" | \"ASAP " + niche + "\" | \"Hiring a " + niche + " expert\"" if wants_buyer else ""}
-
-{"AGENCY/SELLER INTENT (people OFFERING services):" if wants_agency else ""}
-{"- \"We offer " + niche + "\" | \"Our agency provides " + niche + "\" | \"I provide " + niche + " services\"" if wants_agency else ""}
-{"- \"Freelance " + niche + " available\" | \"Taking new " + niche + " clients\" | \"Book a call for " + niche + "\"" if wants_agency else ""}
-{"- \"We specialize in " + niche + "\" | \"Starting at $ for " + niche + "\" | \"DM for " + niche + " quote\"" if wants_agency else ""}
 
 {"HIRING INTENT (companies HIRING):" if wants_hiring else ""}
 {"- \"We're hiring a " + niche + "\" | \"Join our team as " + niche + "\" | \"Open position: " + niche + "\"" if wants_hiring else ""}
@@ -1150,10 +1145,9 @@ async def run_linkedin_pipeline(
             # Filter by requested types using lead_type
             lead_type_mapping = {
                 "buyer": ["explicit_need", "problem_awareness", "research"],
-                "agency": ["agency"],
                 "hiring": ["hiring"],
             }
-            if lead_types and lead_types != ["buyer", "agency", "hiring"]:
+            if lead_types and lead_types != ["buyer", "hiring"]:
                 allowed_types = set()
                 for lt in lead_types:
                     allowed_types.update(lead_type_mapping.get(lt, [lt]))
@@ -1214,14 +1208,21 @@ async def run_linkedin_pipeline(
                 for job in filtered_jobs:
                     company_url = (job.get("companyUrl") or "").strip()
                     job_url = (job.get("jobUrl") or "").strip()
-                    linkedin_url = company_url or job_url
+                    # Convert the raw API endpoint the scraper returns
+                    # (jobs-guest/jobs/api/jobPosting/123) into the
+                    # human-viewable job page URL.
+                    m = _re_job_id.search(job_url)
+                    if m:
+                        job_url = f"https://www.linkedin.com/jobs/view/{m.group(1)}/"
+                    # Link to the JOB POSTING itself, not the company page.
+                    linkedin_url = job_url or company_url
                     job_lead = {
                         "full_name": job.get("company") or "Unknown Company",
                         "headline": f"{job.get('title', '')} at {job.get('company', '')}",
                         "company": job.get("company", ""),
                         "location": job.get("location", ""),
                         "linkedin_url": linkedin_url,
-                        "post_url": job.get("jobUrl", ""),
+                        "post_url": job_url,
                         "post_text": job.get("descriptionText", "")[:3000],
                         "posted_at": _parse_posted_at(job.get("postedAt")),
                         "engagement_likes": 0,
@@ -1343,12 +1344,11 @@ async def _save_leads(supabase, search_id: str, user_id: str, leads: list[dict])
             lead_category = "warm"
 
         # Map AI semantic type to the post_type CHECK values the DB allows
-        # (buyer / agency / hiring / job_seeker)
+        # (buyer / hiring / job_seeker). "agency" posts are buyer signals —
+        # map to buyer.
         ai_type = lead.get("lead_type") or ""
-        if ai_type in ("explicit_need", "problem_awareness", "research"):
+        if ai_type in ("explicit_need", "problem_awareness", "research", "agency"):
             post_type = "buyer"
-        elif ai_type in ("agency",):
-            post_type = "agency"
         elif ai_type in ("hiring",):
             post_type = "hiring"
         elif ai_type in ("job_seeker",):
@@ -1625,15 +1625,16 @@ def _country_ok(lead: dict, mode: str, req_country_codes: set[str] | None = None
     req_country_codes set → lead must match one of those countries
     (unknown-country leads are rejected only if they look like a blocked
     market; otherwise allowed — queries are location-scoped)."""
-    if mode == "any":
-        return True
     cc = lead.get("country_code") or ""
+    # User requested specific countries → that gate ALWAYS applies,
+    # even when mode="any" (mode only relaxes the default country list).
     if req_country_codes:
         if cc:
             return cc in req_country_codes
         # Unknown country + user explicitly requested a location — allow
-        # (cannot verify; the scrape queries were location-scoped and the
-        # AI gates still judge relevance).
+        # (cannot verify; the AI gates still judge relevance).
+        return True
+    if mode == "any":
         return True
     if not cc:
         # Unknown country: apply the cheap heuristics from discovery phase.
@@ -1653,11 +1654,11 @@ def _type_ok(lead: dict, allowed_types: set[str] | None) -> bool:
 
 # Lead type mapping: UI selection → AI lead_type values
 _LEAD_TYPE_MAP = {
-    # "buyer" = people/companies needing freelancers — includes
-    # contract/freelance hiring posts (a company hiring a freelance
-    # designer IS a freelancer-need).
-    "buyer": ["explicit_need", "problem_awareness", "research", "hiring"],
-    "agency": ["agency"],
+    # "buyer" = people/companies needing freelancers. ONLY genuine buyer
+    # signals — hiring posts are excluded (they belong to "hiring").
+    # Buyer searches use boolean-NOT + authorKeywords filters so the posts
+    # found are real "I need X" requests, not hiring ads.
+    "buyer": ["explicit_need", "problem_awareness", "research"],
     "hiring": ["hiring"],
 }
 
@@ -1668,7 +1669,7 @@ def tier_filter(scored: list[dict], lead_types: list[str], tier: dict, req_count
     Returns (accepted_leads, rejected_author_urls). Rejected URLs are
     authors whose ONLY post failed this tier — they may pass a looser tier.
     """
-    all_types = lead_types is None or set(lead_types) == {"buyer", "agency", "hiring"}
+    all_types = lead_types is None or set(lead_types) == {"buyer", "hiring"}
     allowed = None
     if not all_types:
         allowed = set()
@@ -1768,12 +1769,11 @@ CONSISTENCY: is_lead=true requires lead_score>=25 AND service_match>=10. hiring+
 
 LEAD_TYPE CLASSIFICATION (critical — determines which user sees the lead):
 - lead_type="hiring": author is hiring a specific ROLE (freelancer, contractor, part-time, remote employee for a specific job). Posts like "WE ARE HIRING a [role]", "looking for a [role] to join", "need a [role] for X months".
-- lead_type="agency": author is looking for an AGENCY/TEAM/COMPANY to handle a PROJECT or ongoing work. Posts like "looking for an agency to handle our X", "need a team to build/manage/create this", "seeking agency partners", "who can help us with X?", "need someone to manage our X".
-- lead_type="explicit_need": author has a SPECIFIC BUSINESS PROBLEM needing a service. Posts like "our X is broken", "need help with Y", "looking for someone to fix/improve Z".
+- lead_type="explicit_need": author has a SPECIFIC BUSINESS PROBLEM needing a service — includes seeking an agency/team/company to handle a project. Posts like "looking for an agency to handle our X", "need a team to build/manage/create this", "seeking agency partners", "our X is broken", "need help with Y", "looking for someone to fix/improve Z".
 - lead_type="problem_awareness": author describes a PROBLEM but hasn't started searching yet. Posts like "struggling with X", "anyone else dealing with Y?".
 - lead_type="research": author is RESEARCHING options. Posts like "comparing X vs Y", "what do you recommend?".
 
-When a post could be "hiring" OR "agency", prefer "agency" if the author is looking for an external team/company to handle work (not hiring an individual for a role).
+When a post could be "hiring" OR "explicit_need", prefer "explicit_need" if the author is looking for an external team/company to handle work (not hiring an individual for a role).
 
 OUTREACH_ANGLE: reference a SPECIFIC detail from their post/company; never generic; 1 sentence under 25 words.
 
@@ -1808,7 +1808,7 @@ Output EXACTLY this JSON:
   "decision_maker_likelihood": 0-15,
   "urgency": 0-10,
   "outreach_worthiness": 0-10,
-  "lead_type": "explicit_need|problem_awareness|research|hiring|agency|irrelevant",
+  "lead_type": "explicit_need|problem_awareness|research|hiring|irrelevant",
   "work_type": "remote|contract|part_time|full_time_onsite|unknown",
   "reason": "1-2 sentences with SPECIFIC quoted evidence",
   "outreach_angle": "one specific opening line referencing their exact situation (max 25 words)"
@@ -1876,15 +1876,18 @@ Return ONLY valid JSON."""
         work_type = (result.get("work_type") or "unknown").lower()
         if result.get("lead_type") == "hiring" and work_type == "full_time_onsite":
             return None  # hard rule: no on-site payroll hires
+        # ALWAYS attach AI data to lead — even is_lead=false. This ensures
+        # candidates are tracked in last_scored_candidates for the relaxation
+        # pass, which can rescue borderline posts with its lower threshold.
+        lead["ai_score"] = result.get("lead_score") or 0
+        lead["lead_type"] = result.get("lead_type", "potential")
+        lead["work_type"] = work_type
+        lead["ai_reason"] = result.get("reason", "")
+        lead["outreach_angle"] = result.get("outreach_angle", "")
         if result.get("is_lead") and (result.get("lead_score", 0) >= 10):
             lead["ai_qualified"] = True
-            lead["ai_score"] = result.get("lead_score")
-            lead["lead_type"] = result.get("lead_type", "potential")
-            lead["work_type"] = work_type
-            lead["ai_reason"] = result.get("reason", "")
-            lead["outreach_angle"] = result.get("outreach_angle", "")
             return lead
-        return None
+        return lead  # return anyway for relaxation tracking
 
     results = await asyncio.gather(*[_one(l) for l in leads])
     qualified = [r for r in results if r is not None]
@@ -1892,7 +1895,7 @@ Return ONLY valid JSON."""
     return qualified
 
 
-async def _save_leads_bulk(supabase, search_id: str, user_id: str, leads: list[dict]) -> list[str]:
+async def _save_leads_bulk(supabase, search_id: str, user_id: str, leads: list[dict], lead_types: list[str] = None) -> list[str]:
     """Bulk-insert leads in ONE Supabase call (per-row fallback on error).
     Respects the user's daily remaining-leads limit."""
     remaining_leads = await _get_remaining_leads(supabase, user_id)
@@ -1906,10 +1909,8 @@ async def _save_leads_bulk(supabase, search_id: str, user_id: str, leads: list[d
         lead_category = "hot" if ai_score >= 85 else "warm"
 
         ai_type = lead.get("lead_type") or ""
-        if ai_type in ("explicit_need", "problem_awareness", "research"):
+        if ai_type in ("explicit_need", "problem_awareness", "research", "agency"):
             post_type = "buyer"
-        elif ai_type == "agency":
-            post_type = "agency"
         elif ai_type == "hiring":
             post_type = "hiring"
         elif ai_type == "job_seeker":
@@ -2022,7 +2023,7 @@ async def run_linkedin_pipeline_fast(
     supabase = get_supabase_admin()
     max_results = max(1, min(max_results, MAX_RESULTS_CAP))
     if lead_types is None:
-        lead_types = ["buyer", "agency", "hiring"]
+        lead_types = ["buyer", "hiring"]
 
     # User-requested location → country codes (e.g. "Mumbai" → IN, "US" → US)
     req_country_codes, req_city = _parse_location_request(location or "")
@@ -2079,6 +2080,31 @@ async def run_linkedin_pipeline_fast(
         pool = list(build_boolean_query(query))
         for variant in range(2, 9):
             pool.extend(build_boolean_query_variant(query, variant))
+        # BUYER-only searches: prepend strong buyer-intent phrases so the
+        # FIRST waves surface genuine "I need a service" posts instead of
+        # seller posts ("we offer X", "freelancer available").
+        if lead_types and "buyer" in lead_types and "hiring" not in lead_types:
+            base = " ".join(query.strip().strip('"').split())
+            base = base.replace("ui-ux", "ui ux").replace("ui/ux", "ui ux")
+            buyer_pool = [
+                f"need {base} for our",
+                f"looking for someone to {base}",
+                f"looking for help with {base}",
+                f"need help with our {base}",
+                f"looking for {base} services",
+                f"need {base} services",
+                f"anyone recommend {base}",
+                f"looking for a {base} expert",
+                f"who can help with {base}",
+                f"need {base} for my",
+                f"looking for {base} for my business",
+                f"need someone to handle {base}",
+            ]
+            pool = buyer_pool + pool
+        # NOTE: no agency-specific phrases — they attract agency SELLERS
+        # ("we are an agency", "need agency help?") which score irrelevant.
+        # Genuine agency-seeker posts surface via the generic niche phrases
+        # and are classified by the AI type gate afterwards.
         # CREDIT BUDGET: scale lanes and fetch count with request size.
         # 3 leads → 1 lane, 5 → 2, 10 → 2, 20 → 3, 50 → 3
         n_lanes = min(max_results, 3) if max_results >= 10 else (2 if max_results >= 5 else 1)
@@ -2104,8 +2130,9 @@ async def run_linkedin_pipeline_fast(
         last_scored_candidates: list[dict] = []  # track scored candidates for final relaxation
 
         async def _run_wave_async(lane_list: list[list[str]]) -> list[dict]:
+            buyer_only = lead_types and "buyer" in lead_types and "hiring" not in lead_types
             results = await asyncio.gather(*[
-                asyncio.to_thread(run_lane_search, lq, fetch_per_lane, "month")
+                asyncio.to_thread(run_lane_search, lq, fetch_per_lane, "month", buyer_only)
                 for lq in lane_list
             ])
             items: list[dict] = []
@@ -2179,8 +2206,10 @@ async def run_linkedin_pipeline_fast(
             return lane_list
 
         async def _run_job_filler(need: int) -> int:
-            """Hiring-intent filler from live job postings (strong buying signal)."""
-            if need <= 0 or ("hiring" not in lead_types and "buyer" not in lead_types):
+            """Hiring-intent filler from live job postings (strong buying signal).
+            Only for HIRING-type searches — job posts are hiring-type leads,
+            so a buyer-only request must never be filled with them."""
+            if need <= 0 or "hiring" not in lead_types:
                 return 0
             await _update_search(supabase, search_id, {
                 "progress_percent": 70,
@@ -2237,7 +2266,17 @@ async def run_linkedin_pipeline_fast(
                             break
                         company_url = (job.get("companyUrl") or "").strip()
                         job_url = (job.get("jobUrl") or "").strip()
-                        linkedin_url = company_url or job_url
+                        # Convert the raw API endpoint the scraper returns
+                        # (https://www.linkedin.com/jobs-guest/jobs/api/jobPosting/123)
+                        # into the human-viewable job page so "View post on
+                        # LinkedIn" opens the actual posting.
+                        m = _re_job_id.search(job_url)
+                        if m:
+                            job_url = f"https://www.linkedin.com/jobs/view/{m.group(1)}/"
+                        # Link to the JOB POSTING itself (not the company
+                        # profile page) so "View post on LinkedIn" and the
+                        # profile link open the actual post.
+                        linkedin_url = job_url or company_url
                         key = linkedin_url.split("?")[0].rstrip("/").lower()
                         if not linkedin_url or key in chosen_urls or key in known_urls:
                             continue
@@ -2418,7 +2457,7 @@ async def run_linkedin_pipeline_fast(
             "progress_percent": 88,
             "message": f"Saving {len(final_leads)} leads ({hot} hot, {warm} warm)...",
         })
-        lead_ids = await _save_leads_bulk(supabase, search_id, user_id, final_leads)
+        lead_ids = await _save_leads_bulk(supabase, search_id, user_id, final_leads, lead_types)
 
         saved = len(lead_ids)
         lead_limit_hit = saved < len(final_leads)  # plan cap truncated saves

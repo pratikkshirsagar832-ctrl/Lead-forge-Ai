@@ -342,31 +342,9 @@ def run_lane_search(
     queries = [q.strip() for q in search_queries if q and q.strip()][:4]
     if not queries:
         queries = ["marketing"]
-    if buyer_mode:
-        # LinkedIn boolean: NOT excludes posts containing those exact phrases.
-        # Keep queries under the 5-boolean-operator / 500-char limit: append
-        # at most 3 NOT clauses to the two most promising queries.
-        for i, q in enumerate(queries):
-            if i >= 2:
-                break
-            nots = ' NOT "I offer" NOT "available for" NOT "my services"'
-            if len(q) + len(nots) < 490:
-                queries[i] = q + nots
-    payload = {
-        "searchQueries": queries,
-        "maxPosts": max(10, min(max_posts, 15)),
-        "postedLimit": posted_limit if posted_limit in ("1h", "24h", "week", "month") else "month",
-        "sortBy": "date",
-        "profileScraperMode": "main",
-        "scrapeReactions": False,
-        "postNestedReactions": False,
-        "scrapeComments": False,
-        "postNestedComments": False,
-    }
-    if buyer_mode:
-        # Only surface posts from decision makers / companies — sellers
-        # (freelancers) usually have "Freelance X" or service headlines.
-        payload["authorKeywords"] = "Founder,CEO,Owner,Director,Manager,VP,Head,President,Co-founder,Managing Director"
+    # NOTE: buyer_mode NOT clauses and authorKeywords were removed because
+    # they caused harvestapi to return 0 results. The AI triage/scoring
+    # pipeline handles buyer/seller classification much better.
     return _run_sync_actor(HARVEST_POST_SEARCH_ACTOR, payload)
 
 

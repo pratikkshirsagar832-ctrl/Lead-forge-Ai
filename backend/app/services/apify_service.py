@@ -56,6 +56,25 @@ def _mark_key_blacklisted(key: str) -> None:
     logger.error(f"[Apify] Key {key[-6:]} permanently blacklisted (revoked/invalid token)")
 
 
+def _is_perm_feature_disabled(err_text: str) -> bool:
+    """Return True only for a PERMANENT platform-feature-disabled 403.
+
+    Apify returns error type 'platform-feature-disabled' in two distinct cases:
+      1. Monthly usage hard limit exceeded  -> RECOVERABLE (billing renewal).
+      2. Free-account paid-actor restriction -> also potentially recoverable
+         once the account is upgraded/funded.
+    Neither is a revoked token, so neither should be permanently blacklisted.
+    Only an unambiguous permanent rejection (explicit message) is blacklisted.
+    """
+    low = (err_text or "").lower()
+    # Explicitly recoverable limits → never permanent.
+    if "usage hard limit" in low or "monthly usage" in low or "credits" in low or "billing" in low:
+        return False
+    # Any other platform-feature-disabled is treated as temporary (cooldown)
+    # rather than a permanent blacklist — blacklisting kills working keys.
+    return False
+
+
 class ApifyError(Exception):
     """Raised when all configured Apify keys fail."""
 
@@ -185,13 +204,17 @@ def _run_sync_actor(actor_id: str, payload: dict) -> list[dict]:
             )
             last_error = e
             if e.status_code == 401 and "user-or-token-not-found" in str(e):
-                # Token revoked/deleted — permanently remove from rotation.
+                # Token revoked/deleted — never recovers. Remove from rotation.
                 _mark_key_blacklisted(key)
-            elif e.status_code == 403 and "platform-feature-disabled" in str(e):
-                # Apify disabled the paid-actor feature on this account
-                # (free-account farm restriction) — it will never recover.
+            elif _is_perm_feature_disabled(str(e)):
+                # A 403 that can never recover. The API returns the error type
+                # 'platform-feature-disabled' BOTH for a permanently disabled
+                # paid-actor feature AND for a temporary "Monthly usage hard
+                # limit exceeded" (which DOES recover on billing renewal). Only
+                # blacklist when the message is permanent.
                 _mark_key_blacklisted(key)
             elif e.status_code in (401, 402, 403, 429):
+                # Credits/feature/rate-limit limit — all recoverable → cooldown.
                 _mark_key_cooldown(key)
         except ApifyError:
             raise

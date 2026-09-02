@@ -142,7 +142,14 @@ CRITICAL DISTINCTION — the trap that causes most errors:
   "We are/our agency provides X"  → SELLER (reject)
   "Looking for/need an X agency"  → AGENCY_WANTED (qualify)
   "Looking for a freelance X"     → FREELANCER_NEEDED
-  "We're hiring an X"             → HIRING (for their own team)
+  "We're hiring an X [employee]"  → HIRING (for their own team)
+
+THE HIRING vs AGENCY_WANTED BOUNDARY (high-error zone):
+- If the author is sourcing an EXTERNAL AGENCY/studio/firm/team to deliver the work, and there is NO in-house role being filled → agency_wanted. Examples: "looking for a web dev agency", "need an agency to redesign our site", "searching for an external team to build our app", "recommend a good branding agency", "we need to hire an agency for our marketing".
+- If the author is filling a ROLE (an employee/contractor reporting into them) for their own org → hiring. Examples: "hiring a React developer", "looking for a frontend developer to join our team", "we're hiring a marketing manager".
+- READ the whole post. "Hiring" of a FREELANCER/individual → freelancer_needed. "Hiring" of an AGENCY/team/company → agency_wanted. When the subject is a whole provider company, it is agency_wanted, NOT hiring.
+- A post that is ambiguous between hiring an individual vs hiring an agency → classify based on whether the subject is an INDIVIDUAL (→ freelancer_needed or hiring) or an external PROVIDER COMPANY (→ agency_wanted).
+- NEVER classify "hiring" when the post is sourcing an external agency/team — the user explicitly asked for agency_wanted and the strict type gate will reject hiring-classified leads.
 
 ═══════════════════════════════════════════════════════════════
 3. SERVICE-MATCH — semantic, not keyword; be conservative

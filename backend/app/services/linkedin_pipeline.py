@@ -298,6 +298,45 @@ def country_pass(country_code: str, location_text_value: str, requested: set[str
     return False, LocationConfidence.UNKNOWN.value
 
 
+def job_country_pass(job_location: str, author_country_code: str, author_location_text: str, requested: set[str], job_remote: bool = False) -> tuple[bool, str]:
+    """Hard country gate tailored to HIRING/job leads.
+
+    The author's profile may be in the requested country while the actual JOB
+    posting is elsewhere (e.g. a US recruiter posting a Pakistan-based role).
+    When the posting explicitly names a location we must honor that.
+
+      - REMOTE / anywhere / global jobs: location-agnostic -> PASS. A remote
+        role can be performed from the requested country, so it is not a
+        wrong-country violation.
+      - If the job location names ONLY a non-requested country -> REJECT.
+      - If the job location names a requested country/city -> PASS.
+      - Otherwise fall back to the author's profile country.
+    """
+    if not requested:
+        return True, LocationConfidence.UNKNOWN.value
+
+    if job_remote:
+        return True, LocationConfidence.TEXT.value
+
+    jl = (job_location or "").strip().lower()
+    if jl:
+        # If it names a requested country/city -> pass.
+        if text_matches_requested_country(jl, requested):
+            return True, LocationConfidence.TEXT.value
+        # If the job location explicitly names a country that is NOT requested
+        # -> reject (e.g. a US recruiter posting a "Pakistan preferred" role).
+        for name, code in COUNTRY_ALIASES.items():
+            if code not in requested and name in jl:
+                return False, LocationConfidence.TEXT.value
+        # Job location present but doesn't resolve to a known country; fall
+        # through to the author's profile country below.
+    if author_country_code and author_country_code.upper() in {c.upper() for c in requested}:
+        return True, LocationConfidence.STRUCTURED.value
+    if author_location_text and text_matches_requested_country(author_location_text, requested):
+        return True, LocationConfidence.TEXT.value
+    return False, LocationConfidence.UNKNOWN.value
+
+
 # ══════════════════════════════════════════════════════════════════════════
 # INTENT-SPECIFIC QUERY GENERATION (diversified, no cross-intent mixing)
 # ══════════════════════════════════════════════════════════════════════════
@@ -470,6 +509,19 @@ CONTENT_PATTERNS = [
 ]
 RECRUITER_SELLER_PATTERNS = [
     r"\b(we|i) (are|am) (a|an) (talent|staffing|recruiting)( staffing| talent| hiring)? (agency|firm)\b", r"\bwe place (candidates|talents)\b",
+    # Staffing/recruitment-firm framing that sells placements rather than hiring
+    # for the poster's own company:
+    r"\bwe (are )?(currently )?(accepting|taking) applications for\b",
+    r"\b(accepting|taking) (applications|resumes) (for|from) (a|the) (wide variety|range)\b",
+    r"\bconnect (you|with|we) (with )?talented professionals\b",
+    r"\bwe (match|place|arrange|facilitate) (candidates|talent|professionals)\b",
+    r"\b(retained|contingency) (recruiting|search|recruitment)\b",
+    r"\bwe (recruit|source|vet) (for our )?clients\b",
+    r"\b(open )?roles for (our )?clients\b", r"\b(our|the) (clients|client companies) (are|is) hiring\b",
+    r"\bwe have (open|vacant) (roles|positions) with (clients|companies|organizations)\b",
+    r"\binterested candidates can apply (via|through|with) us\b",
+    r"\b(we|our firm) (specialize|specialises) in (executive|talent) (search|recruitment)\b",
+    r"\bheadhunt(ers?|ing)?\b",
 ]
 
 _SELLER_RE = [re.compile(p, re.I) for p in SELLER_PATTERNS]
@@ -702,12 +754,52 @@ def _parse_candidate(item: dict) -> Optional[dict]:
         "linkedin_url": author_url,
         "post_url": post_url,
         "post_text": content[:3000],
+        "job_location": _job_location_from_text(content[:3000]),
+        "job_remote": _job_remote_signal(content[:3000]),
         "posted_at": _posted(item.get("postedAt") or item.get("postedTimestamp")),
         "engagement_likes": _int(eng.get("likes") if eng.get("likes") is not None else eng.get("reactions")),
         "engagement_comments": _int(eng.get("comments")),
         "profile_picture_url": _avatar(author),
         "connections_count": author.get("connectionsCount") or 0,
     }
+
+
+_REMOTE_SIGNALS = ("remote", "work from home", "wfh", "anywhere", "worldwide", "global", "hybrid")
+
+
+def _job_remote_signal(text: str) -> bool:
+    """True when a job posting is explicitly remote/anywhere/location-agnostic."""
+    if not text:
+        return False
+    low = text.lower()
+    return any(sig in low for sig in _REMOTE_SIGNALS)
+
+
+_JOB_LOC_RE = re.compile(
+    r"(?:location|based in|position (?:is )?(?:based )?in|on[- ]site|onsite|hybrid(?: role)?(?: in|,|:)?|site:)"
+    r"[\s:,-]*([A-Z][A-Za-z.\- ]{2,40}(?:[,/]\s*[A-Za-z.\- ]{2,20})?)\b",
+    re.IGNORECASE,
+)
+
+
+def _job_location_from_text(text: str) -> str:
+    """Best-effort extraction of an explicit job location from a posting.
+
+    Returns '' when no confident location phrase is found. Used by the country
+    gate to enforce the JOB's location (not only the author's profile country),
+    so a US recruiter posting a 'Pakistan preferred' role is caught.
+    """
+    if not text:
+        return ""
+    m = _JOB_LOC_RE.search(text)
+    if m:
+        candidate_loc = m.group(1)
+        # Never treat the extraction as a country if a "remote" signal dominates
+        # and no strong country/city name follows.
+        low = (candidate_loc or "").lower()
+        if low not in ("remote", "anywhere", "remote anywhere", "worldwide", "global"):
+            return candidate_loc[:60]
+    return ""
 
 
 def _discover(queries: list[str], max_posts_per_lane: int = MAX_POSTS_PER_LANE) -> tuple[int, int, list[dict], list[str]]:
@@ -978,8 +1070,22 @@ async def _run_engine_with_externals(
             cand = _parse_candidate(raw)
             if not cand:
                 continue
-            if not country_pass(cand.get("country_code") or cand.get("location_code") or "", cand.get("location") or "", request.country_codes)[0]:
-                continue
+            # Country hard gate. For hiring requests, also enforce the JOB's own
+            # location (a US recruiter posting a "Pakistan preferred" role must be
+            # rejected), while still allowing remote/anywhere jobs.
+            if "hiring" in request.lead_types:
+                ok_country, _ = job_country_pass(
+                    cand.get("job_location") or "",
+                    cand.get("country_code") or cand.get("location_code") or "",
+                    cand.get("location") or "",
+                    request.country_codes,
+                    cand.get("job_remote") or False,
+                )
+                if not ok_country:
+                    continue
+            else:
+                if not country_pass(cand.get("country_code") or cand.get("location_code") or "", cand.get("location") or "", request.country_codes)[0]:
+                    continue
             candidates.append(cand)
         it.after_country_filter = len(candidates)
         logger.info(f"[LinkedIn:{search_id}] iter {iteration}: after_country={len(candidates)} (requested={request.country_codes or 'any'})")

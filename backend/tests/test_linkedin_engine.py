@@ -90,16 +90,51 @@ def test_country_pass_text_match():
     assert conf == lp.LocationConfidence.TEXT.value
 
 
+# ── JOB-AWARE country gate (hiring leads) ─────────────────────────────────
+def test_job_country_rejects_foreign_job_location():
+    # US recruiter posting a Pakistan-based role -> reject (author is US).
+    ok, _ = lp.job_country_pass("Pakistan", "US", "New York", {"US"})
+    assert not ok
+
+
+def test_job_country_allows_remote_jobs():
+    # Remote/anywhere jobs are location-agnostic -> pass for any requested country.
+    ok, conf = lp.job_country_pass("Remote", "IN", "Mumbai", {"US"}, job_remote=True)
+    assert ok
+
+
+def test_job_country_allows_matching_location():
+    ok, _ = lp.job_country_pass("New York, USA", "US", "New York", {"US"})
+    assert ok
+
+
+def test_job_country_falls_back_to_author_country():
+    # No job location -> use author country.
+    ok, _ = lp.job_country_pass("", "US", "New York", {"US"})
+    assert ok
+
+
+def test_job_location_extraction_matches_case_insensitive_label():
+    # The location label may be capitalized; extraction must still find it.
+    loc = lp._job_location_from_text("We are hiring a designer. Location: Islamabad, Pakistan. Onsite.")
+    assert "Islamabad" in loc and "Pakistan" in loc
+
+
+def test_job_remote_signal_detection():
+    assert lp._job_remote_signal("Fully remote position, work from anywhere") is True
+    assert lp._job_remote_signal("Full-time onsite in New York") is False
+
+
 # ── DETERMINISTIC PRE-FILTERS ──────────────────────────────────────────────
 @pytest.mark.parametrize("reject,reason", [
     (candidate(post_text="We offer web development services to startups."), "seller"),
     (candidate(post_text="I am a freelance designer available for projects."), "seller"),
     (candidate(post_text="I am open to work, seeking a role."), "job_seeker"),
     (candidate(post_text="We are a talent staffing agency placing candidates at clients."), "recruiter_seller"),
-    # subtle white-label / partner-selling framing (no literal "we offer"):
     (candidate(post_text="Agencies are losing money because they say we don't have the team. White label software, AI & ML development partner for agencies. Helping you deliver more."), "seller"),
     (candidate(post_text="We act as your dedicated offshore team. Let's partner together. Book a free call to see how we can help you scale."), "seller"),
     (candidate(post_text="Grow your agency by outsourcing to us. Send us a brief and we'll build it for you."), "seller"),
+    (candidate(post_text="We are currently accepting applications for a wide variety of professional roles. Connect you with talented professionals. We place candidates with our clients."), "recruiter_seller"),
 ])
 def test_prefilter_rejects_garbage(reject, reason):
     got_reject, got_reason = lp.prefilter_reject(reject)

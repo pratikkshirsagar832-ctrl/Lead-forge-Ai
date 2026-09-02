@@ -253,3 +253,30 @@ def test_persistent_provider_failure_terminates():
     assert telemetry["final_valid_count"] == 0
     assert telemetry["reason"] == "provider_failure"
     assert len(telemetry["iterations"]) <= lp.MAX_PROVIDER_FAIL_ROUNDS
+
+
+# ── TEST 8: hiring country gate rejects a foreign-jobs posting ─────────────
+def test_hiring_gate_rejects_foreign_job_location():
+    supabase = FakeSupabase()
+    # Author is US but the job posting is explicitly in Pakistan (non-remote).
+    bad = candidate(post_id="pak", linkedin_url="https://www.linkedin.com/in/pak",
+                    post_text="We are hiring a Graphic Designer. Location: Islamabad, Pakistan. Full-time onsite.",
+                    country_code="US", location="San Francisco, US", headline="HR at Acme")
+    cls = {bad["linkedin_url"]: make_classification(lead_type="hiring", quality=90, is_qualified=True)}
+    import asyncio
+    telemetry = asyncio.run(_run(supabase, _request(3, lead_types=["hiring"], service="graphic design"),
+                                 make_discover([(1, 1, [_raw(bad)], [])]), make_classify(cls)))
+    assert telemetry["final_valid_count"] == 0  # wrong-country job => not saved
+
+
+# ── TEST 9: hiring gate allows a remote (location-agnostic) job ────────────
+def test_hiring_gate_allows_remote_job():
+    supabase = FakeSupabase()
+    good = candidate(post_id="rem", linkedin_url="https://www.linkedin.com/in/rem",
+                     post_text="We are hiring a Graphic Designer, fully remote, work from anywhere.",
+                     country_code="US", location="New York, US", headline="HR at Acme")
+    cls = {good["linkedin_url"]: make_classification(lead_type="hiring", quality=90, is_qualified=True)}
+    import asyncio
+    telemetry = asyncio.run(_run(supabase, _request(3, lead_types=["hiring"], service="graphic design"),
+                                 make_discover([(1, 1, [_raw(good)], [])]), make_classify(cls)))
+    assert telemetry["final_valid_count"] == 1  # remote job passes the gate

@@ -920,6 +920,7 @@ async def _run_engine_with_externals(
         it.provider_total_lanes = provider_total
         it.provider_errors = provider_errors
         it.provider_raw_count = len(raw_items)
+        logger.info(f"[LinkedIn:{search_id}] iter {iteration}: raw={len(raw_items)} ok_lanes={provider_ok}/{provider_total} queries={len(fresh_q)}")
 
         if not raw_items:
             if provider_ok == 0:
@@ -951,6 +952,7 @@ async def _run_engine_with_externals(
                 continue
             candidates.append(cand)
         it.after_country_filter = len(candidates)
+        logger.info(f"[LinkedIn:{search_id}] iter {iteration}: after_country={len(candidates)} (requested={request.country_codes or 'any'})")
 
         # dedupe by identity
         uniq, seen_ids = [], set()
@@ -963,6 +965,7 @@ async def _run_engine_with_externals(
             uniq.append(cand)
         it.after_dedupe = len(uniq)
         uniq = [c for c in uniq if _identity_url(c) not in known_urls and _identity_url(c) not in chosen_urls]
+        logger.info(f"[LinkedIn:{search_id}] iter {iteration}: after_dedupe={len(uniq)} (dropped_known + not-chosen x{len(seen_ids)-len(uniq)})")
 
         # deterministic pre-filter
         filtered = []
@@ -971,6 +974,7 @@ async def _run_engine_with_externals(
             if not reject:
                 filtered.append(cand)
         it.after_deterministic = len(filtered)
+        logger.info(f"[LinkedIn:{search_id}] iter {iteration}: after_deterministic_prefilter={len(filtered)}")
 
         if not filtered and not candidates:
             no_progress += 1
@@ -998,6 +1002,7 @@ async def _run_engine_with_externals(
         it.after_ai_qualification = len(scored)
         it.non_qualified_ai = len(filtered) - len(scored)
         it.last_scored_types = _type_counts(scored)
+        logger.info(f"[LinkedIn:{search_id}] iter {iteration}: ai_classified={len(scored)}/{len(filtered)} types={it.last_scored_types}")
 
         accepted = []
         for cand in scored:
@@ -1010,6 +1015,7 @@ async def _run_engine_with_externals(
                     chosen_urls.add(key)
                     accepted.append(cand)
         it.accepted_this_iteration = len(accepted)
+        logger.info(f"[LinkedIn:{search_id}] iter {iteration}: accepted={len(accepted)} total_valid_so_far={len(valid_leads)} target={request.request_count}")
 
         accepted = rank_leads(accepted)
         new = 0

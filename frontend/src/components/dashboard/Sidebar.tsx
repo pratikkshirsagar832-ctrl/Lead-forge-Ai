@@ -73,8 +73,10 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
 
   const remaining = subscription?.remaining_searches ?? 1;
   const searchesPerDay = subscription?.searches_per_day ?? 1;
-  const leadsRemaining = subscription?.remaining_leads ?? 0;
-  const leadsPerDay = subscription?.leads_per_day ?? 30;
+  const linkedinUsed = subscription?.linkedin_hq_leads_used ?? 0;
+  const linkedinMonthly = subscription?.linkedin_hq_leads_monthly ?? 0;
+  const gmbUsed = subscription?.gmb_leads_used ?? 0;
+  const gmbMonthly = subscription?.gmb_leads_monthly ?? 0;
 
   return (
     <>
@@ -161,7 +163,7 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
           {searchesPerDay > 0 && (
             <div className="px-2">
               <div className="flex justify-between text-[10px] text-ice/40 mb-1">
-                <span>Searches today</span>
+                <span>Searches used</span>
                 <span>{remaining}/{searchesPerDay}</span>
               </div>
               <div className="h-1.5 rounded-full bg-ocean/30 overflow-hidden">
@@ -174,17 +176,33 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
               </div>
             </div>
           )}
-          {leadsPerDay > 0 && (
+          {linkedinMonthly > 0 && (
             <div className="px-2">
               <div className="flex justify-between text-[10px] text-ice/40 mb-1">
-                <span>Leads today</span>
-                <span>{leadsPerDay - leadsRemaining}/{leadsPerDay}</span>
+                <span>LinkedIn leads used</span>
+                <span>{linkedinUsed}/{linkedinMonthly}</span>
               </div>
               <div className="h-1.5 rounded-full bg-ocean/30 overflow-hidden">
                 <motion.div
-                  className={cn('h-full rounded-full', leadsRemaining > 0 ? 'bg-gradient-to-r from-emerald-400 to-teal' : 'bg-rose-500')}
+                  className={cn('h-full rounded-full', linkedinUsed < linkedinMonthly ? 'bg-gradient-to-r from-sky-400 to-blue-500' : 'bg-rose-500')}
                   initial={{ width: 0 }}
-                  animate={{ width: `${Math.min(100, ((leadsPerDay - leadsRemaining) / leadsPerDay) * 100)}%` }}
+                  animate={{ width: `${Math.min(100, linkedinMonthly > 0 ? (linkedinUsed / linkedinMonthly) * 100 : 0)}%` }}
+                  transition={{ duration: 0.8, ease: 'easeOut' }}
+                />
+              </div>
+            </div>
+          )}
+          {gmbMonthly > 0 && (
+            <div className="px-2">
+              <div className="flex justify-between text-[10px] text-ice/40 mb-1">
+                <span>GMB leads used</span>
+                <span>{gmbUsed}/{gmbMonthly}</span>
+              </div>
+              <div className="h-1.5 rounded-full bg-ocean/30 overflow-hidden">
+                <motion.div
+                  className={cn('h-full rounded-full', gmbUsed < gmbMonthly ? 'bg-gradient-to-r from-emerald-400 to-teal' : 'bg-rose-500')}
+                  initial={{ width: 0 }}
+                  animate={{ width: `${Math.min(100, gmbMonthly > 0 ? (gmbUsed / gmbMonthly) * 100 : 0)}%` }}
                   transition={{ duration: 0.8, ease: 'easeOut' }}
                 />
               </div>

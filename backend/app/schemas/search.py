@@ -30,6 +30,7 @@ class SearchResponse(BaseModel):
     user_id: str
     niche: str
     location: str
+    source: str = "google_maps"
     status: str = "queued"
     progress_percent: int = 0
     message: str = "Search queued"

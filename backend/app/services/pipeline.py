@@ -15,6 +15,7 @@ from datetime import date, datetime, timezone
 
 from app.database import get_supabase_admin
 from app.services.scraper_service import run_maps_scraper
+from app.services.usage import settle_search_quota
 
 logger = logging.getLogger(__name__)
 
@@ -61,6 +62,7 @@ async def run_search_pipeline(
     except Exception as e:
         logger.error(f"[Pipeline:{search_id}] Unexpected error: {e}", exc_info=True)
         try:
+            await settle_search_quota(supabase, search_id, user_id, 0)
             await _update_search(supabase, search_id, {
                 "status": "failed", "message": "Search failed unexpectedly",
                 "error_message": str(e),
@@ -129,7 +131,7 @@ async def load_more_maps_search(
 
 async def _run_maps_search(
     supabase, search_id: str, user_id: str, niche: str, location: str, start_time: float
-) -> None:
+) -> bool:
     query = f"{niche} in {location}"
     elapsed = time.time() - start_time
     remaining_timeout = max(60, int(MAX_SEARCH_TIME_SECONDS - elapsed - 60))
@@ -180,18 +182,18 @@ async def _run_maps_search(
 async def _save_maps_leads(
     supabase, search_id: str, user_id: str, raw_results: list[dict]
 ) -> tuple[list[str], bool]:
-    # Check remaining leads limit before saving (team-aware)
-    remaining_leads = 30  # default fallback
+    # This search owns a server-side reservation created atomically before the
+    # job was started. Never consult or mutate the legacy daily counters here.
+    remaining_leads = 0
     try:
-        from app.services.plans import remaining_leads_today
-        remaining_leads = await asyncio.to_thread(remaining_leads_today, supabase, user_id)
+        reservation = await asyncio.to_thread(
+            lambda: supabase.table("searches").select("reserved_leads")
+            .eq("id", search_id).limit(1).execute()
+        )
+        remaining_leads = int((reservation.data or [{}])[0].get("reserved_leads", 0) or 0)
     except Exception:
         try:
-            rem_resp = await asyncio.to_thread(
-                lambda: supabase.rpc("get_remaining_leads", {"p_user_id": user_id}).execute()
-            )
-            if rem_resp.data is not None:
-                remaining_leads = rem_resp.data
+            logger.exception("Could not read search quota reservation")
         except Exception:
             pass
 
@@ -251,7 +253,15 @@ async def _finalize_search(supabase, search_id: str, limit_hit: bool = False) ->
 
         message = f"Found {total} leads: {hot} hot, {warm} warm"
         if limit_hit:
-            message += " | Daily lead limit reached — upgrade your plan for more."
+            message += " | Monthly lead quota reached."
+
+        # This call is idempotent at the database layer and releases unused
+        # reservation capacity if fewer leads were found.
+        search_row = await asyncio.to_thread(
+            lambda: supabase.table("searches").select("user_id").eq("id", search_id).limit(1).execute()
+        )
+        if search_row.data:
+            await settle_search_quota(supabase, search_id, search_row.data[0]["user_id"], total)
 
         await _update_search(supabase, search_id, {
             "status": "completed",
@@ -276,6 +286,9 @@ async def _finalize_search(supabase, search_id: str, limit_hit: bool = False) ->
 
 
 async def _mark_cancelled(supabase, search_id: str) -> None:
+    row = await asyncio.to_thread(lambda: supabase.table("searches").select("user_id").eq("id", search_id).limit(1).execute())
+    if row.data:
+        await settle_search_quota(supabase, search_id, row.data[0]["user_id"], 0)
     await _update_search(supabase, search_id, {
         "status": "cancelled",
         "message": "Search cancelled by user",

@@ -7,47 +7,72 @@ import Link from 'next/link';
 import { supabase } from '@/lib/supabase';
 import api from '@/lib/api';
 import { GlassCard } from '@/components/shared/GlassCard';
-import { LoadingButton } from '@/components/shared/LoadingButton';
 import { Footer } from '@/components/landing/Footer';
 import Header from '@/components/landing/Header';
-import { Check, Zap, Star, Building2, ArrowRight, Loader2 } from 'lucide-react';
+import { Check, Zap, Star, Building2, Loader2 } from 'lucide-react';
 
-const plans = [
-  {
-    id: 'free', name: 'Free', price: 0, currency: '$', period: '/mo',
-    linkedinLeads: '3', gmbLeads: '30', trial: '1 day trial',
-    features: ['3 searches', 'Leads management', 'Website analysis', 'Basic lead data'],
-    icon: Zap, color: 'text-ice/60',
-  },
-  {
-    id: 'solo', name: 'Solo', price: 19, currency: '$', period: '/mo',
-    linkedinLeads: '20', gmbLeads: '200', trial: null,
-    features: ['5 searches', 'Leads management', 'Website analysis', 'AI pitch generation'],
-    icon: Star, color: 'text-sky-400', popular: false,
-  },
-  {
-    id: 'pro', name: 'Pro', price: 99, currency: '$', period: '/mo',
-    linkedinLeads: '120', gmbLeads: '1500', trial: null, seats: '2 team seats included',
-    features: ['15 searches', 'Leads management', 'CSV export', 'Priority support', 'Everything in Solo', 'Advanced analytics'],
-    icon: Star, color: 'text-violet', popular: true,
-  },
-  {
-    id: 'agency', name: 'Agency', price: 299, currency: '$', period: '/mo',
-    linkedinLeads: '400', gmbLeads: '6000', trial: null, seats: '10 team seats included',
-    features: ['50 searches', 'Leads management', 'CSV export', 'Team access', 'Everything in Pro', 'API access', 'Dedicated support'],
-    icon: Building2, color: 'text-amber-400',
-  },
-];
+interface PlanData {
+  id: string;
+  name: string;
+  price_monthly: number;
+  linkedin_hq_leads_monthly: number;
+  gmb_leads_monthly: number;
+  searches_per_day: number;
+  team_seats: number;
+  sort_order: number;
+}
+
+const PLAN_ICONS: Record<string, typeof Zap> = {
+  free: Zap,
+  solo: Star,
+  pro: Star,
+  agency: Building2,
+};
+
+const PLAN_COLORS: Record<string, string> = {
+  free: 'text-ice/60',
+  solo: 'text-sky-400',
+  pro: 'text-violet',
+  agency: 'text-amber-400',
+};
+
+function getFeatures(plan: PlanData): string[] {
+  const features: string[] = [
+    `${plan.linkedin_hq_leads_monthly} HQ LinkedIn leads/mo`,
+    `${plan.gmb_leads_monthly} GMB leads/mo`,
+    'Leads management',
+    'Website analysis',
+  ];
+  if (plan.id !== 'free') features.push('AI pitch generation');
+  if (plan.id === 'pro' || plan.id === 'agency') {
+    features.push('CSV export', 'Priority support', 'Advanced analytics');
+  }
+  if (plan.id === 'agency') {
+    features.push('API access', 'Dedicated support');
+  }
+  if (plan.team_seats > 0) {
+    features.push(`${plan.team_seats} team seats`);
+  }
+  return features;
+}
 
 export default function PricingPage() {
   const [session, setSession] = useState<any>(null);
   const [currentPlan, setCurrentPlan] = useState<string | null>(null);
+  const [plans, setPlans] = useState<PlanData[]>([]);
   const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
     const init = async () => {
       const { data: { session: s } } = await supabase.auth.getSession();
       setSession(s);
+
+      try {
+        const plansResp = await api.get('/api/subscriptions/plans');
+        setPlans(plansResp.data?.plans || []);
+      } catch (e) {
+        console.error('Failed to fetch plans:', e);
+      }
 
       if (s) {
         try {
@@ -95,21 +120,24 @@ export default function PricingPage() {
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
             {plans.map((plan) => {
               const isCurrent = currentPlan === plan.id;
-              const Icon = plan.icon;
+              const isPopular = plan.id === 'pro';
+              const Icon = PLAN_ICONS[plan.id] || Zap;
+              const color = PLAN_COLORS[plan.id] || 'text-ice/60';
+              const features = getFeatures(plan);
 
               return (
                 <GlassCard
                   key={plan.id}
-                  className={`p-6 relative flex flex-col ${plan.popular ? 'border-violet/50 ring-1 ring-violet/30' : ''}`}
+                  className={`p-6 relative flex flex-col ${isPopular ? 'border-violet/50 ring-1 ring-violet/30' : ''}`}
                 >
-                  {plan.popular && (
+                  {isPopular && (
                     <div className="absolute -top-3 left-1/2 -translate-x-1/2 bg-violet text-offwhite text-[11px] font-bold px-4 py-1 rounded-full">
                       Most Popular
                     </div>
                   )}
 
                   <div className="flex items-center gap-2 mb-4">
-                    <div className={`p-2 rounded-lg bg-ocean/30 ${plan.color}`}>
+                    <div className={`p-2 rounded-lg bg-ocean/30 ${color}`}>
                       <Icon className="w-5 h-5" />
                     </div>
                     <h3 className="text-lg font-bold text-offwhite">{plan.name}</h3>
@@ -118,27 +146,26 @@ export default function PricingPage() {
                   <div className="mb-6">
                     <div className="flex items-baseline gap-1">
                       <span className="text-3xl font-extrabold text-offwhite">
-                        {plan.price === 0 ? 'Free' : `${plan.currency}${plan.price}`}
+                        {plan.price_monthly === 0 ? 'Free' : `$${Math.round(plan.price_monthly / 100)}`}
                       </span>
-                      {plan.price > 0 && <span className="text-sm text-ice/40">{plan.period}</span>}
+                      {plan.price_monthly > 0 && <span className="text-sm text-ice/40">/mo</span>}
                     </div>
-                    {plan.trial && <p className="text-xs text-ice/40 mt-1">{plan.trial}</p>}
-                    {!plan.trial && plan.seats && <p className="text-xs text-steel font-semibold mt-1">{plan.seats}</p>}
+                    {plan.id === 'free' && <p className="text-xs text-ice/40 mt-1">1 day trial</p>}
                   </div>
 
                   <div className="flex flex-col gap-2 mb-6 p-3 rounded-lg bg-ocean/20">
                     <div className="flex items-center gap-2">
-                      <span className="text-xl font-bold text-steel">{plan.linkedinLeads}</span>
-                      <span className="text-xs text-ice/60">HQ LinkedIn Leads</span>
+                      <span className="text-xl font-bold text-steel">{plan.linkedin_hq_leads_monthly}</span>
+                      <span className="text-xs text-ice/60">HQ LinkedIn Leads/mo</span>
                     </div>
                     <div className="flex items-center gap-2">
-                      <span className="text-xl font-bold text-steel">{plan.gmbLeads}</span>
-                      <span className="text-xs text-ice/60">GMB Leads</span>
+                      <span className="text-xl font-bold text-steel">{plan.gmb_leads_monthly}</span>
+                      <span className="text-xs text-ice/60">GMB Leads/mo</span>
                     </div>
                   </div>
 
                   <ul className="space-y-2.5 mb-8 flex-1">
-                    {plan.features.map((f, i) => (
+                    {features.map((f, i) => (
                       <li key={i} className="flex items-start gap-2 text-sm text-ice/70">
                         <Check className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" />
                         {f}
@@ -153,9 +180,9 @@ export default function PricingPage() {
                   ) : session ? (
                     <Link
                       href={`/dashboard/billing?upgrade=${plan.id}`}
-                      className={`w-full py-2.5 rounded-lg text-center text-sm font-semibold transition-all ${plan.popular ? 'bg-violet text-offwhite hover:opacity-90' : 'bg-ocean/30 text-ice hover:bg-ocean/50'}`}
+                      className={`w-full py-2.5 rounded-lg text-center text-sm font-semibold transition-all ${isPopular ? 'bg-violet text-offwhite hover:opacity-90' : 'bg-ocean/30 text-ice hover:bg-ocean/50'}`}
                     >
-                      {plan.price === 0 ? 'Downgrade' : 'Upgrade'}
+                      {plan.price_monthly === 0 ? 'Downgrade' : 'Upgrade'}
                     </Link>
                   ) : (
                     <Link

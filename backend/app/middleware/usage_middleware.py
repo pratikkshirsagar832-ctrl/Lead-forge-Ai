@@ -32,24 +32,10 @@ async def check_search_limit(current_user: dict = Depends(get_current_user)) -> 
                 },
             )
 
-        # Trial expiry only applies to free-plan trials (never team members).
-        if eff["status"] == "trial" and plan_id == "free":
-            row = None
-            from app.services.plans import get_latest_subscription_row
-            row = get_latest_subscription_row(supabase, user_id)
-            trial_end = (row or {}).get("trial_end")
-            if trial_end:
-                from datetime import datetime, timezone
-                trial_end_naive = datetime.fromisoformat(trial_end.replace('Z', '+00:00')).replace(tzinfo=None)
-                if trial_end_naive < datetime.now(timezone.utc).replace(tzinfo=None):
-                    plan_id = "free"
-                    eff = {**eff, "plan_id": "free", "status": "inactive"}
-
         plan = get_plan_row(supabase, plan_id)
-        plan_max = plan.get("searches_per_day", 3)
-        used_today, _ = get_used_today(supabase, user_id)
-
-        remaining = max(0, plan_max - used_today)
+        searches_per_day = int(plan.get("searches_per_day", 0) or 0)
+        used_searches, _ = get_used_today(supabase, user_id)
+        remaining = max(0, searches_per_day - used_searches)
 
         if remaining <= 0:
             raise HTTPException(
@@ -57,7 +43,8 @@ async def check_search_limit(current_user: dict = Depends(get_current_user)) -> 
                 detail={
                     "message": "Daily search limit reached",
                     "remaining_searches": 0,
-                    "plan": plan.get("name", plan_id),
+                    "searches_per_day": searches_per_day,
+                    "plan": plan_id,
                     "upgrade_url": "/pricing",
                 },
             )

@@ -20,7 +20,22 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/subscriptions", tags=["Subscriptions"])
 
 
+def _razorpay_amount_for_plan(settings, plan_id: str) -> int:
+    """Return a dashboard-configured INR paise amount; never convert USD live."""
+    amounts = {
+        "solo": settings.razorpay_solo_amount_inr,
+        "pro": settings.razorpay_pro_amount_inr,
+        "agency": settings.razorpay_agency_amount_inr,
+    }
+    amount = int(amounts.get(plan_id, 0) or 0)
+    if amount <= 0:
+        raise HTTPException(status_code=503, detail="This plan is not configured for payments yet")
+    return amount
+
+
 def _get_razorpay_client(settings):
+    if razorpay is None:
+        raise HTTPException(status_code=503, detail="Payment system not configured")
     client = razorpay.Client(auth=(settings.razorpay_key_id, settings.razorpay_key_secret))
     client._update_user_agent_header = lambda opts: {
         **opts,
@@ -62,6 +77,15 @@ async def get_current_subscription(current_user: dict = Depends(get_current_user
         leads_per_day = plan.get("leads_per_day", 30) or 30
 
         used_searches, used_leads = get_used_today(supabase, user_id)
+        month = datetime.now(timezone.utc).replace(day=1).date().isoformat()
+        usage = {}
+        try:
+            monthly = supabase.table("monthly_usage").select("*").eq("user_id", user_id).eq("usage_month", month).limit(1).execute()
+            usage = (monthly.data or [{}])[0]
+        except Exception as monthly_err:
+            logger.debug(f"monthly_usage table not available: {monthly_err}")
+        linkedin_limit = int(plan.get("linkedin_hq_leads_monthly", 0) or 0)
+        gmb_limit = int(plan.get("gmb_leads_monthly", 0) or 0)
 
         source_row = eff.get("source_row") or get_latest_subscription_row(supabase, user_id) or {}
 
@@ -73,6 +97,12 @@ async def get_current_subscription(current_user: dict = Depends(get_current_user
             "leads_per_day": leads_per_day,
             "remaining_searches": max(0, searches_per_day - used_searches),
             "remaining_leads": max(0, leads_per_day - used_leads),
+            "linkedin_hq_leads_monthly": linkedin_limit,
+            "gmb_leads_monthly": gmb_limit,
+            "linkedin_hq_leads_used": int(usage.get("linkedin_hq_generated", 0) or 0),
+            "gmb_leads_used": int(usage.get("gmb_generated", 0) or 0),
+            "linkedin_hq_leads_remaining": max(0, linkedin_limit - int(usage.get("linkedin_hq_generated", 0) or 0) - int(usage.get("linkedin_hq_reserved", 0) or 0)),
+            "gmb_leads_remaining": max(0, gmb_limit - int(usage.get("gmb_generated", 0) or 0) - int(usage.get("gmb_reserved", 0) or 0)),
             "current_period_start": source_row.get("current_period_start"),
             "current_period_end": source_row.get("current_period_end"),
             "trial_end": source_row.get("trial_end"),
@@ -104,12 +134,7 @@ async def create_order(
             raise HTTPException(status_code=404, detail="Plan not found")
 
         plan = plan_resp.data[0]
-        # price_monthly is stored in USD CENTS (display pricing is USD).
-        # Razorpay settles in INR for Indian accounts, so convert at the
-        # current market rate (checked 2026-08-25): usd_cents x rate =
-        # INR paise. e.g. $19 -> Rs.1,819 | $99 -> Rs.9,479 | $299 -> Rs.28,629
-        USD_TO_INR_RATE = 95.75
-        amount = int(int(plan["price_monthly"]) * USD_TO_INR_RATE)
+        amount = _razorpay_amount_for_plan(settings, plan_id)
 
         if amount <= 0:
             raise HTTPException(status_code=400, detail="Cannot create order for free plan")
@@ -169,9 +194,8 @@ async def verify_payment(
     razorpay_order_id = data.get("razorpay_order_id")
     razorpay_payment_id = data.get("razorpay_payment_id")
     razorpay_signature = data.get("razorpay_signature")
-    plan_id = data.get("plan_id")
 
-    if not all([razorpay_order_id, razorpay_payment_id, razorpay_signature, plan_id]):
+    if not all([razorpay_order_id, razorpay_payment_id, razorpay_signature]):
         raise HTTPException(status_code=400, detail="Missing payment verification fields")
 
     expected_signature = hmac.new(
@@ -186,6 +210,19 @@ async def verify_payment(
     supabase = get_supabase_admin()
 
     try:
+        # Bind the payment to the authenticated user's pending order. The
+        # browser never selects the activated plan.
+        pending = supabase.table("user_subscriptions").select("id, razorpay_order_id").eq(
+            "user_id", current_user["id"]
+        ).eq("razorpay_order_id", razorpay_order_id).limit(1).execute()
+        if not pending.data:
+            raise HTTPException(status_code=400, detail="Payment order does not belong to this account")
+        client = _get_razorpay_client(settings)
+        order = client.order.fetch(razorpay_order_id)
+        notes = order.get("notes") or {}
+        plan_id = notes.get("plan_id")
+        if notes.get("user_id") != current_user["id"] or not plan_id:
+            raise HTTPException(status_code=400, detail="Invalid payment order metadata")
         plan_resp = supabase.table("plans").select("*").eq("id", plan_id).limit(1).execute()
         if not plan_resp.data or len(plan_resp.data) == 0:
             raise HTTPException(status_code=404, detail="Plan not found")
@@ -196,7 +233,7 @@ async def verify_payment(
         now = datetime.now(timezone.utc)
         period_end = now + timedelta(days=int(billing_cycle_days))
 
-        existing = supabase.table("user_subscriptions").select("id").eq("user_id", current_user["id"]).limit(1).execute()
+        existing = pending
 
         sub_data = {
             "plan_id": plan_id,
@@ -214,21 +251,6 @@ async def verify_payment(
             sub_data["user_id"] = current_user["id"]
             sub_data["razorpay_payment_id"] = razorpay_payment_id
             supabase.table("user_subscriptions").insert(sub_data).execute()
-
-        today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-        existing_usage = supabase.table("daily_usage").select("searches_run").eq("user_id", current_user["id"]).eq("date", today_str).execute()
-        if existing_usage.data and len(existing_usage.data) > 0:
-            supabase.table("daily_usage").update({
-                "searches_run": 0,
-                "leads_generated": 0,
-            }).eq("user_id", current_user["id"]).eq("date", today_str).execute()
-        else:
-            supabase.table("daily_usage").insert({
-                "user_id": current_user["id"],
-                "date": today_str,
-                "searches_run": 0,
-                "leads_generated": 0,
-            }).execute()
 
         return {
             "status": "success",
@@ -279,15 +301,22 @@ async def razorpay_webhook(request: Request):
                 existing = supabase.table("user_subscriptions").select("id, user_id, plan_id").eq("razorpay_order_id", order_id).limit(1).execute()
                 sub_data = existing.data[0] if existing.data and len(existing.data) > 0 else None
                 if sub_data:
+                    order = _get_razorpay_client(settings).order.fetch(order_id)
+                    plan_id = (order.get("notes") or {}).get("plan_id")
+                    if not plan_id:
+                        logger.warning("Ignoring payment without plan metadata: %s", order_id)
+                        return {"status": "ok"}
                     # Look up plan to get billing cycle for period dates
                     now = datetime.now(timezone.utc)
                     update_fields = {
                         "status": "active",
                         "razorpay_payment_id": payment_id,
+                        "plan_id": plan_id,
                     }
-                    # Only set plan_id and period dates if not already set (verify endpoint may have done this)
-                    if not sub_data.get("plan_id") or sub_data["plan_id"] == "free":
-                        plan_resp = supabase.table("plans").select("billing_cycle_days").eq("id", sub_data.get("plan_id", "free")).limit(1).execute()
+                    # Webhooks must independently establish dates; duplicate
+                    # events only write the same payment identifier.
+                    if not sub_data.get("razorpay_payment_id"):
+                        plan_resp = supabase.table("plans").select("billing_cycle_days").eq("id", plan_id).limit(1).execute()
                         cycle_days = 30
                         if plan_resp.data and len(plan_resp.data) > 0:
                             cycle_days = plan_resp.data[0].get("billing_cycle_days", 30)
@@ -295,10 +324,6 @@ async def razorpay_webhook(request: Request):
                         update_fields["current_period_end"] = (now + timedelta(days=cycle_days)).isoformat()
 
                     supabase.table("user_subscriptions").update(update_fields).eq("id", sub_data["id"]).execute()
-
-                    # Reset daily usage so user gets full plan limits
-                    today_str = now.strftime("%Y-%m-%d")
-                    supabase.table("daily_usage").delete().eq("user_id", sub_data["user_id"]).eq("date", today_str).execute()
 
         elif event_type == "subscription.charged":
             sub_id = payload.get("subscription", {}).get("entity", {}).get("id", "")
@@ -318,16 +343,13 @@ async def razorpay_webhook(request: Request):
                         "current_period_end": (now + timedelta(days=cycle_days)).isoformat(),
                     }).eq("id", sub_row["id"]).execute()
 
-                    # Reset daily usage
-                    today_str = now.strftime("%Y-%m-%d")
-                    supabase.table("daily_usage").delete().eq("user_id", sub_row["user_id"]).eq("date", today_str).execute()
 
         return {"status": "ok"}
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Webhook error: {e}", exc_info=True)
-        return {"status": "ok"}
+        logger.error(f"Webhook processing failed: {e}", exc_info=True)
+        return {"status": "error", "message": "Webhook processing failed"}
 
 
 @router.post("/cancel")
@@ -338,7 +360,7 @@ async def cancel_subscription(current_user: dict = Depends(get_current_user)):
         supabase.table("user_subscriptions").update({
             "status": "cancelled",
             "cancelled_at": datetime.now(timezone.utc).isoformat(),
-        }).eq("user_id", current_user["id"]).execute()
+        }).eq("user_id", current_user["id"]).eq("status", "active").execute()
         return {"status": "cancelled", "message": "Subscription cancelled"}
     except Exception as e:
         logger.error(f"Failed to cancel subscription: {e}")

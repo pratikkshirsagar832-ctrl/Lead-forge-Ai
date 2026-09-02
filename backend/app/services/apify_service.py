@@ -50,8 +50,9 @@ def _key_blacklisted(key: str) -> bool:
 
 
 def _mark_key_blacklisted(key: str) -> None:
-    _KEY_PERMA_BLACKLIST.add(key)
-    _key_cooldown.pop(key, None)
+    with _key_lock:
+        _KEY_PERMA_BLACKLIST.add(key)
+        _key_cooldown.pop(key, None)
     logger.error(f"[Apify] Key {key[-6:]} permanently blacklisted (revoked/invalid token)")
 
 
@@ -79,7 +80,8 @@ def _is_key_in_cooldown(key: str) -> bool:
 
 
 def _mark_key_cooldown(key: str) -> None:
-    _key_cooldown[key] = time.time() + KEY_COOLDOWN_SECONDS
+    with _key_lock:
+        _key_cooldown[key] = time.time() + KEY_COOLDOWN_SECONDS
     logger.warning(f"[Apify] Key {key[-6:]} marked dead for {KEY_COOLDOWN_SECONDS}s")
 
 
@@ -240,7 +242,12 @@ def _run_with_key(actor_id: str, key: str, payload: dict) -> list[dict]:
     if response.status_code not in (200, 201):
         raise ApifyRetryableError(f"Unexpected status {response.status_code}: {response.text[:500]}", response.status_code)
 
-    return response.json()
+    data = response.json()
+    if isinstance(data, list):
+        return data
+    if isinstance(data, dict):
+        return data.get("items", data.get("data", []))
+    return []
 
 
 def run_post_search(

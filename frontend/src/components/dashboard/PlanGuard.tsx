@@ -60,14 +60,14 @@ export default function PlanGuard({ children }: { children: React.ReactNode }) {
               <Crown className="h-5 w-5 text-cyan shrink-0" />
               <div>
                 <p className="text-sm text-offwhite font-medium">Pro Plan</p>
-                <p className="text-xs text-steel">50 leads/day</p>
+                <p className="text-xs text-steel">120 HQ LinkedIn + 1500 GMB leads/mo</p>
               </div>
             </div>
             <div className="flex items-center gap-3 bg-navy/60 rounded-lg p-3 border border-steel/10">
               <Zap className="h-5 w-5 text-emerald shrink-0" />
               <div>
                 <p className="text-sm text-offwhite font-medium">Agency Plan</p>
-                <p className="text-xs text-steel">100 leads/day + priority</p>
+                <p className="text-xs text-steel">400 HQ LinkedIn + 6000 GMB leads/mo + priority</p>
               </div>
             </div>
           </div>

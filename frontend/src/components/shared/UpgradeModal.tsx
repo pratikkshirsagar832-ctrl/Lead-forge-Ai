@@ -11,9 +11,9 @@ interface UpgradeModalProps {
 }
 
 export function UpgradeModal({ isOpen, onClose, type = 'limit' }: UpgradeModalProps) {
-  const title = type === 'limit' ? 'Daily Limit Reached' : 'Trial Expired';
+  const title = type === 'limit' ? 'Search Limit Reached' : 'Trial Expired';
   const description = type === 'limit'
-    ? 'You have used all your searches for today. Upgrade your plan to continue finding leads without interruption.'
+    ? 'You have used all your searches. Upgrade your plan to continue finding leads without interruption.'
     : 'Your free trial has ended. Upgrade to a paid plan to keep using Hyperclients and unlock more leads.';
 
   return (

@@ -10,6 +10,13 @@ export interface SubscriptionInfo {
   current_period_end?: string;
   trial_end?: string;
   is_trial_expired?: boolean;
+  is_team_seat?: boolean;
+  linkedin_hq_leads_monthly: number;
+  gmb_leads_monthly: number;
+  linkedin_hq_leads_used: number;
+  gmb_leads_used: number;
+  linkedin_hq_leads_remaining: number;
+  gmb_leads_remaining: number;
 }
 
 export interface Plan {
@@ -21,6 +28,8 @@ export interface Plan {
   is_active: boolean;
   sort_order: number;
   features: string[];
+  linkedin_hq_leads_monthly?: number;
+  gmb_leads_monthly?: number;
 }
 
 export interface SearchStatus {

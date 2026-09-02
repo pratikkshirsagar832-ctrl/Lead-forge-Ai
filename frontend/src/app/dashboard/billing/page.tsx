@@ -103,7 +103,6 @@ function BillingContent() {
               razorpay_order_id: r.razorpay_order_id,
               razorpay_payment_id: r.razorpay_payment_id,
               razorpay_signature: r.razorpay_signature,
-              plan_id: plan.id,
             });
             setSuccess(`Upgraded to ${plan.name} plan successfully!`);
             loadData();
@@ -200,29 +199,29 @@ function BillingContent() {
 
       {/* Usage */}
       <GlassCard className="p-6">
-        <h3 className="text-sm font-semibold text-offwhite mb-4">Daily Usage</h3>
+        <h3 className="text-sm font-semibold text-offwhite mb-4">Monthly Usage</h3>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <div>
             <div className="flex justify-between text-xs text-ice/50 mb-1">
-              <span>Searches</span>
-              <span>{subscription?.searches_per_day ? (subscription.searches_per_day - (subscription.remaining_searches || 0)) : 0} / {subscription?.searches_per_day || 1}</span>
+              <span>HQ LinkedIn leads</span>
+              <span>{subscription?.linkedin_hq_leads_used || 0} / {subscription?.linkedin_hq_leads_monthly || 0}</span>
             </div>
             <div className="h-2 rounded-full bg-ocean/30 overflow-hidden">
               <div
                 className="h-full rounded-full bg-steel transition-all"
-                style={{ width: `${subscription?.searches_per_day ? ((subscription.searches_per_day - (subscription.remaining_searches || 0)) / subscription.searches_per_day) * 100 : 0}%` }}
+                style={{ width: `${subscription?.linkedin_hq_leads_monthly ? ((subscription.linkedin_hq_leads_used || 0) / subscription.linkedin_hq_leads_monthly) * 100 : 0}%` }}
               />
             </div>
           </div>
           <div>
             <div className="flex justify-between text-xs text-ice/50 mb-1">
-              <span>Leads / day limit</span>
-              <span>{subscription?.leads_per_day ? (subscription.leads_per_day - (subscription.remaining_leads || 0)) : 0} / {subscription?.leads_per_day || 30}</span>
+              <span>GMB leads</span>
+              <span>{subscription?.gmb_leads_used || 0} / {subscription?.gmb_leads_monthly || 0}</span>
             </div>
             <div className="h-2 rounded-full bg-ocean/30 overflow-hidden">
               <div
                 className="h-full rounded-full bg-emerald-400 transition-all"
-                style={{ width: `${subscription?.leads_per_day ? ((subscription.leads_per_day - (subscription.remaining_leads || 0)) / subscription.leads_per_day) * 100 : 0}%` }}
+                style={{ width: `${subscription?.gmb_leads_monthly ? ((subscription.gmb_leads_used || 0) / subscription.gmb_leads_monthly) * 100 : 0}%` }}
               />
             </div>
           </div>
@@ -251,7 +250,7 @@ function BillingContent() {
                 <p className="text-2xl font-extrabold text-offwhite mb-1">
                   ${priceUsd}<span className="text-sm font-normal text-ice/40">/mo</span>
                 </p>
-                <p className="text-xs text-ice/50 mb-4">{plan.leads_per_day} leads/day · {plan.searches_per_day} searches</p>
+                <p className="text-xs text-ice/50 mb-4">{plan.linkedin_hq_leads_monthly || 0} HQ LinkedIn · {plan.gmb_leads_monthly || 0} GMB leads/month</p>
                 {isCurrent ? (
                   <div className="w-full py-2 rounded-lg bg-steel/20 text-steel text-xs font-semibold text-center">
                     Current Plan

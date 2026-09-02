@@ -42,9 +42,7 @@ async def generate_pitch(
 
     try:
         import asyncio
-        loop = asyncio.get_event_loop()
-        resp = await loop.run_in_executor(
-            None,
+        resp = await asyncio.to_thread(
             lambda: client.chat.completions.create(
                 model=PITCH_MODEL,
                 messages=[
@@ -83,7 +81,7 @@ async def generate_pitch(
     except Exception as e:
         logger.error(f"Pitch generation failed: {e}")
         return {
-            "pitch": f"Pitch generation failed: {str(e)}",
+            "pitch": "Pitch generation failed. Please try again.",
             "confidence_score": 0.0,
             "estimated_deal_value": 0.0,
         }
@@ -107,9 +105,7 @@ async def generate_website_message(
 
     try:
         import asyncio
-        loop = asyncio.get_event_loop()
-        resp = await loop.run_in_executor(
-            None,
+        resp = await asyncio.to_thread(
             lambda: client.chat.completions.create(
                 model=MESSAGE_MODEL,
                 messages=[

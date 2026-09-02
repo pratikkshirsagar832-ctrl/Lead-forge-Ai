@@ -5,9 +5,11 @@ Uses Scrapling for multi-page crawling and signal extraction only.
 No rule-based scoring — all scoring is delegated to OpenAI via deep_analyzer.
 """
 
+import ipaddress
 import json
 import logging
 import re
+import socket
 from typing import Any
 from urllib.parse import urljoin, urlparse
 
@@ -44,6 +46,56 @@ SOCIAL_DOMAINS = {
     "whatsapp": ["wa.me", "whatsapp.com"],
 }
 
+def _is_safe_url(url: str) -> tuple[bool, str]:
+    """Validate URL against SSRF attacks. Returns (is_safe, reason)."""
+    try:
+        parsed = urlparse(url)
+    except Exception:
+        return False, "Invalid URL"
+
+    if parsed.scheme not in ("http", "https"):
+        return False, f"Blocked scheme: {parsed.scheme}"
+
+    hostname = parsed.hostname or ""
+    if not hostname:
+        return False, "No hostname"
+
+    # Block localhost variants
+    blocked_names = {"localhost", "127.0.0.1", "0.0.0.0", "::1", "[::1]"}
+    if hostname.lower() in blocked_names:
+        return False, "Blocked localhost"
+
+    # Block cloud metadata IPs
+    blocked_ip_prefixes = ("169.254.", "10.", "192.168.", "172.")
+    if any(hostname.startswith(p) for p in blocked_ip_prefixes):
+        return False, f"Blocked private IP: {hostname}"
+
+    # Block IPv6 private/link-local
+    try:
+        addr = ipaddress.ip_address(hostname)
+        if addr.is_loopback or addr.is_private or addr.is_link_local or addr.is_reserved:
+            return False, f"Blocked reserved IP: {hostname}"
+    except ValueError:
+        pass  # hostname is not an IP, try DNS resolution
+
+    # Resolve and check resolved IPs
+    try:
+        resolved = socket.getaddrinfo(hostname, None)
+        for _, _, _, _, sockaddr in resolved:
+            ip = ipaddress.ip_address(sockaddr[0])
+            if ip.is_loopback or ip.is_private or ip.is_link_local or ip.is_reserved:
+                return False, f"Hostname resolves to private IP: {ip}"
+    except (socket.gaierror, OSError):
+        return False, "DNS resolution failed"
+
+    # Block dangerous ports
+    port = parsed.port
+    if port is not None and port in (22, 25, 53, 135, 139, 445, 1433, 3306, 3389, 5432, 6379, 27017):
+        return False, f"Blocked port: {port}"
+
+    return True, ""
+
+
 CTA_KEYWORDS = [
     "contact us", "get a quote", "book now", "schedule", "call now",
     "free consult", "get started", "request demo", "sign up", "order now",
@@ -65,6 +117,11 @@ async def analyze_website(url: str) -> dict[str, Any]:
         return _empty_result("Scraper library not available: scrapling is not installed")
     if not url.startswith(("http://", "https://")):
         url = f"https://{url}"
+
+    safe, reason = _is_safe_url(url)
+    if not safe:
+        logger.warning(f"[Analyzer] SSRF blocked for {url}: {reason}")
+        return _empty_result(f"Blocked: {reason}")
 
     parsed = urlparse(url)
     base_domain = parsed.netloc
@@ -140,6 +197,10 @@ async def analyze_website(url: str) -> dict[str, Any]:
 
         for page_name, page_url in important_urls:
             if page_url == url or page_url in pages_crawled:
+                continue
+            page_safe, page_reason = _is_safe_url(page_url)
+            if not page_safe:
+                logger.debug(f"[Analyzer] SSRF blocked sub-page {page_url}: {page_reason}")
                 continue
             try:
                 page_resp = await _fetch_page(page_url, timeout=15)
@@ -445,21 +506,23 @@ async def analyze_website(url: str) -> dict[str, Any]:
             add_issue("Missing ARIA attributes (poor accessibility)")
 
         ai_bots_blocked = []
-        try:
-            robots_url = f"{parsed.scheme}://{parsed.netloc}/robots.txt"
-            robots_resp = await AsyncFetcher.get(robots_url, timeout=8, follow_redirects=False)
-            if robots_resp and robots_resp.status == 200:
-                robots_text_raw = str(robots_resp.get_all_text(strip=True) or "").lower()
-                ai_bots = ["gptbot", "claudebot", "perplexitybot", "google-extended"]
-                for bot in ai_bots:
-                    if "disallow: /" in robots_text_raw and bot in robots_text_raw:
-                        ai_bots_blocked.append(bot)
-                raw["robots_txt_found"] = True
-                raw["robots_ai_bots_blocked"] = ai_bots_blocked
-            else:
+        robots_url = f"{parsed.scheme}://{parsed.netloc}/robots.txt"
+        robots_safe, _ = _is_safe_url(robots_url)
+        if robots_safe:
+            try:
+                robots_resp = await AsyncFetcher.get(robots_url, timeout=8, follow_redirects=False)
+                if robots_resp and robots_resp.status == 200:
+                    robots_text_raw = str(robots_resp.get_all_text(strip=True) or "").lower()
+                    ai_bots = ["gptbot", "claudebot", "perplexitybot", "google-extended"]
+                    for bot in ai_bots:
+                        if "disallow: /" in robots_text_raw and bot in robots_text_raw:
+                            ai_bots_blocked.append(bot)
+                    raw["robots_txt_found"] = True
+                    raw["robots_ai_bots_blocked"] = ai_bots_blocked
+                else:
+                    raw["robots_txt_found"] = False
+            except Exception:
                 raw["robots_txt_found"] = False
-        except Exception:
-            raw["robots_txt_found"] = False
 
         sitemap_found = False
         try:

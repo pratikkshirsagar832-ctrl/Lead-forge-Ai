@@ -6,6 +6,9 @@ export const runtime = 'nodejs';
 export async function POST(req: NextRequest) {
   const body = await req.json().catch(() => null);
   const password = body?.password ?? '';
+  if (!ADMIN_PASSWORD) {
+    return NextResponse.json({ error: 'Admin authentication is not configured' }, { status: 503 });
+  }
   if (!password || !safeEqual(String(password), ADMIN_PASSWORD)) {
     return NextResponse.json({ error: 'Invalid password' }, { status: 401 });
   }

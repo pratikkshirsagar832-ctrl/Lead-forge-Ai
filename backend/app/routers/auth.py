@@ -1,6 +1,6 @@
 import logging
 import re
-from datetime import date, datetime, timezone
+from datetime import datetime, timezone
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Body
@@ -192,7 +192,7 @@ async def get_me(current_user: dict = Depends(get_current_user)):
     subscription = None
 
     # Compute correct remaining counts from actual table state
-    today_str = date.today().isoformat()
+    today_str = datetime.now(timezone.utc).date().isoformat()
     usage_resp = supabase.table("daily_usage") \
         .select("searches_run, leads_generated") \
         .eq("user_id", current_user["id"]) \
@@ -213,6 +213,20 @@ async def get_me(current_user: dict = Depends(get_current_user)):
             leads_per_day = subscription.get("leads_per_day", 30)
             subscription["remaining_searches"] = max(0, searches_per_day - used_searches)
             subscription["remaining_leads"] = max(0, leads_per_day - used_leads)
+
+            # Monthly usage
+            month_str = datetime.now(timezone.utc).replace(day=1).date().isoformat()
+            try:
+                monthly = supabase.table("monthly_usage").select("*").eq("user_id", current_user["id"]).eq("usage_month", month_str).limit(1).execute()
+                mu = (monthly.data or [{}])[0]
+            except Exception:
+                mu = {}
+            plan_row = supabase.table("plans").select("linkedin_hq_leads_monthly,gmb_leads_monthly").eq("id", subscription.get("plan_id", "free")).limit(1).execute()
+            plan_cols = (plan_row.data or [{}])[0] if plan_row.data else {}
+            subscription["linkedin_hq_leads_monthly"] = int(plan_cols.get("linkedin_hq_leads_monthly", 0) or 0)
+            subscription["gmb_leads_monthly"] = int(plan_cols.get("gmb_leads_monthly", 0) or 0)
+            subscription["linkedin_hq_leads_used"] = int(mu.get("linkedin_hq_generated", 0) or 0)
+            subscription["gmb_leads_used"] = int(mu.get("gmb_generated", 0) or 0)
 
         # Direct-table truth check: team members resolve their plan LIVE
         # from the owner's subscription (upgrades/renewals propagate instantly).
@@ -250,12 +264,25 @@ async def get_me(current_user: dict = Depends(get_current_user)):
                     "leads_per_day": plan.get("leads_per_day", 30),
                     "remaining_searches": max(0, plan.get("searches_per_day", 3) - used_s),
                     "remaining_leads": max(0, plan.get("leads_per_day", 30) - used_l),
+                    "linkedin_hq_leads_monthly": int(plan.get("linkedin_hq_leads_monthly", 0) or 0),
+                    "gmb_leads_monthly": int(plan.get("gmb_leads_monthly", 0) or 0),
+                    "linkedin_hq_leads_used": 0,
+                    "gmb_leads_used": 0,
                     "current_period_start": None,
                     "current_period_end": (eff.get("source_row") or {}).get("current_period_end"),
                     "trial_end": None,
                     "is_trial_expired": False,
                     "is_team_seat": eff.get("team_owner_id") is not None,
                 }
+                # Monthly usage
+                month_str = datetime.now(timezone.utc).replace(day=1).date().isoformat()
+                try:
+                    monthly = supabase.table("monthly_usage").select("*").eq("user_id", current_user["id"]).eq("usage_month", month_str).limit(1).execute()
+                    mu = (monthly.data or [{}])[0]
+                    subscription["linkedin_hq_leads_used"] = int(mu.get("linkedin_hq_generated", 0) or 0)
+                    subscription["gmb_leads_used"] = int(mu.get("gmb_generated", 0) or 0)
+                except Exception:
+                    pass
         except Exception as tbl_err:
             logger.warning(f"Effective-plan resolution failed: {tbl_err}")
     except Exception as e:
@@ -281,7 +308,7 @@ async def get_me(current_user: dict = Depends(get_current_user)):
                     .execute()
 
                 plan = plan_resp.data[0] if plan_resp.data and len(plan_resp.data) > 0 else {}
-                today_str = date.today().isoformat()
+                today_str = datetime.now(timezone.utc).date().isoformat()
 
                 usage_resp = supabase.table("daily_usage") \
                     .select("searches_run, leads_generated") \
@@ -301,11 +328,23 @@ async def get_me(current_user: dict = Depends(get_current_user)):
                     "leads_per_day": leads_per_day,
                     "remaining_searches": max(0, searches_per_day - (used.get("searches_run", 0) or 0)),
                     "remaining_leads": max(0, leads_per_day - (used.get("leads_generated", 0) or 0)),
+                    "linkedin_hq_leads_monthly": int(plan.get("linkedin_hq_leads_monthly", 0) or 0),
+                    "gmb_leads_monthly": int(plan.get("gmb_leads_monthly", 0) or 0),
+                    "linkedin_hq_leads_used": 0,
+                    "gmb_leads_used": 0,
                     "current_period_start": sub.get("current_period_start"),
                     "current_period_end": sub.get("current_period_end"),
                     "trial_end": sub.get("trial_end"),
                     "is_trial_expired": sub.get("is_trial_expired", False),
                 }
+                month_str = datetime.now(timezone.utc).replace(day=1).date().isoformat()
+                try:
+                    monthly = supabase.table("monthly_usage").select("*").eq("user_id", current_user["id"]).eq("usage_month", month_str).limit(1).execute()
+                    mu = (monthly.data or [{}])[0]
+                    subscription["linkedin_hq_leads_used"] = int(mu.get("linkedin_hq_generated", 0) or 0)
+                    subscription["gmb_leads_used"] = int(mu.get("gmb_generated", 0) or 0)
+                except Exception:
+                    pass
         except Exception as e:
             logger.error(f"Failed to fetch subscription directly: {e}")
 

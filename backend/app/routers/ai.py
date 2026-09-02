@@ -7,36 +7,42 @@ Endpoints:
 """
 
 import logging
-from datetime import date
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException
 
 from app.database import get_supabase_admin
 from app.middleware.auth_middleware import get_current_user
 from app.services.ai_service import generate_pitch, generate_website_message
+from app.services.plans import get_plan_row, resolve_effective_subscription
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/ai", tags=["AI"])
 
+# Plan-based AI limits (daily)
+AI_DAILY_LIMITS = {
+    "free": 5,
+    "solo": 25,
+    "pro": 100,
+    "agency": 300,
+}
+AI_DEFAULT_LIMIT = 5
+
+
+def _get_ai_daily_limit(plan_id: str) -> int:
+    return AI_DAILY_LIMITS.get(plan_id, AI_DEFAULT_LIMIT)
+
 
 def _increment_ai_usage(user_id: str) -> None:
     supabase = get_supabase_admin()
+    today = datetime.now(timezone.utc).date().isoformat()
     try:
-        supabase.rpc("increment_daily_usage", {
-            "p_user_id": user_id,
-            "p_ai_calls": 1,
-            "p_searches": 0,
-            "p_leads": 0,
-        }).execute()
-    except Exception as e:
-        logger.warning(f"Failed to increment AI usage via RPC: {e}")
-        today = date.today().isoformat()
         existing = supabase.table("daily_usage").select("id, ai_calls").eq("user_id", user_id).eq("date", today).execute()
         if existing.data and len(existing.data) > 0:
-            supabase.table("daily_usage").update({
-                "ai_calls": (existing.data[0].get("ai_calls", 0) or 0) + 1,
-            }).eq("id", existing.data[0]["id"]).execute()
+            row = existing.data[0]
+            new_count = (row.get("ai_calls", 0) or 0) + 1
+            supabase.table("daily_usage").update({"ai_calls": new_count}).eq("id", row["id"]).execute()
         else:
             supabase.table("daily_usage").insert({
                 "user_id": user_id,
@@ -45,22 +51,29 @@ def _increment_ai_usage(user_id: str) -> None:
                 "leads_generated": 0,
                 "ai_calls": 1,
             }).execute()
+    except Exception as e:
+        logger.warning(f"Failed to increment AI usage: {e}")
 
-AI_DAILY_LIMIT = 100
 
-
-async def check_ai_limit(user_id: str) -> None:
+async def check_ai_limit(user_id: str) -> str:
+    """Check AI limit based on user's plan. Returns plan_id."""
     supabase = get_supabase_admin()
-    today = date.today().isoformat()
+    today = datetime.now(timezone.utc).date().isoformat()
+
+    eff = resolve_effective_subscription(supabase, user_id)
+    plan_id = eff.get("plan_id", "free")
+    limit = _get_ai_daily_limit(plan_id)
+
     usage_resp = supabase.table("daily_usage").select("ai_calls").eq("user_id", user_id).eq("date", today).execute()
     used = 0
     if usage_resp.data and len(usage_resp.data) > 0:
         used = usage_resp.data[0].get("ai_calls", 0) or 0
-    if used >= AI_DAILY_LIMIT:
+    if used >= limit:
         raise HTTPException(
             status_code=429,
-            detail=f"Daily AI call limit ({AI_DAILY_LIMIT}) reached. Please try again tomorrow.",
+            detail=f"Daily AI call limit ({limit} for {plan_id} plan) reached. Please try again tomorrow.",
         )
+    return plan_id
 
 
 @router.post("/pitch/{lead_id}")

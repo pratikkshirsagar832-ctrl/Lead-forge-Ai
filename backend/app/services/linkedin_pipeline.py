@@ -22,6 +22,7 @@ from datetime import datetime, timezone
 
 from app.config import get_settings
 from app.database import get_supabase_admin
+from app.services.usage import settle_search_quota
 from app.services.apify_service import (
     ApifyError,
     dedupe_post_items,
@@ -989,8 +990,8 @@ Return ONLY valid JSON, nothing else."""
             lead["ai_score"] = result.get("lead_score")
             lead["lead_type"] = result.get("lead_type", "potential")
             lead["work_type"] = work_type
-            lead["business_problem"] = result.get("business_problem", False)
-            lead["service_match"] = result.get("service_match", False)
+            lead["business_problem"] = result.get("business_problem", 0)
+            lead["service_match"] = result.get("service_match", 0)
             lead["buying_intent"] = result.get("buying_intent", 0)
             lead["urgency"] = result.get("urgency", 0)
             lead["decision_maker_likelihood"] = result.get("decision_maker_likelihood", 0)
@@ -1181,6 +1182,7 @@ async def run_linkedin_pipeline(
                 final_phrases.append(p)
         final_phrases = final_phrases[:96]
 
+        raw_count = 0
         pass_no = 0
         while len(all_leads) < max_results and pass_no < MAX_PASSES:
             pass_no += 1
@@ -1201,7 +1203,7 @@ async def run_linkedin_pipeline(
                     raise
                 break
             raw_count = len(items)
-            logger.info(f"[LinkedInPipeline:{search_id}] Pass {pass_no} returned {raw_count} raw posts (parallel)")
+            logger.info(f"[LinkedInPipeline:{search_id}] Pass {pass_no} returned {raw_count} raw posts")
 
             # Skip posts already seen in earlier passes.
             def _pid(it):
@@ -1471,6 +1473,8 @@ async def _save_leads(supabase, search_id: str, user_id: str, leads: list[dict])
         ai_type = lead.get("lead_type") or ""
         if ai_type in ("explicit_need", "problem_awareness", "research", "agency"):
             post_type = "buyer"
+        elif ai_type == "agency_wanted":
+            post_type = "agency_wanted"
         elif ai_type in ("hiring",):
             post_type = "hiring"
         elif ai_type in ("job_seeker",):
@@ -1671,7 +1675,6 @@ async def triage_candidates_async(
     expensive deep scorer only sees genuine prospects. Costs ~500 tokens per
     batch — screening 300 posts costs less than deep-scoring 15.
     """
-    import json as _json
 
     if not candidates:
         return []
@@ -1717,7 +1720,7 @@ Return JSON: {{"keep": [post numbers showing buying/hiring intent]}}"""
                     max_tokens=80,
                     response_format={"type": "json_object"},
                 )
-                data = _json.loads(resp.choices[0].message.content)
+                data = json.loads(resp.choices[0].message.content)
                 keep = data.get("keep", [])
                 return [int(k) for k in keep if isinstance(k, (int, float)) and 0 <= int(k) < len(batch)]
             except Exception as e:
@@ -1737,16 +1740,19 @@ Return JSON: {{"keep": [post numbers showing buying/hiring intent]}}"""
 def _job_country_ok(job: dict, req_country_codes: set[str]) -> bool:
     """Does a job posting's location match the user's requested countries?
 
-    Strict: when a country is requested, the job's location text must name one
-    of the requested countries or a city in it. A location we cannot tie to a
-    requested country (empty, or bare "Remote" with no country) is REJECTED —
-    we never serve a job as an in-country lead unless we can verify it.
+    Remote jobs are accepted when the user has country restrictions, since
+    remote work is location-independent. Only jobs with locations that
+    explicitly mismatch the requested country are rejected.
     """
     if not req_country_codes:
         return True  # No country requested → global, keep all.
     loc = (job.get("location") or "").lower()
     if not loc:
         return False  # Unverifiable against the requested country.
+    # Remote/anywhere jobs are location-agnostic → always accept
+    remote_signals = ("remote", "anywhere", "worldwide", "global", "work from home", "wfh", "hybrid")
+    if any(sig in loc for sig in remote_signals):
+        return True
     if any(name in loc for name, code in COUNTRY_NAME_TO_CODE.items() if code in req_country_codes):
         return True
     if any(city in loc for city, code in CITY_COUNTRY_HINTS.items() if code in req_country_codes):
@@ -1946,10 +1952,9 @@ Return ONLY valid JSON."""
     # Shared TPM cooldown: when any call hits a 429, ALL tasks pause until
     # this timestamp. Single event loop → no lock needed.
     cooldown_until = 0.0
-    import re as _re
 
     def _retry_wait_ms(err_text: str, attempt: int) -> float:
-        m = _re.search(r"try again in (\d+)ms", err_text)
+        m = re.search(r"try again in (\d+)ms", err_text)
         if m:
             return int(m.group(1)) + 150
         return (1.5 ** attempt) * 1000 + 250
@@ -1982,7 +1987,7 @@ Return ONLY valid JSON."""
                         max_tokens=700,
                         response_format={"type": "json_object"},
                     )
-                    result = _json.loads(resp.choices[0].message.content)
+                    result = json.loads(resp.choices[0].message.content)
                     break
                 except Exception as e:
                     err_text = str(e)
@@ -2021,11 +2026,14 @@ Return ONLY valid JSON."""
 
 
 async def _save_leads_bulk(supabase, search_id: str, user_id: str, leads: list[dict], lead_types: list[str] = None) -> list[str]:
-    """Bulk-insert leads in ONE Supabase call (per-row fallback on error).
-    Respects the user's daily remaining-leads limit."""
-    remaining_leads = await _get_remaining_leads(supabase, user_id)
+    """Bulk-insert only leads covered by this search's monthly reservation."""
+    reservation = await asyncio.to_thread(
+        lambda: supabase.table("searches").select("reserved_leads")
+        .eq("id", search_id).limit(1).execute()
+    )
+    remaining_leads = int((reservation.data or [{}])[0].get("reserved_leads", 0) or 0)
     if remaining_leads <= 0:
-        logger.warning(f"[LinkedInPipeline:{search_id}] Daily leads limit reached, skipping saves")
+        logger.warning(f"[LinkedInPipeline:{search_id}] No reserved monthly quota, skipping saves")
         return []
 
     rows: list[dict] = []
@@ -2099,9 +2107,10 @@ async def _save_leads_bulk(supabase, search_id: str, user_id: str, leads: list[d
             (r.get("linkedin_url") or "").split("?")[0].rstrip("/").lower()
             for r in (existing.data or [])
         }
+        original_count = len(rows)
         rows = [r for r in rows if (r.get("linkedin_url") or "").split("?")[0].rstrip("/").lower() not in existing_urls]
         if not rows:
-            logger.info(f"[LinkedInPipeline:{search_id}] All {len(rows)} leads already exist for user — skipping insert")
+            logger.info(f"[LinkedInPipeline:{search_id}] All {original_count} leads already exist for user — skipping insert")
             return []
     except Exception as e:
         logger.warning(f"[LinkedInPipeline:{search_id}] Dedup check failed ({e}) — proceeding with insert")
@@ -2589,6 +2598,7 @@ async def run_linkedin_pipeline_fast(
         warm = len(final_leads) - hot
 
         if not final_leads:
+            await settle_search_quota(supabase, search_id, user_id, 0)
             await _update_search(supabase, search_id, {
                 "status": "completed", "progress_percent": 100,
                 "message": "No relevant leads found after AI qualification.",
@@ -2616,7 +2626,8 @@ async def run_linkedin_pipeline_fast(
         suffix = f", {emails_found} emails" if emails_found else ""
         final_message = f"Found {saved} leads{suffix}"
         if lead_limit_hit:
-            final_message += " | Daily lead limit reached — upgrade your plan for more."
+            final_message += " | Monthly lead quota reached."
+        await settle_search_quota(supabase, search_id, user_id, saved)
         await _update_search(supabase, search_id, {
             "status": "completed", "progress_percent": 100,
             "message": final_message,
@@ -2632,11 +2643,13 @@ async def run_linkedin_pipeline_fast(
 
     except ApifyError as e:
         logger.error(f"[LinkedInPipeline:{search_id}] Apify error: {e}", exc_info=True)
+        await settle_search_quota(supabase, search_id, user_id, 0)
         await _update_search(supabase, search_id, {
             "status": "failed", "message": "LinkedIn scraper failed", "error_message": str(e),
         })
     except Exception as e:
         logger.error(f"[LinkedInPipeline:{search_id}] Unexpected error: {e}", exc_info=True)
+        await settle_search_quota(supabase, search_id, user_id, 0)
         await _update_search(supabase, search_id, {
             "status": "failed", "message": "Search failed unexpectedly", "error_message": str(e),
         })

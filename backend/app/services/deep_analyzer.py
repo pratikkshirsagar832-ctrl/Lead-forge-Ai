@@ -184,10 +184,8 @@ async def _call_openai_batch(client: OpenAI, batch: list[dict]) -> list[dict]:
     )
 
     import asyncio
-    loop = asyncio.get_event_loop()
 
-    resp = await loop.run_in_executor(
-        None,
+    resp = await asyncio.to_thread(
         lambda: client.chat.completions.create(
             model="gpt-4o",
             messages=[

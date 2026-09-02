@@ -7,7 +7,6 @@ import { zodResolver } from '@hookform/resolvers/zod';
 import { useSearch } from '@/hooks/useSearch';
 import api from '@/lib/api';
 import type { SubscriptionInfo } from '@/lib/types';
-import { GlassCard } from '@/components/shared/GlassCard';
 import { Badge } from '@/components/shared/Badge';
 import { LoadingButton } from '@/components/shared/LoadingButton';
 import { SearchProgressCard } from '@/components/dashboard/SearchProgressCard';
@@ -635,8 +634,8 @@ function SearchInfoSection({ isAtLimit, remaining, searchesPerDay, isStarting }:
         <div className="bg-rose-500/10 p-4 rounded-xl border border-rose-500/30 flex items-start gap-3">
           <AlertCircle className="w-5 h-5 text-rose-400 shrink-0 mt-0.5" />
           <div>
-            <p className="text-sm text-rose-300 font-semibold">Daily search limit reached</p>
-            <p className="text-xs text-rose-400/80 mt-1">You&apos;ve used all {searchesPerDay} searches today. Upgrade your plan or wait until tomorrow.</p>
+            <p className="text-sm text-rose-300 font-semibold">Search limit reached</p>
+            <p className="text-xs text-rose-400/80 mt-1">You&apos;ve used all {searchesPerDay} searches. Upgrade your plan for more.</p>
             <Link href="/dashboard/billing" className="text-xs text-steel hover:underline mt-2 inline-block">Upgrade Plan &rarr;</Link>
           </div>
         </div>
@@ -651,7 +650,7 @@ function SearchInfoSection({ isAtLimit, remaining, searchesPerDay, isStarting }:
 
       <div className="flex items-center justify-between">
         <span className="text-xs text-ice/40">
-          {remaining}/{searchesPerDay} searches remaining today
+          {remaining}/{searchesPerDay} searches remaining
         </span>
         <LoadingButton
           type="submit"

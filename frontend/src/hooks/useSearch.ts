@@ -5,7 +5,7 @@ import { useSearchStore } from '@/stores/searchStore';
 import { useToast } from './useToast';
 
 export function useSearch() {
-  const { activeSearchId, progress, setActiveSearch, setProgress, clearActiveSearch, setHistory, appendResults, results, resultsTotal } = useSearchStore();
+  const { activeSearchId, progress, setActiveSearch, setProgress, clearActiveSearch, setHistory, appendResults, setResults, results, resultsTotal } = useSearchStore();
   const setRequestedCount = useSearchStore((s) => s.setRequestedCount);
   const setLimitHit = useSearchStore((s) => s.setLimitHit);
   const { showToast } = useToast();
@@ -55,6 +55,9 @@ export function useSearch() {
       if (data.items?.length > 0) {
         appendResults(data.items);
       }
+      if (data.total && data.total > 0) {
+        setResults(useSearchStore.getState().results, data.total);
+      }
       if (data.total > resultsPageRef.current * 4) {
         resultsPageRef.current += 1;
       }
@@ -93,6 +96,9 @@ export function useSearch() {
           const { data: finalResults } = await api.get(`${API_ROUTES.searches.detail(id)}/results?page=1&per_page=50`, { signal: resultsAbort.signal });
           if (finalResults.items) {
             appendResults(finalResults.items);
+          }
+          if (finalResults.total && finalResults.total > 0) {
+            setResults(useSearchStore.getState().results, finalResults.total);
           }
         } catch (e) {
           console.warn('Failed to fetch final results:', e);

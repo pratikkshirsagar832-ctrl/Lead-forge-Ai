@@ -103,7 +103,7 @@ def get_plan_row(supabase, plan_id: str) -> dict:
 
 
 def get_used_today(supabase, user_id: str) -> tuple[int, int]:
-    today_str = date.today().isoformat()
+    today_str = datetime.now(timezone.utc).date().isoformat()
     resp = supabase.table("daily_usage") \
         .select("searches_run, leads_generated") \
         .eq("user_id", user_id) \

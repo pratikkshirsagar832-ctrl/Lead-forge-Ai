@@ -47,6 +47,9 @@ class Settings(BaseSettings):
 
     razorpay_key_id: str = ""
     razorpay_key_secret: str = ""
+    razorpay_solo_amount_inr: int = 0
+    razorpay_pro_amount_inr: int = 0
+    razorpay_agency_amount_inr: int = 0
 
     gmaps_scraper_path: str = "backend/google-maps-scraper/google-maps-scraper"
 

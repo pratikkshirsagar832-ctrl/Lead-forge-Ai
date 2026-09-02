@@ -96,6 +96,10 @@ def test_country_pass_text_match():
     (candidate(post_text="I am a freelance designer available for projects."), "seller"),
     (candidate(post_text="I am open to work, seeking a role."), "job_seeker"),
     (candidate(post_text="We are a talent staffing agency placing candidates at clients."), "recruiter_seller"),
+    # subtle white-label / partner-selling framing (no literal "we offer"):
+    (candidate(post_text="Agencies are losing money because they say we don't have the team. White label software, AI & ML development partner for agencies. Helping you deliver more."), "seller"),
+    (candidate(post_text="We act as your dedicated offshore team. Let's partner together. Book a free call to see how we can help you scale."), "seller"),
+    (candidate(post_text="Grow your agency by outsourcing to us. Send us a brief and we'll build it for you."), "seller"),
 ])
 def test_prefilter_rejects_garbage(reject, reason):
     got_reject, got_reason = lp.prefilter_reject(reject)

@@ -439,11 +439,24 @@ def generate_queries(lead_type: str, service: str, country_codes: set[str], iter
 SELLER_PATTERNS = [
     r"\bwe offer\b", r"\bwe provide\b", r"\bwe specialize in\b", r"\bwe are a (leading |top )?(agency|studio|firm)\b",
     r"\bour services include\b", r"\bmy services include\b", r"\bI offer\b", r"\bI provide\b",
-    r"\bmy services include\b", r"\bcontact us for\b", r"\bDM us for\b", r"\bDM me for\b",
+    r"\bcontact us for\b", r"\bDM us for\b", r"\bDM me for\b",
     r"\bbook a call\b", r"\bavailable for (projects|hire|work|clients)\b", r"\bopen to (new )?projects\b",
     r"\bopen to remote work\b", r"\blocking for clients\b", r"\btaking (new )?clients\b",
-    r"\bmy portfolio\b", r"\bI am (a|an) (freelance|independent) .{0,40} looking for (clients|work)\b",
+    r"\bmy portfolio\b", r"\bI am (a|an) (freelance|independent) .{0,60} looking for (clients|work)\b",
     r"\bam looking for clients\b", r"\bwe help businesses\b", r"\bget in touch\b",
+    # White-label / partner / OEM sales framing (no literal "we offer"):
+    r"\bwhite[- ]?label\b", r"\bwhite[- ]?label[a-z ]*partner\b",
+    r"\b(we|our|i)\b[\w\s,.'-]{0,20}\bpartner[s]? for (agencies|businesses|devs|developers|designers|marketers)\b",
+    r"\b(help|helps|helping) (you|your|agencies|businesses|companies|clients|them)\b[\w\s,.'-]{0,12}\b(deliver|build|create|scale|win|grow|launch|ship|save)\b",
+    r"\bwe (can |will |)>?build (it|this|that|apps|websites|products|software) for you\b",
+    r"\b(our|the) (team|agency|studio|firm) (can |will |)>?[a-z]{2,20} for you\b",
+    r"\bwe[pt] (be|act|serve|work) as (your|a|an) (white-?label|outsourced|dedicated|virtual) (team|agency|partner|extension)\b",
+    r"\boutsource[d]? (your|to us|custom )?\b", r"\bdedicated (team|developer|designer)s?\b for you\b",
+    r"\blet['’]s (work together|partner|team up|collaborate)\b",
+    r"\b(book|schedule|grab|get) a (free )?(consultation|call|demo|audit|discovery)\b",
+    r"\b(we|our agency|our studio) deliver\b", r"\bwe take care of\b",
+    r"\bsend (us|me) a (message|dm|note|brief)\b", r"\breach out (to us|today|now)\b",
+    r"\bshow (you|them) how we\b", r"\b(results|outcomes) (for|guaranteed)\b",
 ]
 JOB_SEEKER_PATTERNS = [
     r"\blooking for a job\b", r"\blooking for (a )?role\b", r"\blooking for employment\b",

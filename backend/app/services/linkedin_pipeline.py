@@ -46,7 +46,12 @@ MAX_ITERATIONS = 6
 MAX_NO_PROGRESS_ITERATIONS = 3
 WAVE_DEADLINE_SECONDS = 600
 MAX_POSTS_PER_LANE = 15
-MAX_PROVIDER_FAIL_ROUNDS = 1
+# A single transient Apify total-failure (all lanes empty) must NOT abort
+# discovery. Only stop after several consecutive provider failures AND make
+# sure a partial (ok_lanes>0) run is never treated as provider failure. The
+# engine later diversifies queries and retries, so a transient empty response
+# typically resolves on the next iteration.
+MAX_PROVIDER_FAIL_ROUNDS = 2
 PROFILE_ENRICHMENT_CAP = 30
 
 # Hard gates (canonical policy — no other threshold elsewhere).
@@ -923,19 +928,31 @@ async def _run_engine_with_externals(
         logger.info(f"[LinkedIn:{search_id}] iter {iteration}: raw={len(raw_items)} ok_lanes={provider_ok}/{provider_total} queries={len(fresh_q)}")
 
         if not raw_items:
-            if provider_ok == 0:
+            # A provider total-failure (no lane returned data) is NOT proof the
+            # market is empty — it is typically transient (rate-limit/timeout).
+            # Retry across up to MAX_PROVIDER_FAIL_ROUNDS before giving up.
+            if provider_ok == 0 and provider_total > 0:
                 provider_fail_rounds += 1
+                logger.warning(
+                    f"[LinkedIn:{search_id}] iter {iteration}: provider returned no data "
+                    f"({provider_fail_rounds}/{MAX_PROVIDER_FAIL_ROUNDS}) — retrying with diversified queries"
+                )
                 if provider_fail_rounds >= MAX_PROVIDER_FAIL_ROUNDS:
                     reason = "provider_failure"
                     iterations.append(it)
                     break
-            else:
-                no_progress += 1
+                iterations.append(it)
+                continue
+            # No new content but provider responded (e.g. all seen/deduped).
+            no_progress += 1
             iterations.append(it)
             if no_progress >= MAX_NO_PROGRESS_ITERATIONS:
                 reason = "no_progress"
                 break
             continue
+
+        # A successful discovery round resets the provider-failure counter.
+        provider_fail_rounds = 0
 
         # country hard gate
         candidates = []

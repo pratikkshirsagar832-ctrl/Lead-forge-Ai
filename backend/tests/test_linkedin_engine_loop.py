@@ -87,7 +87,8 @@ def make_discover(iterations):
     batches = list(iterations)
     def _discover(queries):
         if not batches:
-            return (0, 1, [], ["exhausted"])
+            # provider_total=0 => search space exhausted, NOT a provider failure.
+            return (0, 0, [], [])
         return batches.pop(0)
     return _discover
 
@@ -223,3 +224,32 @@ def test_dedupe_same_author_one_slot():
     telemetry = asyncio.run(_run(supabase, _request(10), make_discover([(1, 1, [_raw(p1), _raw(p2)], [])]),
                                  make_classify(cls)))
     assert telemetry["final_valid_count"] == 1  # one author = one slot
+
+
+# ── TEST 6: transient provider empty does NOT abort on the first hit ───────
+def test_provider_empty_does_not_abort_immediately():
+    supabase = FakeSupabase()
+    # Iter1: total provider failure (empty). Iter2: supplies 2 valid leads.
+    gen = [candidate(post_id=f"g{i}", linkedin_url=f"https://www.linkedin.com/in/g{i}",
+                     post_text="We need a web development agency.", country_code="US", location="US") for i in range(2)]
+    cls = {c["linkedin_url"]: make_classification(lead_type="agency_wanted", quality=90) for c in gen}
+    batches = [
+        (0, 3, [], ["all lanes failed"]),          # transient total failure
+        (3, 3, [_raw(c) for c in gen], []),        # recovery
+    ]
+    import asyncio
+    telemetry = asyncio.run(_run(supabase, _request(10), make_discover(batches), make_classify(cls)))
+    # The engine must recover after a single empty provider run and save 2 leads.
+    assert telemetry["final_valid_count"] == 2
+    assert telemetry["reason"] != "provider_failure"
+
+
+# ── TEST 7: persistent provider failure terminates safely ──────────────────
+def test_persistent_provider_failure_terminates():
+    supabase = FakeSupabase()
+    batches = [(0, 3, [], ["fail"]) for _ in range(5)]
+    import asyncio
+    telemetry = asyncio.run(_run(supabase, _request(10), make_discover(batches), make_classify({})))
+    assert telemetry["final_valid_count"] == 0
+    assert telemetry["reason"] == "provider_failure"
+    assert len(telemetry["iterations"]) <= lp.MAX_PROVIDER_FAIL_ROUNDS

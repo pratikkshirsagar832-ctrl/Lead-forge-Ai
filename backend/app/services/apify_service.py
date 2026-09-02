@@ -342,9 +342,17 @@ def run_lane_search(
     queries = [q.strip() for q in search_queries if q and q.strip()][:4]
     if not queries:
         queries = ["marketing"]
-    # NOTE: buyer_mode NOT clauses and authorKeywords were removed because
-    # they caused harvestapi to return 0 results. The AI triage/scoring
-    # pipeline handles buyer/seller classification much better.
+    payload = {
+        "searchQueries": queries,
+        "maxPosts": max(10, min(max_posts, 15)),
+        "postedLimit": posted_limit if posted_limit in ("1h", "24h", "week", "month") else "month",
+        "sortBy": "date",
+        "profileScraperMode": "main",
+        "scrapeReactions": False,
+        "postNestedReactions": False,
+        "scrapeComments": False,
+        "postNestedComments": False,
+    }
     return _run_sync_actor(HARVEST_POST_SEARCH_ACTOR, payload)
 
 

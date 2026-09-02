@@ -60,6 +60,13 @@ class SearchStatusResponse(BaseModel):
     started_at: Optional[datetime] = None
     completed_at: Optional[datetime] = None
     error_message: Optional[str] = None
+    # Exact-count / intent contract (linkedin only, optional/back-compat).
+    requested_count: Optional[int] = None
+    returned_count: Optional[int] = None
+    lead_type: Optional[str] = None
+    country: Optional[str] = None
+    service: Optional[str] = None
+    lead_status: Optional[str] = None
 
 
 class SearchHistoryItem(BaseModel):

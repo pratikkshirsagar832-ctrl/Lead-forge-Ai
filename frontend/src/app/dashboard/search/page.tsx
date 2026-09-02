@@ -71,7 +71,7 @@ function LiveResultCard({ lead, index }: { lead: any; index: number }) {
                       : lead.post_type === 'agency_wanted' ? 'bg-violet-500/10 text-violet-400 border-violet-500/20'
                       : 'bg-white/5 text-ice/50 border-white/10'
                     }`}>
-                      {lead.post_type === 'buyer' ? 'Needs Service'
+                      {lead.post_type === 'buyer' ? 'Freelancer Needed'
                         : lead.post_type === 'hiring' ? 'Hiring'
                         : lead.post_type === 'agency_wanted' ? 'Agency Wanted' : 'Post'}
                     </span>
@@ -430,7 +430,7 @@ export default function SearchPage() {
                     <div className="grid grid-cols-3 gap-3">
                       {([
                         { id: 'hiring', label: 'Hiring Posts', desc: 'Companies hiring freelancers/contractors' },
-                        { id: 'buyer', label: 'Freelancers Needed', desc: 'People/companies looking for freelancers' },
+                        { id: 'buyer', label: 'Freelancer Needed', desc: 'People/companies looking for freelancers/contractors' },
                         { id: 'agency_wanted', label: 'Agency Wanted', desc: 'Businesses seeking an agency to hire' },
                       ] as { id: 'buyer' | 'hiring' | 'agency_wanted'; label: string; desc: string }[]).map(opt => {
                         const checked = leadTypes.includes(opt.id);

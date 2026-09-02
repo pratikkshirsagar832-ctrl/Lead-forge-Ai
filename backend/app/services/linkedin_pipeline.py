@@ -1,662 +1,804 @@
 """
-Hyperclients — LinkedIn Intent-Lead Pipeline
+Hyperclients — LinkedIn Lead Engine (consolidated, single production truth)
 
-Flow (scrapeforge/linkedin-all-in-one):
+THE authoritative LinkedIn lead-generation implementation. It contains, in one
+place, the canonical intent model, location hard-gate, intent-specific query
+generation, deterministic pre-filters, canonical acceptance + quality scoring,
+telemetry and the exact-count iterative orchestrator. It delegates:
 
-  1. Build BROAD discovery phrases from user niche (not literal "I need X")
-  2. post-search mode → raw posts (boolean OR across phrases)
-  3. Parse posts into candidates; keep the strongest post per author
-  4. profile-detail mode → enrich headline/company/location (AI context)
-  5. GPT semantic scoring 0-100 — implicit commercial intent, not just
-     explicit "I need X" statements
-  6. Rank → dedupe by author → save tagged leads (source='linkedin')
-  7. Optional email enrichment via legacy profile-scraper actor
+  - Discovery         -> app.services.apify_service  (actor, keys, lanes)
+  - AI qualification  -> app.services.ai_service     (strict schema, fail-closed)
+
+PRINCIPLE:
+  find the EXACT number of genuinely qualified leads the user asked for, for
+  the EXACT service, EXACT lead intent and EXACT country, and NEVER sacrifice
+  correctness (wrong country / wrong intent / seller / job-seeker / wrong
+  service) just to fill the requested count.
+
+run_linkedin_pipeline_fast is the background-task entry point called by the
+search router; it runs the engine and updates the searches row for polling.
 """
 
+from __future__ import annotations
+
 import asyncio
-import json
 import logging
 import re
-from concurrent.futures import ThreadPoolExecutor
+import time
 from datetime import datetime, timezone
-
-from app.config import get_settings
-from app.database import get_supabase_admin
-from app.services.usage import settle_search_quota
-from app.services.apify_service import (
-    ApifyError,
-    dedupe_post_items,
-    enrich_profiles,
-    fetch_profile_details,
-    run_post_search,
-    run_lane_search,
-    run_job_search,
-    filter_jobs_by_work_type,
-)
+from enum import Enum
+from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
 
+from app.database import get_supabase_admin
+from app.services.usage import settle_search_quota
+from app.services.apify_service import (
+    fetch_profile_details,
+    run_lane_search,
+)
+
+# ══════════════════════════════════════════════════════════════════════════
+# LOOP-SAFETY / ENGINE LIMITS
+# ══════════════════════════════════════════════════════════════════════════
 MAX_RESULTS_CAP = 50
-
-# Matches LinkedIn job URLs (both the jobs-guest API endpoint and the
-# /jobs/view/ page) to extract the numeric job id.
-_re_job_id = re.compile(r"/jobPosting/(\d+)", re.IGNORECASE)
-
-# Concurrent OpenAI calls during AI qualification. Kept low (5) for
-# reliability — free-tier OpenAI accounts rate-limit quickly when hammered.
-AI_QUALIFY_CONCURRENCY = 5
-
-# Profile enrichment bills per row on pay-per-event actors — cap it.
+MAX_ITERATIONS = 6
+MAX_NO_PROGRESS_ITERATIONS = 3
+WAVE_DEADLINE_SECONDS = 600
+MAX_POSTS_PER_LANE = 15
+MAX_PROVIDER_FAIL_ROUNDS = 1
 PROFILE_ENRICHMENT_CAP = 30
 
-# Geography is fully user-driven: the caller passes the exact country codes
-# the user selected (req_country_codes). We do NOT keep a hardcoded allow/block
-# list of "good" vs "bad" markets, and we never infer nationality/ethnicity
-# from a person's name. When the user selects no country, leads from anywhere
-# are kept. See `_country_match` for the matching policy.
-#
-# Country codes come from author.location.countryCode in harvestapi "main" mode.
+# Hard gates (canonical policy — no other threshold elsewhere).
+MIN_QUALITY_SCORE = 60.0
+MIN_SERVICE_MATCH = 50.0
+MIN_INTENT_STRENGTH = "recommendation"
 
-
-# ── Location helpers (ported from HyperAgent) ──────────────────────────────
-COUNTRY_NAME_TO_CODE = {
-    "usa": "US", "united states": "US", "united states of america": "US", "america": "US", "us": "US",
-    "canada": "CA",
-    "uk": "GB", "united kingdom": "GB", "england": "GB", "britain": "GB", "scotland": "GB",
-    "ireland": "IE",
-    "australia": "AU", "new zealand": "NZ",
-    "germany": "DE", "netherlands": "NL", "france": "FR", "belgium": "BE", "switzerland": "CH",
-    "austria": "AT", "sweden": "SE", "norway": "NO", "denmark": "DK", "finland": "FI",
-    "spain": "ES", "italy": "IT", "portugal": "PT", "luxembourg": "LU", "iceland": "IS",
-    "uae": "AE", "united arab emirates": "AE", "dubai": "AE", "abu dhabi": "AE",
-    "saudi arabia": "SA", "qatar": "QA", "kuwait": "KW", "singapore": "SG", "israel": "IL",
-    "india": "IN", "pakistan": "PK", "bangladesh": "BD", "philippines": "PH", "nigeria": "NG",
-    "vietnam": "VN", "indonesia": "ID", "thailand": "TH", "malaysia": "MY", "kenya": "KE",
-    "ghana": "GH", "south africa": "ZA", "egypt": "EG", "mexico": "MX", "brazil": "BR",
-    "sri lanka": "LK", "nepal": "NP", "turkey": "TR",
+QUALITY_WEIGHTS = {
+    "intent_strength": 0.30,
+    "service_match": 0.25,
+    "commercial_intent": 0.15,
+    "decision_maker": 0.10,
+    "location_confidence": 0.10,
+    "evidence": 0.10,
 }
 
-CITY_COUNTRY_HINTS = {
-    "new york": "US", "nyc": "US", "san francisco": "US", "sf": "US", "los angeles": "US",
-    "chicago": "US", "austin": "US", "miami": "US", "seattle": "US", "boston": "US",
-    "denver": "US", "dallas": "US", "houston": "US", "phoenix": "US", "atlanta": "US",
-    "toronto": "CA", "vancouver": "CA", "montreal": "CA",
-    "london": "GB", "manchester": "GB", "birmingham": "GB", "leeds": "GB", "edinburgh": "GB",
-    "dublin": "IE", "sydney": "AU", "melbourne": "AU", "brisbane": "AU", "perth": "AU",
-    "auckland": "NZ", "berlin": "DE", "munich": "DE", "hamburg": "DE", "frankfurt": "DE",
-    "amsterdam": "NL", "rotterdam": "NL", "paris": "FR", "lyon": "FR", "brussels": "BE",
-    "zurich": "CH", "geneva": "CH", "vienna": "AT", "stockholm": "SE", "oslo": "NO",
-    "copenhagen": "DK", "helsinki": "FI", "madrid": "ES", "barcelona": "ES", "milan": "IT",
-    "rome": "IT", "lisbon": "PT", "dubai": "AE", "abu dhabi": "AE", "riyadh": "SA",
-    "doha": "QA", "kuwait city": "KW", "singapore": "SG", "tel aviv": "IL",
-    "mumbai": "IN", "delhi": "IN", "new delhi": "IN", "bangalore": "IN", "bengaluru": "IN",
-    "hyderabad": "IN", "pune": "IN", "chennai": "IN", "karachi": "PK", "lahore": "PK",
-    "dhaka": "BD", "manila": "PH", "lagos": "NG", "nairobi": "KE", "cape town": "ZA",
-    "johannesburg": "ZA", "cairo": "EG", "mexico city": "MX", "sao paulo": "BR",
+# ══════════════════════════════════════════════════════════════════════════
+# CANONICAL INTENT MODEL (single source of truth)
+# ══════════════════════════════════════════════════════════════════════════
+class LeadType(str, Enum):
+    FREELANCER_NEEDED = "freelancer_needed"
+    HIRING = "hiring"
+    AGENCY_WANTED = "agency_wanted"
+    IRRELEVANT = "irrelevant"
+    UNKNOWN = "unknown"
+
+
+REQUESTABLE_INTENTS = {LeadType.FREELANCER_NEEDED.value, LeadType.HIRING.value, LeadType.AGENCY_WANTED.value}
+
+WIRE_TO_CANONICAL = {"buyer": LeadType.FREELANCER_NEEDED.value, "hiring": LeadType.HIRING.value, "agency_wanted": LeadType.AGENCY_WANTED.value}
+CANONICAL_TO_WIRE = {LeadType.FREELANCER_NEEDED.value: "buyer", LeadType.HIRING.value: "hiring", LeadType.AGENCY_WANTED.value: "agency_wanted"}
+CANONICAL_TO_POST_TYPE = {LeadType.FREELANCER_NEEDED.value: "buyer", LeadType.HIRING.value: "hiring", LeadType.AGENCY_WANTED.value: "agency_wanted", LeadType.IRRELEVANT.value: "unknown", LeadType.UNKNOWN.value: "unknown"}
+
+
+def to_canonical(lead_type: str | None) -> str:
+    if not lead_type:
+        return LeadType.UNKNOWN.value
+    lt = str(lead_type).strip().lower()
+    if lt in REQUESTABLE_INTENTS:
+        return lt
+    if lt in WIRE_TO_CANONICAL:
+        return WIRE_TO_CANONICAL[lt]
+    aliases = {"agency": LeadType.AGENCY_WANTED.value, "freelancer": LeadType.FREELANCER_NEEDED.value,
+               "freelancer_needed": LeadType.FREELANCER_NEEDED.value, "explicit_need": LeadType.FREELANCER_NEEDED.value,
+               "problem_awareness": LeadType.FREELANCER_NEEDED.value, "research": LeadType.FREELANCER_NEEDED.value}
+    return aliases.get(lt, LeadType.UNKNOWN.value)
+
+
+def canonical_to_post_type(lead_type: str | None) -> str:
+    return CANONICAL_TO_POST_TYPE.get(to_canonical(lead_type), "unknown")
+
+
+def parse_wire_lead_types(lead_types: list[str] | None) -> list[str]:
+    if not lead_types:
+        return []
+    out, seen = [], set()
+    for raw in lead_types:
+        c = to_canonical(raw)
+        if c in REQUESTABLE_INTENTS and c not in seen:
+            seen.add(c)
+            out.append(c)
+    return out
+
+
+class IntentStrength(str, Enum):
+    EXPLICIT = "explicit"
+    ACTIVE_SEARCH = "active_search"
+    RECOMMENDATION = "recommendation"
+    PROBLEM_AWARENESS = "problem_awareness"
+    RESEARCH = "research"
+    NONE = "none"
+
+
+INTENT_STRENGTH_ORDER = {
+    IntentStrength.EXPLICIT.value: 6, IntentStrength.ACTIVE_SEARCH.value: 5,
+    IntentStrength.RECOMMENDATION.value: 4, IntentStrength.PROBLEM_AWARENESS.value: 2,
+    IntentStrength.RESEARCH.value: 1, IntentStrength.NONE.value: 0,
 }
 
-_REGION_MAP = {
-    "asia": {"IN", "PK", "BD", "PH", "VN", "ID", "TH", "MY", "SG", "JP", "KR", "TW"},
-    "europe": {"GB", "DE", "FR", "NL", "BE", "CH", "AT", "SE", "NO", "DK", "FI", "ES", "IT", "PT", "IE"},
-    "united states": {"US"}, "usa": {"US"}, "america": {"US"},
-    "india": {"IN"}, "africa": {"NG", "KE", "GH", "ZA", "EG"},
-    "australia": {"AU", "NZ"}, "canada": {"CA"},
-    "south america": {"BR", "MX", "AR", "CL", "CO"},
-    "uk": {"GB"}, "united kingdom": {"GB"}, "uae": {"AE"}, "dubai": {"AE"},
+
+class LocationConfidence(str, Enum):
+    STRUCTURED = "structured"
+    TEXT = "text"
+    COMPANY = "company"
+    UNKNOWN = "unknown"
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# LOCATION — normalization + hard gate (fail-closed for strict requests)
+# ══════════════════════════════════════════════════════════════════════════
+COUNTRY_ALIASES = {
+    "us": "US", "usa": "US", "united states": "US", "united states of america": "US",
+    "u.s": "US", "u.s.a": "US", "america": "US", "ca": "CA", "canada": "CA",
+    "uk": "GB", "gb": "GB", "united kingdom": "GB", "britain": "GB", "england": "GB",
+    "scotland": "GB", "wales": "GB", "ie": "IE", "ireland": "IE",
+    "au": "AU", "australia": "AU", "nz": "NZ", "new zealand": "NZ",
+    "de": "DE", "germany": "DE", "nl": "NL", "netherlands": "NL", "holland": "NL",
+    "fr": "FR", "france": "FR", "be": "BE", "belgium": "BE", "ch": "CH", "switzerland": "CH",
+    "swiss": "CH", "at": "AT", "austria": "AT", "se": "SE", "sweden": "SE", "no": "NO",
+    "norway": "NO", "dk": "DK", "denmark": "DK", "fi": "FI", "finland": "FI", "es": "ES",
+    "spain": "ES", "it": "IT", "italy": "IT", "pt": "PT", "portugal": "PT",
+    "lu": "LU", "luxembourg": "LU", "is": "IS", "iceland": "IS",
+    "ae": "AE", "uae": "AE", "united arab emirates": "AE", "dubai": "AE",
+    "sa": "SA", "saudi arabia": "SA", "qa": "QA", "qatar": "QA", "kw": "KW", "kuwait": "KW",
+    "sg": "SG", "singapore": "SG", "il": "IL", "israel": "IL",
+    "in": "IN", "india": "IN", "pk": "PK", "pakistan": "PK", "bd": "BD", "bangladesh": "BD",
+    "ph": "PH", "philippines": "PH", "ng": "NG", "nigeria": "NG", "vn": "VN", "vietnam": "VN",
+    "id": "ID", "indonesia": "ID", "th": "TH", "thailand": "TH", "my": "MY", "malaysia": "MY",
+    "ke": "KE", "kenya": "KE", "gh": "GH", "ghana": "GH", "za": "ZA", "south africa": "ZA",
+    "eg": "EG", "egypt": "EG", "mx": "MX", "mexico": "MX", "br": "BR", "brazil": "BR",
+    "lk": "LK", "sri lanka": "LK", "np": "NP", "nepal": "NP", "tr": "TR", "turkey": "TR",
+    "jp": "JP", "japan": "JP", "kr": "KR", "south korea": "KR", "korea": "KR",
+    "tw": "TW", "taiwan": "TW", "cn": "CN", "china": "CN", "ar": "AR", "argentina": "AR",
+    "cl": "CL", "chile": "CL", "co": "CO", "colombia": "CO",
+}
+
+CITY_COUNTRY = {
+    "new york": "US", "nyc": "US", "san francisco": "US", "los angeles": "US", "chicago": "US",
+    "austin": "US", "miami": "US", "seattle": "US", "boston": "US", "denver": "US", "dallas": "US",
+    "houston": "US", "phoenix": "US", "atlanta": "US", "toronto": "CA", "vancouver": "CA",
+    "montreal": "CA", "london": "GB", "manchester": "GB", "birmingham": "GB", "leeds": "GB",
+    "edinburgh": "GB", "glasgow": "GB", "dublin": "IE", "sydney": "AU", "melbourne": "AU",
+    "brisbane": "AU", "perth": "AU", "auckland": "NZ", "berlin": "DE", "munich": "DE",
+    "hamburg": "DE", "frankfurt": "DE", "amsterdam": "NL", "rotterdam": "NL", "the hague": "NL",
+    "paris": "FR", "lyon": "FR", "brussels": "BE", "zurich": "CH", "geneva": "CH",
+    "vienna": "AT", "stockholm": "SE", "oslo": "NO", "copenhagen": "DK", "helsinki": "FI",
+    "madrid": "ES", "barcelona": "ES", "milan": "IT", "rome": "IT", "lisbon": "PT",
+    "dubai": "AE", "abu dhabi": "AE", "riyadh": "SA", "doha": "QA", "kuwait city": "KW",
+    "singapore": "SG", "tel aviv": "IL", "mumbai": "IN", "delhi": "IN", "new delhi": "IN",
+    "bangalore": "IN", "bengaluru": "IN", "hyderabad": "IN", "pune": "IN", "chennai": "IN",
+    "karachi": "PK", "lahore": "PK", "dhaka": "BD", "manila": "PH", "lagos": "NG",
+    "nairobi": "KE", "cape town": "ZA", "johannesburg": "ZA", "cairo": "EG",
+    "mexico city": "MX", "sao paulo": "BR",
+}
+
+REGION_COUNTRY_CODES = {
+    "asia": {"IN", "PK", "BD", "PH", "VN", "ID", "TH", "MY", "SG", "JP", "KR", "TW", "CN"},
+    "europe": {"GB", "DE", "FR", "NL", "BE", "CH", "AT", "SE", "NO", "DK", "FI", "ES", "IT", "PT", "IE", "LU"},
+    "eu": {"DE", "FR", "NL", "BE", "AT", "SE", "NO", "DK", "FI", "ES", "IT", "PT", "IE", "LU"},
+    "united states": {"US"}, "usa": {"US"}, "america": {"US"}, "us": {"US"}, "india": {"IN"},
+    "africa": {"NG", "KE", "GH", "ZA", "EG"}, "australia": {"AU", "NZ"}, "canada": {"CA"},
+    "south america": {"BR", "MX", "AR", "CL", "CO"}, "uk": {"GB"}, "united kingdom": {"GB"},
+    "britain": {"GB"}, "uae": {"AE"}, "dubai": {"AE"}, "gulf": {"AE", "SA", "QA", "KW"},
+    "germany": {"DE"}, "middle east": {"AE", "SA", "QA", "KW", "IL"},
 }
 
 
-def _parse_one_location(loc: str) -> tuple[set[str], str | None]:
-    """Parse a SINGLE location token into (country_codes, city)."""
-    loc = loc.strip().lower()
-    if not loc:
-        return set(), None
-    if loc in _REGION_MAP:
-        return set(_REGION_MAP[loc]), None
-    if loc in COUNTRY_NAME_TO_CODE:
-        return {COUNTRY_NAME_TO_CODE[loc]}, None
-    # City check (exact or first-word match)
-    if loc in CITY_COUNTRY_HINTS:
-        return {CITY_COUNTRY_HINTS[loc]}, loc
-    for city, code in CITY_COUNTRY_HINTS.items():
-        if loc.startswith(city) or city in loc:
-            return {code}, loc
-    return set(), loc
-
-
-def _parse_location_request(location: str) -> tuple[set[str], str | None]:
-    """Parse a user location request into (country_codes, city).
-
-    Accepts a single location OR several separated by comma / slash / ';' /
-    ' and ', so a user can pick multiple countries at once:
-
-    'Mumbai'            → ({"IN"}, "mumbai")
-    'US'                → ({"US"}, None)
-    'US, UK, Germany'   → ({"US", "GB", "DE"}, None)
-    'Asia'              → region set
-    ''                  → (set(), None)  # no country → global search
-    """
-    if not location:
-        return set(), None
-
-    # Split on common multi-value separators.
-    parts = re.split(r"[,/;]| and ", location)
-    codes: set[str] = set()
-    cities: list[str] = []
-    for part in parts:
-        part_codes, part_city = _parse_one_location(part)
-        codes |= part_codes
-        if part_city:
-            cities.append(part_city)
-
-    # City is only meaningful when the user gave a single, unambiguous location.
-    city = cities[0] if (len(cities) == 1 and len(parts) == 1) else None
-    return codes, city
-
-
-def _location_matches(author_location: str, author_country_code: str, country_codes: set[str], city: str | None) -> bool:
-    """Does an author's location match the user's requested location?"""
-    if not country_codes and not city:
-        return True
-    loc_low = (author_location or "").lower()
-    cc = (author_country_code or "").upper()
-    if city:
-        if city in loc_low:
-            return True
-        if cc and cc in country_codes:
-            return True
-        return False
-    if country_codes:
-        if cc and cc in country_codes:
-            return True
-        if loc_low:
-            if any(city_name in loc_low for city_name, code in CITY_COUNTRY_HINTS.items() if code in country_codes):
-                return True
-            for name, code in COUNTRY_NAME_TO_CODE.items():
-                if code in country_codes and name in loc_low:
-                    return True
-        return False
-    return True
-
-
-def _get_author_location(author: dict) -> tuple[str, str]:
-    """Extract (country_code, location_text) from harvestapi author data."""
-    location = author.get("location") or {}
-    if not isinstance(location, dict):
-        return "", ""
-    country_code = (location.get("countryCode") or "").strip().upper()
-    linkedin_text = (location.get("linkedinText") or "").strip()
-    parsed = location.get("parsed") or {}
-    if isinstance(parsed, dict) and parsed.get("text") and not linkedin_text:
-        linkedin_text = str(parsed["text"])
-    return country_code, linkedin_text
-
-
-def _get_author_company(author: dict) -> str:
-    """Extract company name from harvestapi author.currentPosition."""
-    positions = author.get("currentPosition") or []
-    if isinstance(positions, list):
-        for pos in positions:
-            if not isinstance(pos, dict):
-                continue
-            name = pos.get("companyName") or pos.get("name") or (pos.get("company") or {}).get("name")
-            if name:
-                return str(name)[:100]
-    # fallback: try headline after "at " or "|"
-    info = author.get("info") or author.get("headline") or ""
-    if " at " in info:
-        return info.split(" at ", 1)[1].split("|")[0].strip()[:100]
-    return ""
-
-
-def build_boolean_query(user_query: str) -> list[str]:
-    """Broad discovery phrases around a niche, INCLUDING role-based
-    hiring/freelance phrases.
-
-    Real buying intent is rarely written as "I need X" — it looks like
-    "looking for a freelance web developer", "hiring a designer for our
-    project", "website developer required". So discovery searches broad
-    topical + role + hiring phrases and the AI scores intent afterwards.
-    """
-    q = user_query.strip().strip('"')
-    q = " ".join(q.split())
-    if not q:
-        return ["marketing"]
-
-    base = q.replace("ui-ux", "ui ux").replace("ui/ux", "ui ux")
-    low = base.lower()
-
-    # If the user already typed an intent phrase, use it verbatim as seed
-    if any(low.startswith(p) for p in (
-        "i need", "i want", "i'm looking", "i am looking", "looking for",
-        "need ", "help with", "anyone", "recommend", "does anyone",
-        "hiring", "we are hiring", "we're hiring",
-    )):
-        return [base]
-
-    # Derive role variants from the service term.
-    # "website development" -> "website developer"
-    # "graphic design"      -> "graphic designer"
-    # "ui ux designer"      -> already a role, no suffix needed
-    # "seo"                 -> "seo expert", "seo specialist"
-    def _suffix(base_str: str, word: str, suffix: str) -> str:
-        """Replace a word with its role form, avoiding double suffixes
-        (e.g. 'designer' -> not 'designerer')."""
-        replaced = base_str.replace(word, suffix)
-        # avoid double 'er'/'or' endings like "designerer"
-        for bad in ("erer", "oror", "eror"):
-            if bad in replaced:
-                replaced = replaced.replace(bad, bad[:2])
-        return replaced.strip()
-
-    roles = {base}
-    if "development" in low:
-        roles.add(_suffix(base, "development", "developer"))
-    if "design" in low:
-        roles.add(_suffix(base, "design", "designer"))
-    if "marketing" in low:
-        roles.add(f"{base} expert")
-        roles.add(f"{base} specialist")
-    if "seo" in low or "search engine" in low:
-        roles.add("seo expert")
-        roles.add("seo specialist")
-    if "shopify" in low or "ecommerce" in low or "e-commerce" in low:
-        roles.add("shopify expert")
-    if "motion" in low:
-        roles.add("motion designer")
-        roles.add("video editor")
-    if "social media" in low or "smm" in low:
-        roles.add("social media manager")
-    if "video" in low or "editing" in low:
-        roles.add("video editor")
-        roles.add("video editor for")
-    if "wordpress" in low:
-        roles.add("wordpress developer")
-    if "web" in low or "website" in low:
-        roles.add(f"{base.replace(' website', '').replace('website', 'web').strip()} developer")
-        roles.add(f"{base.replace(' website', '').replace('website', 'web').strip()} designer")
-    # If the base itself is a role (designer/developer/expert/specialist/manager),
-    # make sure we still generate intent phrases around the base itself.
-    base_is_role = any(k in low for k in ("designer", "developer", "expert", "specialist", "manager", "editor", "builder", "consultant"))
-
-    phrases: list[str] = [base]
-    for role in sorted(roles, key=len):
-        role = " ".join(role.split())
-        if not role or role == base:
-            continue
-        # BUYER-INTENT phrases FIRST (highest priority - attract companies hiring)
-        phrases.extend([
-            f"looking for a freelance {role}",
-            f"looking for freelance {role}",
-            f"hiring {role}",
-            f"need a {role} for our",
-            f"looking for {role} for our",
-            f"need {role} for our",
-        ])
-        # SELLER-ATTRACTING phrases LAST (lower priority - may attract freelancers selling)
-        phrases.extend([
-            f"{role} required for",
-            f"freelance {role} for",
-            f"need {role} for project",
-            f"contract {role}",
-            f"{role} needed",
-        ])
-    # If the user typed a ROLE directly (e.g. "ui ux designer"), also search
-    # buyer-intent phrases around that exact role — otherwise we only get
-    # the generic base phrases.
-    if base_is_role and len(roles) == 1:
-        phrases.extend([
-            f"looking for a freelance {base}",
-            f"looking for freelance {base}",
-            f"hiring {base}",
-            f"need a {base} for our",
-            f"{base} required for",
-            f"contract {base}",
-        ])
-    # general intent phrases too
-    phrases.extend([
-        f"{base} agency",
-        f"looking for {base}",
-        f"need {base}",
-        f"{base} help",
-        f"{base} project",
-    ])
-
-    seen: set[str] = set()
-    out: list[str] = []
-    for p in phrases:
-        p = " ".join(p.split())
-        key = p.lower()
-        if key not in seen:
-            seen.add(key)
-            out.append(p)
-    return out[:12]
-
-
-def build_boolean_query_variant(user_query: str, iteration: int) -> list[str]:
-    """Generate DIFFERENT query sets for loop iterations 2+.
-
-    Each iteration searches from a different angle so we discover NEW leads
-    instead of re-finding the same posts:
-      iteration 2: problem/pain-point angle ("traffic dropped", "website not")
-      iteration 3: urgency/action angle ("looking for someone", "need help")
-      iteration 4: broad/nearby terms (agency, services, recommendations)
-      iteration 5: hiring/recruitment angle (role + "for our team/company")
-      iteration 6: redesign/rebuild angle ("need a new", "want to redesign")
-      iteration 7: cost/budget angle ("affordable", "quote", "budget")
-      iteration 8: recommendation angle ("recommend", "suggest", "know a good")
-    """
-    q = user_query.strip().strip('"')
-    q = " ".join(q.split())
-    if not q:
-        q = "marketing"
-    base = q.replace("ui-ux", "ui ux").replace("ui/ux", "ui ux")
-
-    if iteration == 2:
-        # Problem / pain-point angle — implicit buyers describing issues.
-        phrases = [
-            base,
-            f"our {base} not working",
-            f"struggling with {base}",
-            f"{base} problem",
-            f"{base} issues",
-            f"traffic dropped",
-            f"website not converting",
-            f"need to improve {base}",
-            f"{base} not getting results",
-            f"help with {base}",
-            f"looking for {base} help",
-            f"{base} for our business",
-        ]
-    elif iteration == 3:
-        # Urgency / action angle — active hiring & immediate needs.
-        phrases = [
-            base,
-            f"looking for someone to {base}",
-            f"need someone for {base}",
-            f"urgently need {base}",
-            f"hiring {base} urgently",
-            f"looking to hire {base}",
-            f"want to hire {base}",
-            f"{base} services needed",
-            f"find a {base} expert",
-            f"{base} recommendations",
-            f"anyone know a good {base}",
-            f"best {base} agency",
-            f"looking for {base} services",
-        ]
-    elif iteration == 4:
-        # Broad angle — service + marketplace terms.
-        phrases = [
-            base,
-            f"{base} services",
-            f"{base} solutions",
-            f"{base} company",
-            f"{base} for startups",
-            f"{base} for small business",
-            f"affordable {base}",
-            f"professional {base}",
-            f"{base} quote",
-            f"{base} cost",
-            f"{base} project",
-            f"{base} redesign",
-            f"{base} revamp",
-        ]
-    elif iteration == 5:
-        # Hiring/recruitment angle — roles being filled for teams/companies.
-        phrases = [
-            base,
-            f"looking for {base} for our team",
-            f"hiring {base} for our company",
-            f"{base} needed for our business",
-            f"join our team as {base}",
-            f"we are looking for {base}",
-            f"we need a {base} for",
-            f"{base} position available",
-            f"{base} opportunity",
-            f"recruiting {base}",
-            f"{base} freelance opportunity",
-            f"contract {base} role",
-            f"{base} for a project",
-        ]
-    elif iteration == 6:
-        # Redesign/rebuild angle — replace or improve existing assets.
-        phrases = [
-            base,
-            f"need a new {base}",
-            f"want to redesign our {base}",
-            f"rebuild our {base}",
-            f"redesign {base} for our business",
-            f"looking to improve our {base}",
-            f"our {base} is outdated",
-            f"upgrade our {base}",
-            f"{base} for a new website",
-            f"{base} for relaunch",
-            f"{base} refresh",
-            f"new {base} for startup",
-            f"{base} makeover",
-        ]
-    elif iteration == 7:
-        # Cost/budget angle — buyers mentioning money.
-        phrases = [
-            base,
-            f"affordable {base} services",
-            f"{base} within budget",
-            f"budget for {base}",
-            f"{base} pricing",
-            f"cheap {base} services",
-            f"cost effective {base}",
-            f"{base} freelancer rates",
-            f"{base} on a budget",
-            f"reasonable {base}",
-            f"{base} quotes",
-            f"get a {base} quote",
-            f"{base} cost estimate",
-        ]
-    else:
-        # Recommendation angle — asking for referrals/vendors.
-        phrases = [
-            base,
-            f"recommend a {base}",
-            f"recommendations for {base}",
-            f"suggest a {base}",
-            f"know a good {base}",
-            f"anyone recommend {base}",
-            f"best {base} company",
-            f"top {base} agency",
-            f"{base} referrals",
-            f"who is the best {base}",
-            f"looking for {base} recommendations",
-            f"good {base} agency",
-            f"{base} expert needed",
-        ]
-
-    seen: set[str] = set()
-    out: list[str] = []
-    for p in phrases:
-        p = " ".join(p.split())
-        key = p.lower()
-        if key not in seen:
-            seen.add(key)
-            out.append(p)
-    return out[:12]
-
-
-def build_agency_wanted_queries(user_query: str) -> list[str]:
-    """Generate HIGH-INTENT queries for agency_wanted search intent.
-
-    These target people/companies actively SEEKING an external agency,
-    agency partner, service provider, or specialist firm.
-
-    CRITICAL: These queries must NOT attract agency sellers ("we are an
-    agency", "our agency helps businesses"). The AI type gate handles
-    seller detection, but the queries should minimize seller noise.
-    """
-    q = user_query.strip().strip('"')
-    q = " ".join(q.split())
-    if not q:
-        return ["looking for agency"]
-
-    base = q.replace("ui-ux", "ui ux").replace("ui/ux", "ui ux")
-    low = base.lower()
-
-    # Derive service-specific agency phrases
-    phrases: list[str] = [
-        f"looking for {base} agency",
-        f"need {base} agency",
-        f"seeking {base} agency",
-        f"looking for agency for {base}",
-        f"need agency for {base}",
-        f"anyone recommend {base} agency",
-        f"recommendations for {base} agency",
-        f"looking for {base} agency partner",
-        f"need {base} agency partner",
-        f"seeking agency for {base}",
-        f"looking for agency to help with {base}",
-        f"need agency to handle {base}",
-    ]
-
-    # Service-specific variations
-    if "marketing" in low or "digital" in low:
-        phrases.extend([
-            "looking for marketing agency",
-            "need marketing agency",
-            "seeking digital marketing agency",
-            "looking for agency to handle our marketing",
-            "need agency for lead generation",
-        ])
-    if "web" in low or "website" in low or "development" in low:
-        phrases.extend([
-            "looking for web development agency",
-            "need web agency",
-            "seeking website agency",
-            "looking for agency to build our website",
-            "need agency to redesign our website",
-        ])
-    if "seo" in low:
-        phrases.extend([
-            "looking for SEO agency",
-            "need SEO agency",
-            "seeking SEO agency partner",
-            "looking for agency to handle our SEO",
-        ])
-    if "design" in low:
-        phrases.extend([
-            "looking for design agency",
-            "need design agency",
-            "seeking branding agency",
-            "looking for agency to rebrand",
-        ])
-    if "social" in low or "smm" in low:
-        phrases.extend([
-            "looking for social media agency",
-            "need social media agency",
-            "seeking agency for social media",
-        ])
-
-    # Generic agency-seeking phrases
-    phrases.extend([
-        f"looking for {base} partner",
-        f"need {base} partner",
-        f"seeking {base} partner",
-        f"looking for agency",
-        f"need agency help",
-        f"seeking agency partner",
-        f"anyone know good agency",
-        f"recommend agency",
-        f"agency recommendations",
-    ])
-
-    seen: set[str] = set()
-    out: list[str] = []
-    for p in phrases:
-        p = " ".join(p.split())
-        key = p.lower()
-        if key not in seen:
-            seen.add(key)
-            out.append(p)
-    return out[:12]
-
-
-def _public_id_from_author_url(url: str) -> str:
-    """/in/johndoe/ → johndoe; /company/acme/ → company:acme."""
-    try:
-        part = url.split(".com/in/", 1)[1]
-        return part.split("/")[0].split("?")[0].lower()
-    except IndexError:
-        try:
-            part = url.split(".com/company/", 1)[1]
-            return "company:" + part.split("/")[0].split("?")[0].lower()
-        except IndexError:
-            return ""
-    except Exception:
-        return ""
-
-
-def _parse_posted_at(value) -> str | None:
-    if not value:
+def normalize_country(raw: str) -> str | None:
+    if not raw:
         return None
-    if isinstance(value, (int, float)):
-        try:
-            ts = value / 1000 if value > 10_000_000_000 else value
-            return datetime.fromtimestamp(ts, tz=timezone.utc).isoformat()
-        except Exception:
-            return None
-    if isinstance(value, str):
-        try:
-            return datetime.fromisoformat(value.replace("Z", "+00:00")).isoformat()
-        except Exception:
-            return None
-    if isinstance(value, dict):
-        return _parse_posted_at(value.get("timestamp") or value.get("date"))
+    text = raw.strip().lower()
+    if text in COUNTRY_ALIASES:
+        return COUNTRY_ALIASES[text]
+    if text in REGION_COUNTRY_CODES:
+        codes = REGION_COUNTRY_CODES[text]
+        return codes.pop() if len(codes) == 1 else None
+    stripped = re.sub(r"[^a-zA-Z\s]", "", text).strip()
+    if stripped in COUNTRY_ALIASES:
+        return COUNTRY_ALIASES[stripped]
+    if text in CITY_COUNTRY:
+        return CITY_COUNTRY[text]
+    for city, code in CITY_COUNTRY.items():
+        if text.startswith(city) or city in text:
+            return code
     return None
 
 
-def _get_avatar(author: dict) -> str:
-    avatar = author.get("avatar")
-    if isinstance(avatar, str):
-        return avatar
-    if isinstance(avatar, dict):
-        return avatar.get("url") or ""
-    picture = author.get("profilePicture") or {}
-    if isinstance(picture, dict):
-        return picture.get("url") or ""
+def parse_country_request(location: str) -> tuple[set[str], str]:
+    if not location:
+        return set(), ""
+    parts = re.split(r"[,/;]| and ", location.strip())
+    codes: set[str] = set()
+    for part in parts:
+        code = normalize_country(part)
+        if code:
+            codes.add(code)
+    return codes, location.strip()
+
+
+def extract_country_code(author: dict) -> str:
+    location = author.get("location") or {}
+    if isinstance(location, dict):
+        cc = (location.get("countryCode") or "").strip().upper()
+        if cc and len(cc) == 2:
+            return cc
+        country = location.get("country")
+        if isinstance(country, dict):
+            cc = (country.get("code") or country.get("countryCode") or "").strip().upper()
+            if cc and len(cc) == 2:
+                return cc
     return ""
 
 
-def _is_post_url(url: str) -> bool:
-    """A LinkedIn POST url contains /posts/, /feed/update/, /activity- or
-    linkedin.com/feed/. Profile URLs contain /in/ — those are NOT post URLs."""
-    if not url:
+def author_location_text(author: dict) -> str:
+    location = author.get("location") or {}
+    if isinstance(location, dict):
+        linkedin_text = (location.get("linkedinText") or "").strip()
+        parsed = location.get("parsed") or {}
+        if linkedin_text:
+            return linkedin_text
+        if isinstance(parsed, dict) and parsed.get("text"):
+            return str(parsed["text"])
+    return (author.get("location") or "").strip() if isinstance(author.get("location"), str) else ""
+
+
+def resolve_author_country(author: dict) -> tuple[str, str]:
+    cc = extract_country_code(author)
+    if cc:
+        return cc, LocationConfidence.STRUCTURED.value
+    text = author_location_text(author)
+    if text:
+        code = normalize_country(text)
+        if code:
+            return code, LocationConfidence.TEXT.value
+    headline = author.get("info") or author.get("headline") or ""
+    code = normalize_country(headline)
+    if code:
+        return code, LocationConfidence.TEXT.value
+    return "", LocationConfidence.UNKNOWN.value
+
+
+def text_matches_requested_country(text: str, requested: set[str]) -> bool:
+    if not text:
         return False
-    low = url.lower()
-    return (
-        "/posts/" in low
-        or "/feed/update/" in low
-        or "/activity-" in low
-        or "linkedin.com/feed/" in low
-    )
+    low = text.lower()
+    for code in requested:
+        for alias, mapped in COUNTRY_ALIASES.items():
+            if mapped == code and alias in low:
+                return True
+        for city, mapped in CITY_COUNTRY.items():
+            if mapped == code and city in low:
+                return True
+    return False
 
 
-def _extract_post_url(item: dict) -> str:
-    """Extract the real LinkedIn POST url from a harvestapi/scrapeforge item.
+def country_pass(country_code: str, location_text_value: str, requested: set[str]) -> tuple[bool, str]:
+    """Hard country gate. Strict -> unverifiable candidates are rejected."""
+    if not requested:
+        return True, LocationConfidence.UNKNOWN.value
+    if country_code and country_code.upper() in {c.upper() for c in requested}:
+        return True, LocationConfidence.STRUCTURED.value
+    if location_text_value and text_matches_requested_country(location_text_value, requested):
+        return True, LocationConfidence.TEXT.value
+    return False, LocationConfidence.UNKNOWN.value
 
-    harvestapi format: item.linkedinUrl is the POST url; item.url may be
-    absent or a profile link. Validate the candidate actually looks like a
-    post link before returning it.
-    """
+
+# ══════════════════════════════════════════════════════════════════════════
+# INTENT-SPECIFIC QUERY GENERATION (diversified, no cross-intent mixing)
+# ══════════════════════════════════════════════════════════════════════════
+SERVICE_SYNONYMS = {
+    "design": ["graphic designer", "brand designer", "visual designer", "marketing designer"],
+    "graphic": ["graphic designer", "graphic design", "brand designer", "visual designer"],
+    "web": ["web developer", "website developer", "web designer", "frontend"],
+    "website": ["web developer", "website developer", "web designer", "frontend"],
+    "shopify": ["shopify developer", "shopify expert", "ecommerce developer"],
+    "react": ["react developer", "frontend developer", "react js"],
+    "seo": ["seo expert", "seo specialist", "search engine optimization"],
+    "video": ["video editor", "post production", "motion designer"],
+    "edit": ["video editor", "editor", "post production"],
+    "ui": ["ui ux designer", "ui ux", "product designer", "ux designer"],
+    "ux": ["ui ux designer", "ui ux", "product designer", "ux designer"],
+    "mobile": ["mobile app developer", "app developer", "react native", "flutter"],
+    "wordpress": ["wordpress developer", "wordpress"],
+    "brand": ["brand designer", "branding", "brand identity"],
+    "social": ["social media manager", "social media", "smm"],
+    "market": ["marketing", "digital marketing", "growth", "performance marketing"],
+    "copy": ["copywriter", "copywriting", "content writer"],
+    "account": ["accountant", "accounting", "bookkeeper"],
+    "legal": ["lawyer", "attorney", "legal advisor"],
+}
+
+FREELANCER_TEMPLATES = [
+    "looking for freelance {base}", "need a freelance {base}", "seeking freelance {base}",
+    "looking for someone to handle {base}", "need someone for {base}", "hiring freelance {base}",
+    "looking for independent {base}", "need a contractor for {base}",
+    "anyone know a good freelance {base}", "looking to hire a freelance {base} for a project",
+]
+HIRING_TEMPLATES = [
+    "hiring {base}", "we're hiring {base}", "looking for {base}", "seeking {base} professional",
+    "need a {base} for our team", "hiring a {base} to join", "looking for someone experienced in {base}",
+    "join our team as {base}", "open position {base}", "recruiting {base}",
+]
+AGENCY_TEMPLATES = [
+    "looking for {base} agency", "need {base} agency", "seeking {base} agency", "looking for agency for {base}",
+    "need an agency for {base}", "recommend {base} agency", "searching for {base} agency",
+    "hiring an agency for {base}", "need help from an agency with {base}", "anyone recommend a {base} agency",
+    "looking for an agency to handle {base}",
+]
+INTENT_TEMPLATES = {"freelancer_needed": FREELANCER_TEMPLATES, "hiring": HIRING_TEMPLATES, "agency_wanted": AGENCY_TEMPLATES}
+BUY_WORDS = ["looking for", "need", "seeking", "searching for", "want", "hiring", "require"]
+
+
+def _norm(q: str) -> str:
+    return re.sub(r"[\s]+", " ", (q or "").strip().lower())
+
+
+def service_root(service: str) -> str:
+    s = _norm(service)
+    return s or "service"
+
+
+def _synonyms(service: str) -> list[str]:
+    low = _norm(service)
+    variants, seen = [], set()
+    for key, words in SERVICE_SYNONYMS.items():
+        if key in low:
+            variants.extend(words)
+    root = service_root(service)
+    variants.append(root)
+    if "develop" in low:
+        variants.append(low.replace("development", "developer"))
+    if "design" in low and "designer" not in low:
+        variants.append(low.replace("design", "designer"))
+    out = []
+    for v in variants:
+        v = _norm(v)
+        if v and v not in seen:
+            seen.add(v)
+            out.append(v)
+    return out[:6]
+
+
+_COUNTRY_NAME_FOR_CODE = {"US": "USA", "GB": "UK", "CA": "Canada", "IN": "India", "DE": "Germany",
+                          "AU": "Australia", "FR": "France", "AE": "UAE", "SG": "Singapore",
+                          "NZ": "New Zealand", "IE": "Ireland", "NL": "Netherlands", "ES": "Spain"}
+
+
+def _add_country_bias(queries: list[str], country_codes: set[str]) -> list[str]:
+    """Soft discovery bias toward the requested country. NEVER a substitute for
+    the final deterministic country gate."""
+    if not country_codes:
+        return queries
+    name = _COUNTRY_NAME_FOR_CODE.get(next(iter(country_codes)).upper(), "")
+    if not name:
+        return queries
+    out = []
+    for q in queries:
+        out.append(q)
+        out.append(f"{q} {name}")
+    return out
+
+
+def generate_queries(lead_type: str, service: str, country_codes: set[str], iteration: int, max_queries: int = 12) -> list[str]:
+    base = service_root(service)
+    templates = INTENT_TEMPLATES.get(lead_type, FREELANCER_TEMPLATES)
+    roles = _synonyms(service) or [base]
+    slot = iteration % len(templates)
+    queries, seen = [], set()
+
+    def _add(q: str) -> None:
+        key = _norm(q)
+        if key and key not in seen:
+            seen.add(key)
+            queries.append(q)
+
+    for role in roles:
+        _add(templates[slot].replace("{base}", role))
+    for offset in range(1, 4):
+        idx = (slot + offset) % len(templates)
+        _add(templates[idx].replace("{base}", roles[0]))
+    buy_word = BUY_WORDS[iteration % len(BUY_WORDS)]
+    if lead_type == "agency_wanted":
+        _add(f"{buy_word} agency for {base}")
+        _add(f"{buy_word} an agency for {base}")
+    elif lead_type == "hiring":
+        _add(f"{buy_word} {base} for our company")
+        _add(f"{buy_word} {base} role")
+    else:
+        _add(f"{buy_word} a freelance {base}")
+        _add(f"{buy_word} freelance {base}")
+
+    queries = _add_country_bias(queries, country_codes)
+    out, seen2 = [], set()
+    for q in queries:
+        key = _norm(q)
+        if key and key not in seen2:
+            seen2.add(key)
+            out.append(q)
+    return out[:max_queries]
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# DETERMINISTIC PRE-FILTERS (high-confidence garbage only)
+# ══════════════════════════════════════════════════════════════════════════
+SELLER_PATTERNS = [
+    r"\bwe offer\b", r"\bwe provide\b", r"\bwe specialize in\b", r"\bwe are a (leading |top )?(agency|studio|firm)\b",
+    r"\bour services include\b", r"\bmy services include\b", r"\bI offer\b", r"\bI provide\b",
+    r"\bmy services include\b", r"\bcontact us for\b", r"\bDM us for\b", r"\bDM me for\b",
+    r"\bbook a call\b", r"\bavailable for (projects|hire|work|clients)\b", r"\bopen to (new )?projects\b",
+    r"\bopen to remote work\b", r"\blocking for clients\b", r"\btaking (new )?clients\b",
+    r"\bmy portfolio\b", r"\bI am (a|an) (freelance|independent) .{0,40} looking for (clients|work)\b",
+    r"\bam looking for clients\b", r"\bwe help businesses\b", r"\bget in touch\b",
+]
+JOB_SEEKER_PATTERNS = [
+    r"\blooking for a job\b", r"\blooking for (a )?role\b", r"\blooking for employment\b",
+    r"\bopen to work\b", r"#opentowork", r"\bavailable for hire\b", r"\bseeking opportunities\b",
+    r"\bactively seeking employment\b", r"\bfeel free to reach out if you are hiring\b",
+    r"\bi am looking for (a )?role\b",
+]
+CONTENT_PATTERNS = [
+    r"\b\d+ (tips|ways|mistakes)\b", r"\bwhy you need\b", r"\bhere's how to\b",
+    r"\bhow to (improve|grow|boost)\b", r"^(5|7|10) reasons\b", r"\btrends (for|in|to)\b", r"\bcase study\b",
+]
+RECRUITER_SELLER_PATTERNS = [
+    r"\b(we|i) (are|am) (a|an) (talent|staffing|recruiting)( staffing| talent| hiring)? (agency|firm)\b", r"\bwe place (candidates|talents)\b",
+]
+
+_SELLER_RE = [re.compile(p, re.I) for p in SELLER_PATTERNS]
+_JOB_RE = [re.compile(p, re.I) for p in JOB_SEEKER_PATTERNS]
+_CONTENT_RE = [re.compile(p, re.I) for p in CONTENT_PATTERNS]
+_RECRUITER_RE = [re.compile(p, re.I) for p in RECRUITER_SELLER_PATTERNS]
+
+
+def _any_match(text: str, patterns: list) -> bool:
+    return any(p.search(text) for p in patterns) if text else False
+
+
+def prefilter_reject(candidate: dict, *, allow_content: bool = False) -> tuple[bool, str]:
+    post = candidate.get("post_text") or ""
+    headline = candidate.get("headline") or ""
+    text = f"{post}\n{headline}"
+    if _any_match(text, _SELLER_RE):
+        return True, "seller"
+    if _any_match(text, _JOB_RE):
+        return True, "job_seeker"
+    if _any_match(text, _RECRUITER_RE):
+        return True, "recruiter_seller"
+    if not allow_content and _any_match(text, _CONTENT_RE):
+        return True, "content"
+    return False, ""
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# CANONICAL ACCEPTANCE + QUALITY SCORE (one authoritative policy)
+# ══════════════════════════════════════════════════════════════════════════
+def compute_quality_score(classification: dict) -> float:
+    intent = classification.get("intent_strength") or IntentStrength.NONE.value
+    intent_val = INTENT_STRENGTH_ORDER.get(intent, 0)
+    intent_score = intent_val / 6.0 * 100
+    service_match = float(classification.get("service_match_score") or 0)
+    commercial = float(classification.get("commercial_intent_score") or 0)
+    decision_maker = 100.0 if classification.get("decision_maker_signal") else 20.0
+    location_conf = float(classification.get("location_confidence") or 0)
+    evidence = min(100.0, 40.0 + len(classification.get("reason") or "") * 2.0)
+    return round(max(0.0, min(100.0,
+        intent_score * QUALITY_WEIGHTS["intent_strength"]
+        + service_match * QUALITY_WEIGHTS["service_match"]
+        + commercial * QUALITY_WEIGHTS["commercial_intent"]
+        + decision_maker * QUALITY_WEIGHTS["decision_maker"]
+        + location_conf * QUALITY_WEIGHTS["location_confidence"]
+        + evidence * QUALITY_WEIGHTS["evidence"])), 2)
+
+
+class AcceptanceDecision:
+    def __init__(self, accepted: bool, reasons: list[str] = None, rejections: list[str] = None, quality_score: float = 0.0):
+        self.accepted = accepted
+        self.reasons = reasons or []
+        self.rejections = rejections or []
+        self.quality_score = quality_score
+
+    def as_dict(self) -> dict:
+        return {"accepted": self.accepted, "reasons": self.reasons, "rejections": self.rejections, "quality_score": self.quality_score}
+
+
+def canonical_accept(candidate: dict, *, request_lead_types: list[str], requested_countries: set[str], service: str) -> AcceptanceDecision:
+    classification = candidate.get("classification") or {}
+    canonical = to_canonical(candidate.get("lead_type") or classification.get("lead_type"))
+    rejections: list[str] = []
+
+    # GATE 1 exact lead type
+    if canonical not in request_lead_types:
+        rejections.append(f"wrong_intent:{canonical}")
+    # GATE 2 country (fail-closed for strict requests)
+    country_code = candidate.get("country_code") or candidate.get("location_code") or ""
+    passes_country, _ = country_pass(country_code, candidate.get("location") or "", requested_countries)
+    if not passes_country:
+        rejections.append("wrong_country")
+    # GATE 3 seller / job-seeker backstop
+    if classification.get("seller_signal") or candidate.get("seller_signal"):
+        rejections.append("seller")
+    if classification.get("job_seeker_signal") or candidate.get("job_seeker_signal"):
+        rejections.append("job_seeker")
+    # GATE 4 service match
+    cm = float(classification.get("service_match_score") or 0)
+    if cm < MIN_SERVICE_MATCH:
+        rejections.append(f"weak_service_match:{int(cm)}")
+    # GATE 5 intent strength
+    intent = classification.get("intent_strength") or IntentStrength.NONE.value
+    if INTENT_STRENGTH_ORDER.get(intent, 0) < INTENT_STRENGTH_ORDER[MIN_INTENT_STRENGTH]:
+        rejections.append(f"weak_intent:{intent}")
+    # GATE 6 quality
+    quality = compute_quality_score(classification)
+    if quality < MIN_QUALITY_SCORE:
+        rejections.append(f"low_quality:{int(quality)}")
+    # GATE 7 explicit is_qualified flag from AI (fail-closed)
+    if not classification.get("is_qualified"):
+        rejections.append("ai_unqualified")
+
+    reasons = ["exact_intent", "country_ok"] if not rejections else []
+    if not rejections and classification.get("decision_maker_signal"):
+        reasons.append("decision_maker")
+    return AcceptanceDecision(accepted=not rejections, reasons=reasons, rejections=rejections, quality_score=quality)
+
+
+def rank_leads(candidates: list[dict]) -> list[dict]:
+    def key_fn(c):
+        cls = c.get("classification") or {}
+        intent_rank = INTENT_STRENGTH_ORDER.get(cls.get("intent_strength") or IntentStrength.NONE.value, 0)
+        return (intent_rank, float(cls.get("service_match_score") or 0), float(cls.get("commercial_intent_score") or 0),
+                float(cls.get("overall_quality_score") or 0), len(c.get("post_text") or ""))
+    return sorted(candidates, key=key_fn, reverse=True)
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# TELEMETRY
+# ══════════════════════════════════════════════════════════════════════════
+class IterationTelemetry:
+    def __init__(self, iteration: int, remaining_target: int):
+        self.iteration = iteration
+        self.remaining_target = remaining_target
+        self.queries: list[str] = []
+        self.provider_raw_count = 0
+        self.provider_ok_lanes = 0
+        self.provider_total_lanes = 0
+        self.provider_errors: list[str] = []
+        self.after_country_filter = 0
+        self.after_dedupe = 0
+        self.after_deterministic = 0
+        self.non_qualified_ai = 0
+        self.after_ai_qualification = 0
+        self.accepted_this_iteration = 0
+        self.cumulative_valid = 0
+        self.last_scored_types: dict = {}
+
+    def as_dict(self) -> dict:
+        return {k: v for k, v in self.__dict__.items()}
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# ENGINE — iterative exact-count discovery orchestrator
+# ══════════════════════════════════════════════════════════════════════════
+class LeadRequest:
+    def __init__(self, search_id, user_id, service, request_count, lead_types, country_codes, country_text, enrich_emails):
+        self.search_id = search_id
+        self.user_id = user_id
+        self.service = service
+        self.request_count = request_count
+        self.lead_types = lead_types
+        self.country_codes = country_codes
+        self.country_text = country_text
+        self.enrich_emails = enrich_emails
+        self.iteration = 0
+
+    def primary_lead_type(self) -> str:
+        return self.lead_types[0] if self.lead_types else LeadType.UNKNOWN.value
+
+
+def _identity_url(candidate: dict) -> str:
+    return (candidate.get("linkedin_url") or candidate.get("post_url") or "").split("?")[0].rstrip("/").lower()
+
+
+def _parse_candidate(item: dict) -> Optional[dict]:
+    author = item.get("author") or {}
+    author_url = ((author.get("url") or author.get("linkedinUrl") or "")).strip()
+    content = (item.get("content") or "").strip()
+    if not author_url or len(content) < 20:
+        return None
+
+    post_url = ""
     for key in ("linkedinUrl", "postUrl", "post_url", "url"):
         val = item.get(key)
         if isinstance(val, str) and val.strip():
-            cleaned = val.strip()
-            if _is_post_url(cleaned):
-                return cleaned
-    sc = item.get("socialContent") or {}
-    if isinstance(sc, dict):
-        share = sc.get("shareUrl")
-        if isinstance(share, str) and _is_post_url(share):
-            return share
-    return ""
+            low = val.lower()
+            if "/posts/" in low or "/feed/" in low or "/activity-" in low:
+                post_url = val.strip()
+                break
+    if not post_url:
+        post_url = item.get("url") or ""
+
+    cc, loc = resolve_author_country(author)
+    eng = item.get("engagement") or {}
+
+    def _int(v) -> int:
+        try:
+            return int(v or 0)
+        except (TypeError, ValueError):
+            return 0
+
+    def _author_company(a) -> str:
+        positions = a.get("currentPosition") or []
+        if isinstance(positions, list):
+            for pos in positions:
+                if isinstance(pos, dict):
+                    name = pos.get("companyName") or pos.get("name") or (pos.get("company") or {}).get("name")
+                    if name:
+                        return str(name)[:100]
+        return ""
+
+    def _avatar(a) -> str:
+        av = a.get("avatar")
+        if isinstance(av, str):
+            return av
+        if isinstance(av, dict):
+            return av.get("url") or ""
+        pic = a.get("profilePicture") or {}
+        if isinstance(pic, dict):
+            return pic.get("url") or ""
+        return ""
+
+    def _posted(value):
+        if not value:
+            return None
+        if isinstance(value, (int, float)):
+            try:
+                ts = value / 1000 if value > 10_000_000_000 else value
+                return datetime.fromtimestamp(ts, tz=timezone.utc).isoformat()
+            except Exception:
+                return None
+        if isinstance(value, str):
+            try:
+                return datetime.fromisoformat(value.replace("Z", "+00:00")).isoformat()
+            except Exception:
+                return None
+        if isinstance(value, dict):
+            return _posted(value.get("timestamp") or value.get("date"))
+        return None
+
+    return {
+        "full_name": author.get("name") or "",
+        "headline": (author.get("info") or author.get("headline") or "")[:500],
+        "company": _author_company(author),
+        "location": loc,
+        "country_code": cc,
+        "location_code": cc,
+        "linkedin_url": author_url,
+        "post_url": post_url,
+        "post_text": content[:3000],
+        "posted_at": _posted(item.get("postedAt") or item.get("postedTimestamp")),
+        "engagement_likes": _int(eng.get("likes") if eng.get("likes") is not None else eng.get("reactions")),
+        "engagement_comments": _int(eng.get("comments")),
+        "profile_picture_url": _avatar(author),
+        "connections_count": author.get("connectionsCount") or 0,
+    }
+
+
+def _discover(queries: list[str], max_posts_per_lane: int = MAX_POSTS_PER_LANE) -> tuple[int, int, list[dict], list[str]]:
+    n_lanes = min(3, max(1, (len(queries) + 3) // 4))
+    lanes = [[] for _ in range(n_lanes)]
+    for i, q in enumerate(queries):
+        lanes[i % n_lanes].append(q)
+    ok, errors, items = 0, [], []
+    for lane in lanes:
+        try:
+            result = run_lane_search(lane, max_posts_per_lane, "month", True)
+            if result:
+                ok += 1
+                items.extend(result)
+        except Exception as e:
+            errors.append(str(e)[:160])
+    return ok, n_lanes, items, errors
+
+
+def _get_openai_client():
+    from app.services.ai_service import _get_async_openai_client
+    return _get_async_openai_client()
+
+
+async def _update_search(supabase, search_id: str, data: dict) -> None:
+    try:
+        await asyncio.to_thread(lambda: supabase.table("searches").update(data).eq("id", search_id).execute())
+    except Exception as e:
+        logger.error(f"[LinkedIn:{search_id}] update failed: {e}")
+
+
+async def _prefetch_known_urls(supabase, user_id: str) -> set[str]:
+    try:
+        resp = await asyncio.to_thread(lambda: supabase.table("leads").select("linkedin_url")
+                                       .eq("user_id", user_id).neq("linkedin_url", "").execute())
+        return {(r.get("linkedin_url") or "").split("?")[0].rstrip("/").lower() for r in (resp.data or []) if r.get("linkedin_url")}
+    except Exception as e:
+        logger.warning(f"[LinkedIn] known-url prefetch failed: {e}")
+        return set()
+
+
+async def _save_leads(supabase, search_id: str, user_id: str, leads: list[dict], request: LeadRequest) -> list[str]:
+    rows = []
+    for lead in leads:
+        ai_score = lead.get("ai_score") or lead.get("quality_score") or 0
+        lead_category = "hot" if ai_score >= 85 else "warm"
+        post_type = canonical_to_post_type(lead.get("lead_type") or "")
+        linkedin_url = (lead.get("linkedin_url") or "").strip()
+        if not linkedin_url:
+            continue
+        cls = lead.get("classification") or {}
+        rows.append({
+            "search_id": search_id, "user_id": user_id, "source": "linkedin",
+            "business_name": lead.get("full_name") or "Unknown", "category": lead.get("company") or "LinkedIn",
+            "full_address": lead.get("location") or "", "phone": "", "email_found": "", "website_url": "",
+            "rating": None, "total_reviews": 0, "google_maps_link": "", "description": lead.get("post_text") or "",
+            "lead_category": lead_category, "post_type": post_type, "linkedin_url": linkedin_url,
+            "post_url": lead.get("post_url") or "", "post_text": lead.get("post_text") or "",
+            "headline": lead.get("headline") or "", "profile_picture_url": lead.get("profile_picture_url") or "",
+            "connections_count": lead.get("connections_count") or 0, "posted_at": lead.get("posted_at"),
+            "ai_qualified": True, "ai_confidence_score": min(100.0, float(ai_score)) / 100.0,
+            "ai_reason": lead.get("ai_reason"), "ai_pitch": lead.get("outreach_angle"),
+        })
+    if not rows:
+        return []
+    try:
+        existing = await asyncio.to_thread(lambda: supabase.table("leads").select("linkedin_url")
+                                           .eq("user_id", user_id).neq("linkedin_url", "").execute())
+        existing_urls = {(r.get("linkedin_url") or "").split("?")[0].rstrip("/").lower() for r in (existing.data or [])}
+        rows = [r for r in rows if (r.get("linkedin_url") or "").split("?")[0].rstrip("/").lower() not in existing_urls]
+    except Exception as e:
+        logger.warning(f"[LinkedIn] dedup check failed: {e}")
+    if not rows:
+        return []
+    try:
+        response = await asyncio.to_thread(lambda: supabase.table("leads").insert(rows).execute())
+        if response.data:
+            return [r["id"] for r in response.data]
+    except Exception as e:
+        logger.warning(f"[LinkedIn] bulk insert failed ({e}); per-row fallback")
+        ids = []
+        for row in rows:
+            try:
+                r = await asyncio.to_thread(lambda r=row: supabase.table("leads").insert(r).execute())
+                if r.data:
+                    ids.append(r.data[0]["id"])
+            except Exception as row_err:
+                logger.error(f"[LinkedIn] row insert failed ({row.get('business_name')}): {row_err}")
+        return ids
+    return []
+
+
+async def _enrich_profiles_for(promising: list[dict]) -> None:
+    missing = [c for c in promising if not (c.get("headline") or "").strip()]
+    if not missing:
+        return
+    try:
+        enrich_urls = [c["linkedin_url"] for c in missing[:PROFILE_ENRICHMENT_CAP]]
+        profiles = await asyncio.to_thread(fetch_profile_details, enrich_urls, "basic")
+        by_url = {(p.get("url") or "").rstrip("/").lower(): p for p in profiles if isinstance(p, dict)}
+        for c in promising:
+            p = by_url.get((c.get("linkedin_url") or "").rstrip("/").lower())
+            if not p:
+                continue
+            c["headline"] = (p.get("headline") or c.get("headline") or "")[:500]
+            c["company"] = _company_from_profile(p) or c.get("company") or ""
+            c["location"] = _location_from_profile(p) or c.get("location") or ""
+    except Exception as e:
+        logger.warning(f"[LinkedIn] profile enrichment skipped: {e}")
 
 
 def _company_from_profile(profile: dict) -> str:
@@ -681,1985 +823,267 @@ def _location_from_profile(profile: dict) -> str:
     return ""
 
 
-def _post_strength(lead: dict) -> int:
-    likes = lead.get("engagement_likes") or 0
-    comments = lead.get("engagement_comments") or 0
-    return likes * 2 + comments * 3 + min(len(lead.get("post_text") or ""), 2000)
-
-
-def _country_match(
-    country_code: str,
-    location_text: str,
-    req_country_codes: set[str] | None,
-) -> bool:
-    """User-driven country gate. No hardcoded allow/block lists, no name-based
-    guessing.
-
-    - No countries requested → keep everything (global search).
-    - Country code known → keep only if it's one the user asked for.
-    - Country code missing but location text names a requested country/city →
-      keep.
-    - No usable location signal at all → keep (we cannot verify, and dropping
-      would silently lose real leads the user may want).
-    """
-    if not req_country_codes:
-        return True
-
-    cc = (country_code or "").strip().upper()
-    if cc:
-        return cc in req_country_codes
-
-    loc = (location_text or "").strip().lower()
-    if not loc:
-        # No country code and no location text — unverifiable. Keep it.
-        return True
-
-    if any(city in loc for city, code in CITY_COUNTRY_HINTS.items() if code in req_country_codes):
-        return True
-    if any(name in loc for name, code in COUNTRY_NAME_TO_CODE.items() if code in req_country_codes):
-        return True
-    # Location text exists but matches none of the requested markets → drop.
-    return False
-
-
-def process_items(items: list[dict], max_results: int, req_country_codes: set[str] | None = None) -> tuple[list[dict], int]:
-    """Parse raw all-in-one post items into candidate lead records.
-
-    NO keyword classification here — the LLM scores intent later.
-    Keeps ONE post per author (strongest by engagement) so profile
-    enrichment isn't wasted on duplicate rows.
-
-    Country filter: fully user-driven via `_country_match`. When the user
-    requests specific countries, only those markets are kept; when none are
-    requested, leads from anywhere are kept. Returns (candidates, skipped_count).
-    """
-    best_by_author: dict[str, dict] = {}
-    skipped = 0
-
-    def _int(v) -> int:
-        try:
-            return int(v or 0)
-        except (TypeError, ValueError):
-            return 0
-
-    for item in items:
-        author = item.get("author") or {}
-        # harvestapi: author.linkedinUrl / author.info; scrapeforge: author.url
-        author_url = ((author.get("url") or author.get("linkedinUrl") or "")).strip()
-        content = (item.get("content") or "").strip()
-        if not author_url or len(content) < 20:
-            skipped += 1
-            continue
-
-        # Country filter — fully user-driven via `_country_match`. When country
-        # code is missing, fall back to headline / info text.
-        country_code, location_text = _get_author_location(author)
-        loc_signal = location_text or (author.get("info") or author.get("headline") or "")
-        if not _country_match(country_code, loc_signal, req_country_codes):
-            logger.info(f"[CountryFilter] skipped {author.get('name')} ({country_code or '?'} - {loc_signal[:40]})")
-            skipped += 1
-            continue
-
-        eng = item.get("engagement") or {}
-        lead = {
-            "full_name": author.get("name") or "",
-            # harvestapi provides the author's headline inline (author.info)
-            "headline": (author.get("info") or author.get("headline") or "")[:500],
-            "company": _get_author_company(author),
-            "location": location_text,
-            "country_code": country_code,
-            "linkedin_url": author_url,
-            # harvestapi: item.linkedinUrl is the POST url; item.url may be
-            # absent or a profile link. Validate it's actually a post link.
-            "post_url": _extract_post_url(item),
-            "post_text": content[:3000],
-            "posted_at": _parse_posted_at(item.get("postedAt") or item.get("postedTimestamp")),
-            "engagement_likes": _int(eng.get("likes") if eng.get("likes") is not None else eng.get("reactions")),
-            "engagement_comments": _int(eng.get("comments")),
-            "profile_picture_url": _get_avatar(author),
-            "connections_count": author.get("connectionsCount") or 0,
-        }
-
-        # Dedupe by clean profile URL (strip ?miniProfileUrn=... query params)
-        key = author_url.split("?")[0].rstrip("/").lower()
-        existing = best_by_author.get(key)
-        if existing is None:
-            best_by_author[key] = lead
-        else:
-            skipped += 1
-            if _post_strength(lead) > _post_strength(existing):
-                best_by_author[key] = lead
-
-    leads = sorted(
-        best_by_author.values(),
-        key=_post_strength,
-        reverse=True,
+async def run_linkedin_engine(
+    search_id: str, user_id: str, query: str, enrich_emails: bool, max_results: int,
+    lead_types: list[str] = None, location: str = "",
+) -> dict:
+    """Strict exact-count iterative engine. Returns a telemetry dict."""
+    from app.services.ai_service import (
+        attach_classification,
+        candidate_key,
+        classify_linkedin_candidates,
     )
-    # NOTE: Do NOT cap at max_results here — qualification will filter
-    # further, and we need a larger pool to guarantee the final count.
-    # The pipeline handles final count capping after AI scoring.
-    return leads, skipped
 
-
-async def qualify_leads_with_ai(leads: list[dict], query: str, client=None, lead_types=None) -> list[dict]:
-    """Score commercial intent semantically (0-100) with GPT-4o-mini.
-
-    Runs up to AI_QUALIFY_CONCURRENCY (10) OpenAI calls in parallel using a
-    thread pool — big speedup over sequential scoring for large candidate
-    lists (55+ candidates per round).
-    """
-    if client is None:
-        settings = get_settings()
-        if not settings.openai_api_key:
-            logger.warning("OpenAI API key not configured, skipping AI qualification")
-            return leads
-        from openai import OpenAI
-        client = OpenAI(api_key=settings.openai_api_key)
-
-    SYSTEM_PROMPT = """You are a senior B2B lead qualification specialist for an AI-powered lead-generation platform. You decide whether a LinkedIn post is a genuine BUYING signal that a service provider could convert into a client. Your decisions feed a CRM, so precision matters more than recall: one excellent lead is worth more than ten noise records.
-
-WORKFLOW — always follow these steps in order:
-1. Read the post and identify the AUTHOR's role (headline/company).
-2. Determine WHO IS THE SUBJECT: is the author BUYING this service, or SELLING their own labor/services?
-3. Identify the work arrangement (remote / contract / part-time / full-time on-site).
-4. Apply the hard rules below.
-5. Score the six dimensions, then compute lead_score.
-6. Cross-check internal consistency before emitting JSON.
-
-HARD RULES (never violate):
-- R1: A company/owner HIRING a freelancer/contractor/agency on a REMOTE, CONTRACT or PART-TIME basis = STRONG LEAD.
-- R2: A company hiring a FULL-TIME ON-SITE employee = NOT a lead (is_lead=false). They are building a payroll team, not buying your service.
-- R3: The author SELLING their own services ("I'm available", "open to projects", "seeking contract work", "DM me for work", "I offer X", "my services include") = NEVER a lead, regardless of how well the post matches the niche.
-- R4: A RECRUITER/STAFFING agency posting on behalf of clients = NOT a lead.
-- R5: Job seekers looking for a role for themselves = NOT a lead.
-- R6: Pure content/thought-leadership ("5 tips", "why you need", "trends", "case study", "opinion") = NOT a lead even if it scores high on service_match.
-- R7: Posts may be written in ANY language — evaluate buying intent regardless of language. A genuine buyer writing in Spanish, German, French, Hindi, Arabic, etc. is STILL a lead. Do NOT reject on language. (Which countries to include is handled separately by the country filter, not by you.) Always write `reason` and `outreach_angle` in English.
-
-WHO IS THE SUBJECT? (the single most important question)
-🚫 SELLING (reject): "I'm available for X", "I'm open to remote work", "I'm seeking projects", "Looking to collaborate", "I offer X", "DM me for X", "I provide X", "My services include", "I build X", "I'm a freelance X looking for clients", "Open to contract work", "Taking new clients". Headline reads "Freelance X", "X Developer/Designer" and the post promotes their availability, portfolio, or services.
-✅ BUYING (accept): "We're looking for a developer", "I need a website", "Looking for someone to build our X", "We are hiring a freelance X for a project", "Need a designer on contract", "Anyone know a good agency?", "Recommendations for X services?", "We're looking for the right partners to build our marketing", "Seeking agencies & marketers to work with", or a business describing a problem it needs solved (traffic drop, no website, bad conversions, launching a product).
-⚠️ "Looking for partners/agencies/marketers/freelancers" = the company is SOURCING suppliers = BUYER. Only "we offer X / I provide X / we help businesses with X" is a SELLER.
-⚠️ RECRUITER EXCEPTION: A staffing agency placing candidates at THIRD-PARTY clients = reject. BUT a company/firm saying "We are building our pool of experts", "Experts required for our projects", "Building a team of freelancers" = they are BUYING expertise for their own work = ACCEPT (lead_type="hiring").
-
-TRAP CASES — the mistakes to avoid:
-- Trap 1: A post says "Looking for a freelance SEO expert to work on our project" — this is a BUYER (they're hiring) even though the word "freelance" appears. work_type=contract, is_lead=true.
-- Trap 2: A freelancer posts "Freelance SEO expert available for remote projects" — this is a SELLER despite matching the niche perfectly. is_lead=false.
-- Trap 3: "We're hiring a full-time SEO manager, on-site in NY" — payroll hire, on-site. is_lead=false.
-- Trap 4: "Hiring a remote contract web designer for a 3-month project" — BUYER, remote + contract. Strong lead, score 80+.
-- Trap 5: Thought leadership: "5 SEO mistakes killing your rankings" or "How we grew traffic 300%" — content, not intent. is_lead=false.
-- Trap 6: A company complains "our organic traffic dropped 40% since the update" WITHOUT asking for help — this is implicit buying intent. problem_awareness, is_lead=true (score 60-80).
-- Trap 7: "Anyone else seeing traffic drops?" (no business context, no "for my business") — passive/research, low score (40-55) or reject if purely casual.
-- Trap 8: A COMPANY/AGENCY/FIRM says "We are building our pool of experts", "Service Line Experts Required", "Looking for experts to join our project roster", "Building a team of freelancers for client projects" — this is a BUYER of talent/expertise. They are not selling their own services; they are recruiting service providers to work FOR them on projects. is_lead=true, lead_type="hiring". (Exception to the recruiter rule: a firm hiring experts for ITS OWN projects is a buyer; only staffing agencies that place candidates at THIRD-PARTY clients are rejected.)
-- Trap 9: "We fired our agency and now use X" — if the post is about replacing a service with a tool, they are NOT currently buying; is_lead=false. But if they say "we fired our agency, looking for a replacement" → buyer.
-- Trap 10: "We're looking for partners / looking for the right partners / seeking agencies & marketers to work with / building our marketing engine" — the author is a COMPANY SEEKING service providers = BUYER. is_lead=true, lead_type="hiring". NEVER classify "looking for partners/marketers/agencies" as a seller — they are sourcing suppliers, not offering services. ONLY if the post says "we offer X", "I provide X", "we help businesses with X" is it a seller.
-
-SCORING (six dimensions, then total):
-- service_match (0-25): direct mention of the service or its core problem = 25; adjacent problem (traffic drop for SEO, slow site for web dev) = 20; general growth/marketing = 15; vague = 10; unrelated = 0.
-- business_problem (0-20): metrics declining or explicit build needed = 20; clear pain ("struggling", "can't") = 15; dissatisfaction/improvement desire = 10; exploring = 5; none = 0.
-- buying_intent (0-20): explicit vendor/freelancer search with budget/ASAP = 20; HIRING freelancer/contractor/remote/part-time = 18; strong implicit ("recommendations?", "who can help?") = 15; problem + commercial context ("for my business") = 10; passive = 5; none = 0.
-- decision_maker_likelihood (0-15): Founder/CEO/Owner/VP/Director/Head of Marketing = 15; Manager/Lead = 12; unclear but business context = 10; individual contributor/freelancer = 5; student/job-seeker = 0.
-- urgency (0-10): urgent/ASAP/deadline = 10; "looking now"/project starting = 8; soon/this month = 7; active problem no timeline = 5; none = 0.
-- outreach_worthiness (0-10): explicit vendor search + problem + decision maker = 10; strong problem + reachable role = 8; clear problem unclear authority = 6; vague = 4; wrong audience = 0.
-
-lead_score = service_match + business_problem + buying_intent + decision_maker_likelihood + urgency + outreach_worthiness (0-100).
-
-TIERS:
-- 85+ HOT: explicit need or active hiring + decision-maker + concrete problem.
-- 70-84 WARM: clear problem or hiring intent, may need light nurturing.
-- 40-69 POTENTIAL: relevant but vague; still worth saving.
-- 25-39 BORDERLINE: weak signal but real buyer context; still worth saving (they exist).
-- <25 NOT a lead.
-
-CONSISTENCY CHECKS (verify before output):
-- is_lead=true ⟹ lead_score >= 25.
-- is_lead=true ⟹ service_match >= 10 (must relate to the niche).
-- lead_type="hiring" + work_type="full_time_onsite" ⟹ is_lead MUST be false.
-- lead_type="irrelevant" ⟹ is_lead MUST be false.
-- Score >= 80 ⟹ reason must cite explicit evidence from the post, not generic phrases.
-
-OUTREACH_ANGLE rules:
-- MUST reference a SPECIFIC detail from the post (their company, their problem, their exact words).
-- NEVER start with "I noticed your insights on" or "I noticed your recent post" — too generic.
-- Sound like a human expert offering a specific next step, not a sales pitch.
-- 1 sentence, under 25 words.
-
-Always output valid JSON. Never include markdown, commentary, or text outside the JSON object."""
-
-    PROMPT_TEMPLATE = """Analyze this LinkedIn post for a business offering: {query}
-
---- POST CONTENT ---
-{post_text}
-
---- AUTHOR HEADLINE ---
-{headline}
-
---- AUTHOR COMPANY ---
-{company}
-
---- AUTHOR LOCATION ---
-{location}
-
-FIRST, mentally classify with this decision tree, THEN emit JSON.
-
-STEP 1 — Who is the subject?
-  A) Author is BUYING/hiring this service (company/owner/manager looking to get work done)
-  B) Author is SEEKING AN AGENCY/PROVIDER to handle this service ("looking for agency", "need agency for", "seeking agency partner")
-  C) Author is SELLING their own services/availability
-  D) Author is a recruiter/staffing agency, job seeker, student, or pure content creator
-  If C or D → is_lead=false, lead_type="irrelevant", and STOP (still fill all fields).
-  If B → is_lead=true, lead_type="agency_wanted", and continue to STEP 2.
-
-STEP 2 — If A or B (buying/seeking), what arrangement?
-  - remote / contract / freelance / project basis / part-time / hourly → VALID lead
-  - full-time on-site / in-office / no remote → is_lead=false (R2)
-
-STEP 3 — Score the six dimensions honestly. Don't inflate: vague posts get 40-55, strong hiring posts get 80+.
-
-STEP 4 — Verify consistency (is_lead=true requires score>=25 AND service_match>=10).
-
-Output EXACTLY this JSON:
-{{
-  "is_lead": true/false,
-  "lead_score": 0-100,
-  "service_match": 0-25,
-  "business_problem": 0-20,
-  "buying_intent": 0-20,
-  "decision_maker_likelihood": 0-15,
-  "urgency": 0-10,
-  "outreach_worthiness": 0-10,
-  "lead_type": "explicit_need|problem_awareness|research|hiring|agency_wanted|irrelevant",
-  "work_type": "remote|contract|part_time|full_time_onsite|unknown",
-  "reason": "1-2 sentences with SPECIFIC quoted evidence from the post or headline that justify lead_score",
-  "outreach_angle": "one specific, human, actionable opening line referencing their exact situation (max 25 words)"
-}}
-
-REMEMBER:
-- Hiring remote/contract/part-time talent for THIS service = high-value lead (80+ if decision-maker).
-- "looking for a freelance X" from a company = buyer (contract). "I'm a freelance X available" = seller.
-- Full-time on-site = never a lead. Content/tips/opinions = never a lead.
-- A firm building a "pool of experts" or saying "experts required for our projects" is BUYING expertise = lead (hiring). Only staffing agencies placing candidates at third-party clients are rejected.
-- "Looking for partners/agencies/marketers" = company sourcing suppliers = BUYER, never a seller.
-- Posts may be in ANY language — never reject a post just because it isn't in English; judge the intent, not the language. Always write `reason` and `outreach_angle` in English.
-- If lead_type is "irrelevant", is_lead MUST be false regardless of score.
-- If lead_type is "agency_wanted" and the user searched for agency_wanted intent, this is a MATCH. If the user searched for buyer or hiring, agency_wanted leads are REJECTED (wrong intent).
-
-Return ONLY valid JSON, nothing else."""
-
-    def _qualify_one(lead: dict) -> dict | None:
-        """Score a single lead. Returns the lead (mutated) or None if rejected."""
-        post_text = lead.get("post_text", "")[:3000]
-        headline = lead.get("headline", "")[:500]
-        company = lead.get("company", "")[:200]
-        location = lead.get("location", "")[:100]
-        full_name = lead.get("full_name", "?")
-
-        prompt = PROMPT_TEMPLATE.format(
-            query=query, post_text=post_text,
-            headline=headline, company=company, location=location,
-        )
-        try:
-            resp = client.chat.completions.create(
-                model="gpt-4o-mini",
-                messages=[
-                    {"role": "system", "content": SYSTEM_PROMPT},
-                    {"role": "user", "content": prompt}
-                ],
-                temperature=0.0,
-                max_tokens=700,
-                response_format={"type": "json_object"}
-            )
-            result = json.loads(resp.choices[0].message.content)
-        except Exception as e:
-            logger.error(f"[AI Qualify] Error for {full_name}: {e}")
-            # CRITICAL FIX: AI failure must REJECT the lead, not accept it.
-            # Unknown quality = not qualified. We never turn an unknown lead
-            # into a qualified lead just because the AI call failed.
-            logger.info(f"[AI Qualify] REJECTED on error: {full_name} (AI call failed)")
-            return None
-
-        work_type = (result.get("work_type") or "unknown").lower()
-        is_hiring = result.get("lead_type") == "hiring"
-        # HARD RULE: only remote / contract / part-time hiring leads
-        if is_hiring and work_type == "full_time_onsite":
-            logger.info(f"[AI Qualify] FILTERED OUT {full_name} - on-site/full-time job, not remote/contract/part-time")
-            return None
-        logger.info(f"[AI Qualify DEBUG] {full_name} -> is_lead={result.get('is_lead')}, score={result.get('lead_score')}, type={result.get('lead_type')}, work={work_type}, reason={(result.get('reason') or '')[:100]}")
-
-        if result.get("is_lead") and result.get("lead_score", 0) >= 25:
-            lead["ai_qualified"] = True
-            lead["ai_score"] = result.get("lead_score")
-            lead["lead_type"] = result.get("lead_type", "potential")
-            lead["work_type"] = work_type
-            lead["business_problem"] = result.get("business_problem", 0)
-            lead["service_match"] = result.get("service_match", 0)
-            lead["buying_intent"] = result.get("buying_intent", 0)
-            lead["urgency"] = result.get("urgency", 0)
-            lead["decision_maker_likelihood"] = result.get("decision_maker_likelihood", 0)
-            lead["outreach_worthiness"] = result.get("outreach_worthiness", 0)
-            lead["ai_reason"] = result.get("reason", "")
-            lead["outreach_angle"] = result.get("outreach_angle", "")
-            logger.info(f"[AI Qualify] KEPT {full_name} (score: {result.get('lead_score')}, type: {result.get('lead_type')}, work: {work_type})")
-            return lead
-        else:
-            logger.info(f"[AI Qualify] FILTERED OUT {full_name} - score: {result.get('lead_score')}, type: {result.get('lead_type')}, reason: {result.get('reason')}")
-            return None
-
-    if not leads:
-        return []
-
-    qualified: list[dict] = []
-    with ThreadPoolExecutor(max_workers=AI_QUALIFY_CONCURRENCY) as pool:
-        results = list(pool.map(_qualify_one, leads))
-    qualified = [r for r in results if r is not None]
-    return qualified
-
-
-async def generate_search_queries(client, niche: str, lead_types: list[str], iteration: int, existing_leads: list[dict]) -> list[str]:
-    """Generate HIGHLY EFFECTIVE LinkedIn search queries using GPT-4o-mini."""
-    if not client:
-        return build_boolean_query(niche)[:4]
-
-    # Build context about what we already found
-    found_summary = ""
-    if existing_leads:
-        types_found = {}
-        for l in existing_leads:
-            t = l.get("post_type", "unknown")
-            types_found[t] = types_found.get(t, 0) + 1
-        found_summary = f"Already found: {types_found}. Need more of: {', '.join(lead_types)}. "
-
-    wants_buyer = "buyer" in lead_types
-    wants_hiring = "hiring" in lead_types
-    wants_agency = "agency_wanted" in lead_types
-
-    prompt = f"""Generate 8 HIGHLY EFFECTIVE LinkedIn search queries to find '{niche}' posts.
-
-Target lead types: {', '.join(lead_types)}
-{found_summary}
-Iteration: {iteration}
-
-CRITICAL: Generate queries that match EXACT phrases real people type on LinkedIn.
-
-{"BUYER INTENT (people NEEDING services):" if wants_buyer else ""}
-{"- \"I need a " + niche + "\" | \"I'm looking for a " + niche + "\" | \"We need " + niche + " for our business\"" if wants_buyer else ""}
-{"- \"Can anyone recommend a good " + niche + "?\" | \"Who does " + niche + "?\" | \"Looking to hire " + niche + "\"" if wants_buyer else ""}
-{"- \"Need help with " + niche + "\" | \"Struggling with " + niche + "\" | \"Budget for " + niche + "\"" if wants_buyer else ""}
-{"- \"Urgent: need " + niche + "\" | \"ASAP " + niche + "\" | \"Hiring a " + niche + " expert\"" if wants_buyer else ""}
-
-{"HIRING INTENT (companies HIRING):" if wants_hiring else ""}
-{"- \"We're hiring a " + niche + "\" | \"Join our team as " + niche + "\" | \"Open position: " + niche + "\"" if wants_hiring else ""}
-{"- \"Our company is hiring " + niche + "\" | \"Looking for a " + niche + " to join\"" if wants_hiring else ""}
-
-{"AGENCY WANTED INTENT (businesses SEEKING an agency/provider):" if wants_agency else ""}
-{"- \"Looking for a " + niche + " agency\" | \"Need " + niche + " agency\" | \"Seeking " + niche + " agency\"" if wants_agency else ""}
-{"- \"Anyone recommend a " + niche + " agency?\" | \"Recommendations for " + niche + " agency\"" if wants_agency else ""}
-{"- \"Need agency for " + niche + "\" | \"Looking for agency to help with " + niche + "\"" if wants_agency else ""}
-
-STRICT RULES:
-- Each query 3-8 words MAX
-- NO generic terms like just "seo", "ui-ux", "website" - MUST include intent words
-- Queries must be EXACT phrases people actually type on LinkedIn
-- Prioritize BUYER intent queries (highest conversion)
-- Return 8 queries MAX
-
-Reply with JSON only:
-{{
-  "queries": ["query1", "query2", "query3", "query4", "query5", "query6", "query7", "query8"]
-}}"""
-
-    try:
-        resp = await asyncio.to_thread(
-            lambda: client.chat.completions.create(
-                model="gpt-4o-mini",
-                messages=[
-                    {"role": "system", "content": "You are a LinkedIn search query expert generating buyer-intent queries. Output only valid JSON."},
-                    {"role": "user", "content": prompt}
-                ],
-                temperature=0.2,
-                max_tokens=400,
-                response_format={"type": "json_object"}
-            )
-        )
-        result = json.loads(resp.choices[0].message.content)
-        return result.get("queries", [])[:6]
-    except Exception as e:
-        logger.error(f"[AI Query Gen] Error: {e}")
-        return build_boolean_query(niche)[:4]
-
-
-# Service-specific job search queries for hiring leads
-SERVICE_JOB_QUERIES = {
-    "marketing": ["Marketing Manager", "Digital Marketing Specialist", "Growth Marketing", "Performance Marketing"],
-    "seo": ["SEO Specialist", "SEO Manager", "Search Engine Optimization", "Technical SEO"],
-    "motion graphic": ["Motion Designer", "Motion Graphics Artist", "Video Editor", "After Effects"],
-    "smm": ["Social Media Manager", "Social Media Specialist", "Community Manager"],
-    "graphic design": ["Graphic Designer", "Visual Designer", "Brand Designer", "UI Designer"],
-    "shopify": ["Shopify Developer", "Shopify Expert", "Ecommerce Developer"],
-    "ecommerce": ["Ecommerce Manager", "Ecommerce Specialist", "Shopify Manager"],
-}
-
-def get_job_queries_for_niche(niche: str) -> list[str]:
-    """Get relevant job search queries for a niche."""
-    niche_lower = niche.lower()
-    for key, queries in SERVICE_JOB_QUERIES.items():
-        if key in niche_lower:
-            return queries
-    # Default: use the niche as-is plus common variations
-    return [niche, f"{niche} specialist", f"{niche} manager"]
-
-
-async def run_linkedin_pipeline(
-    search_id: str,
-    user_id: str,
-    query: str,
-    enrich_emails: bool,
-    max_results: int,
-    lead_types: list[str] = None,
-    location: str = "",
-) -> None:
     supabase = get_supabase_admin()
-    max_results = max(1, min(max_results, MAX_RESULTS_CAP))
-    if lead_types is None:
-        lead_types = ["buyer", "agency", "hiring"]
+    country_codes, country_text = parse_country_request(location or "")
+    canonical_types = parse_wire_lead_types(lead_types)
+    if not canonical_types:
+        canonical_types = [LeadType.FREELANCER_NEEDED.value]
+    request = LeadRequest(search_id, user_id, query.strip(), max(1, min(int(max_results), MAX_RESULTS_CAP)),
+                          canonical_types, country_codes, country_text, enrich_emails)
 
-    req_country_codes, req_city = _parse_location_request(location or "")
-    logger.info(
-        f"[LinkedInPipeline:{search_id}] location='{location}' → "
-        f"countries={req_country_codes or 'default-allowed'} city={req_city or ''}"
+    await _update_search(supabase, search_id, {
+        "status": "scraping", "progress_percent": 3,
+        "message": f"Searching LinkedIn for {', '.join(t.replace('_', ' ') for t in request.lead_types)} · {request.service} · {request.country_text or 'Any'}...",
+    })
+
+    client = _get_openai_client()
+    known_urls = await _prefetch_known_urls(supabase, user_id)
+
+    return await _run_engine_with_externals(
+        supabase=supabase,
+        request=request,
+        client=client,
+        known_urls=known_urls,
+        discover=_discover,
+        classify=classify_linkedin_candidates,
+        attach_classification=attach_classification,
+        candidate_key=candidate_key,
     )
 
-    settings = get_settings()
-    openai_client = None
-    if settings.openai_api_key:
-        from openai import OpenAI
-        openai_client = OpenAI(api_key=settings.openai_api_key)
 
-    all_leads: list[dict] = []
-    all_skipped = 0
+async def _run_engine_with_externals(
+    *,
+    supabase: Any,
+    request: LeadRequest,
+    client: Any,
+    known_urls: set[str],
+    discover: Any,
+    classify: Any,
+    attach_classification: Any,
+    candidate_key: Any,
+) -> dict:
+    """Pure exact-count iterative loop. Externals injected for testability.
 
-    try:
+    verify_known: dedupe against saved leads. The loop calls `discover(queries)`
+    -> (ok_lanes, total_lanes, raw_items, errors) and `classify(client, service,
+    country, candidates)` -> {candidate_key: LeadClassification}.
+    """
+    search_id = request.search_id
+    user_id = request.user_id
+    valid_leads: list[dict] = []
+    chosen_urls: set[str] = set()
+    seen_post_ids: set[str] = set()
+    used_queries: set[str] = set()
+    iteration = 0
+    no_progress = 0
+    provider_fail_rounds = 0
+    deadline = time.monotonic() + WAVE_DEADLINE_SECONDS
+    iterations: list[IterationTelemetry] = []
+    reason = None
+
+    while len(valid_leads) < request.request_count and iteration < MAX_ITERATIONS:
+        if time.monotonic() > deadline:
+            reason = "deadline"
+            break
+        iteration += 1
+        request.iteration = iteration
+        remaining = request.request_count - len(valid_leads)
+        it = IterationTelemetry(iteration, remaining)
+        it.last_scored_types = {}
+
+        queries = generate_queries(request.primary_lead_type(), request.service, request.country_codes, iteration, 12)
+        fresh_q = [q for q in queries if q not in used_queries]
+        if not fresh_q:
+            used_queries.clear()
+            fresh_q = queries
+        it.queries = fresh_q
+        used_queries.update(fresh_q)
+
         await _update_search(supabase, search_id, {
-            "status": "scraping",
-            "progress_percent": 5,
-            "message": "Building intent queries...",
+            "progress_percent": min(10 + iteration * 12, 82),
+            "message": f"Iteration {iteration}: {len(valid_leads)}/{request.request_count} leads...",
         })
 
-        # MEGA-PARALLEL DISCOVERY: build ALL query angles up front and fire
-        # them in ONE batch. run_post_search splits the queries across all
-        # healthy Apify keys and runs them CONCURRENTLY — so 10 leads means
-        # ~96 queries hit ~10-24 keys simultaneously in a single pass, not
-        # round after round. Repeat only if still short.
-        MAX_PASSES = 2
-        seen_post_urls: set[str] = set()
+        provider_ok, provider_total, raw_items, provider_errors = discover(fresh_q)
+        it.provider_ok_lanes = provider_ok
+        it.provider_total_lanes = provider_total
+        it.provider_errors = provider_errors
+        it.provider_raw_count = len(raw_items)
 
-        # All 8 query angles (12 queries each = up to 96 distinct phrases).
-        all_phrases: list[str] = []
-        all_phrases.extend(build_boolean_query(query))
-        for variant in range(2, 9):
-            all_phrases.extend(build_boolean_query_variant(query, variant))
-        # AGENCY_WANTED: prepend agency-seeking phrases when that intent is selected.
-        if lead_types and "agency_wanted" in lead_types:
-            base = " ".join(query.strip().strip('"').split())
-            base = base.replace("ui-ux", "ui ux").replace("ui/ux", "ui ux")
-            agency_phrases = [
-                f"looking for {base} agency",
-                f"need {base} agency",
-                f"seeking {base} agency",
-                f"anyone recommend {base} agency",
-                f"need agency for {base}",
-                f"looking for agency to help with {base}",
-                f"recommendations for {base} agency",
-                f"looking for {base} agency partner",
-            ]
-            all_phrases = agency_phrases + all_phrases
-        # Dedupe, cap to a sane number (harvest splits into <=12 groups/keys)
-        seen_q: set[str] = set()
-        final_phrases: list[str] = []
-        for p in all_phrases:
-            k = p.lower()
-            if k not in seen_q:
-                seen_q.add(k)
-                final_phrases.append(p)
-        final_phrases = final_phrases[:96]
-
-        raw_count = 0
-        pass_no = 0
-        while len(all_leads) < max_results and pass_no < MAX_PASSES:
-            pass_no += 1
-            remaining = max_results - len(all_leads)
-            fetch_target = min(max(remaining * 6, 60), 150)
-            logger.info(f"[LinkedInPipeline:{search_id}] Pass {pass_no}/{MAX_PASSES} — firing {len(final_phrases)} queries in parallel across keys (fetch {fetch_target})")
-
-            await _update_search(supabase, search_id, {
-                "progress_percent": 15,
-                "message": f"Searching LinkedIn with {len(final_phrases)} intent queries in parallel...",
-            })
-
-            try:
-                items = await asyncio.to_thread(run_post_search, final_phrases, fetch_target)
-            except Exception as e:
-                logger.error(f"[LinkedInPipeline:{search_id}] Pass {pass_no} post-search failed: {e}")
-                if pass_no == 1:
-                    raise
+        if not raw_items:
+            if provider_ok == 0:
+                provider_fail_rounds += 1
+                if provider_fail_rounds >= MAX_PROVIDER_FAIL_ROUNDS:
+                    reason = "provider_failure"
+                    iterations.append(it)
+                    break
+            else:
+                no_progress += 1
+            iterations.append(it)
+            if no_progress >= MAX_NO_PROGRESS_ITERATIONS:
+                reason = "no_progress"
                 break
-            raw_count = len(items)
-            logger.info(f"[LinkedInPipeline:{search_id}] Pass {pass_no} returned {raw_count} raw posts")
+            continue
 
-            # Skip posts already seen in earlier passes.
-            def _pid(it):
-                return it.get("postId") or it.get("id") or it.get("url") or it.get("linkedinUrl")
+        # country hard gate
+        candidates = []
+        for raw in raw_items:
+            pid = raw.get("postId") or raw.get("id") or raw.get("url") or raw.get("linkedinUrl")
+            if pid and pid in seen_post_ids:
+                continue
+            if pid:
+                seen_post_ids.add(pid)
+            cand = _parse_candidate(raw)
+            if not cand:
+                continue
+            if not country_pass(cand.get("country_code") or cand.get("location_code") or "", cand.get("location") or "", request.country_codes)[0]:
+                continue
+            candidates.append(cand)
+        it.after_country_filter = len(candidates)
 
-            fresh = [it for it in items if _pid(it) not in seen_post_urls]
-            for it in items:
-                pid = _pid(it)
-                if pid:
-                    seen_post_urls.add(pid)
-            logger.info(f"[LinkedInPipeline:{search_id}] Fresh posts this pass: {len(fresh)} (of {raw_count})")
+        # dedupe by identity
+        uniq, seen_ids = [], set()
+        for cand in candidates:
+            key = _identity_url(cand)
+            if key and key in seen_ids:
+                continue
+            if key:
+                seen_ids.add(key)
+            uniq.append(cand)
+        it.after_dedupe = len(uniq)
+        uniq = [c for c in uniq if _identity_url(c) not in known_urls and _identity_url(c) not in chosen_urls]
 
-            leads, skipped = process_items(fresh, max_results * 2, req_country_codes)
-            all_skipped += skipped
-            logger.info(f"[LinkedInPipeline:{search_id}] Candidates after parsing: {len(leads)} (skipped {skipped})")
+        # deterministic pre-filter
+        filtered = []
+        for cand in uniq:
+            reject, _ = prefilter_reject(cand)
+            if not reject:
+                filtered.append(cand)
+        it.after_deterministic = len(filtered)
 
-            # Enrich authors (only scrapeforge results lack headlines).
-            missing_headline = sum(1 for l in leads if not (l.get("headline") or "").strip())
-            if leads and missing_headline > 0:
-                enrich_urls = [l["linkedin_url"] for l in leads[:PROFILE_ENRICHMENT_CAP] if not (l.get("headline") or "").strip()]
-                try:
-                    profiles = await asyncio.to_thread(fetch_profile_details, enrich_urls, "basic")
-                    by_url = {(p.get("url") or "").rstrip("/").lower(): p for p in profiles if isinstance(p, dict)}
-                    for lead in leads:
-                        p = by_url.get((lead.get("linkedin_url") or "").rstrip("/").lower())
-                        if not p:
-                            continue
-                        lead["headline"] = (p.get("headline") or lead.get("headline") or "")[:500]
-                        lead["company"] = _company_from_profile(p)
-                        lead["location"] = _location_from_profile(p)
-                        lead["connections_count"] = p.get("connectionsCount") or 0
-                except Exception as e:
-                    logger.warning(f"[LinkedInPipeline:{search_id}] Profile enrichment failed (continuing without): {e}")
+        if not filtered and not candidates:
+            no_progress += 1
+            iterations.append(it)
+            if no_progress >= MAX_NO_PROGRESS_ITERATIONS:
+                reason = "no_progress"
+                break
+            continue
 
-            await _update_search(supabase, search_id, {
-                "progress_percent": min(45 + pass_no * 4, 60),
-                "message": f"Found {raw_count} posts this pass. AI qualifying...",
-            })
-
-            # AI qualify with semantic scoring
-            leads = await qualify_leads_with_ai(leads, query, openai_client, lead_types)
-
-            # Rank by AI score (highest first)
-            leads.sort(key=lambda x: x.get("ai_score", 0), reverse=True)
-
-            # Dedupe by author (keep highest scoring post per author).
-            # Use clean URL (strip query params) so ?miniProfileUrn= variants merge.
-            def _clean_url(u: str) -> str:
-                return (u or "").split("?")[0].rstrip("/").lower()
-
-            best_by_author = {}
-            for lead in leads:
-                author_url = lead.get("linkedin_url")
-                if not author_url:
-                    continue
-                score = lead.get("ai_score", 0)
-                key = _clean_url(author_url)
-                if key not in best_by_author or score > best_by_author[key].get("ai_score", 0):
-                    best_by_author[key] = lead
-            leads = list(best_by_author.values())
-            leads.sort(key=lambda x: x.get("ai_score", 0), reverse=True)
-
-            # Filter by requested types using lead_type
-            lead_type_mapping = {
-                "buyer": ["explicit_need", "problem_awareness", "research"],
-                "hiring": ["hiring"],
-            }
-            if lead_types and lead_types != ["buyer", "hiring"]:
-                allowed_types = set()
-                for lt in lead_types:
-                    allowed_types.update(lead_type_mapping.get(lt, [lt]))
-                leads = [l for l in leads if l.get("lead_type") in allowed_types]
-
-            # Add to all_leads and dedupe again
-            existing_urls = {_clean_url(l.get("linkedin_url")) for l in all_leads if l.get("linkedin_url")}
-            new_leads = [l for l in leads if _clean_url(l.get("linkedin_url")) not in existing_urls]
-            all_leads.extend(new_leads)
-
-            logger.info(f"[LinkedInPipeline:{search_id}] Pass {pass_no}: +{len(new_leads)} qualified leads (total: {len(all_leads)}/{max_results})")
-
-            # Keep looping until the requested count is met — next pass skips
-            # already-seen posts and searches fresh angles.
-            # (No early break: user asked for exactly this many leads.)
-
-        # ALSO search for hiring leads via LinkedIn Job Scraper if "hiring" in lead_types
-        if "hiring" in lead_types and len(all_leads) < max_results:
-            await _update_search(supabase, search_id, {
-                "progress_percent": 55,
-                "message": f"Searching LinkedIn jobs for '{query}' (remote/contract/part-time US/Europe)...",
-            })
-
-            # Use more job queries when we still need many leads — up to 4
-            # queries to fill the gap faster.
-            remaining_need = max_results - len(all_leads)
-            job_queries = get_job_queries_for_niche(query)[: min(4, max(2, remaining_need))]
-            logger.info(f"[LinkedInPipeline:{search_id}] Job queries: {job_queries} (need {remaining_need} more)")
-
-            async def _fetch_jobs(job_query: str) -> list[dict]:
-                try:
-                    # Hard timeout — the job actor can hang; never let it block
-                    # the whole search for more than 60s.
-                    jobs = await asyncio.wait_for(
-                        asyncio.to_thread(
-                            run_job_search,
-                            query=job_query,
-                            location="United States",
-                            time_range="7d",
-                            max_jobs=min(max_results, 20),
-                        ),
-                        timeout=60,
-                    )
-                    logger.info(f"[LinkedInPipeline:{search_id}] Job search '{job_query}' returned {len(jobs)} jobs")
-                    return filter_jobs_by_work_type(jobs, ["Remote", "Part-time", "Contract"])
-                except asyncio.TimeoutError:
-                    logger.warning(f"[LinkedInPipeline:{search_id}] Job search '{job_query}' timed out — skipping")
-                    return []
-                except Exception as e:
-                    logger.error(f"[LinkedInPipeline:{search_id}] Job search error for '{job_query}': {e}")
-                    return []
-
-            # Run all job queries IN PARALLEL — big speedup over sequential.
-            job_results = await asyncio.gather(*[_fetch_jobs(q) for q in job_queries])
-            for filtered_jobs in job_results:
-                logger.info(f"[LinkedInPipeline:{search_id}] After work type filter: {len(filtered_jobs)} jobs")
-                # Convert jobs to lead format
-                for job in filtered_jobs:
-                    company_url = (job.get("companyUrl") or "").strip()
-                    job_url = (job.get("jobUrl") or "").strip()
-                    # Convert the raw API endpoint the scraper returns
-                    # (jobs-guest/jobs/api/jobPosting/123) into the
-                    # human-viewable job page URL.
-                    m = _re_job_id.search(job_url)
-                    if m:
-                        job_url = f"https://www.linkedin.com/jobs/view/{m.group(1)}/"
-                    # Link to the JOB POSTING itself, not the company page.
-                    linkedin_url = job_url or company_url
-                    job_lead = {
-                        "full_name": job.get("company") or "Unknown Company",
-                        "headline": f"{job.get('title', '')} at {job.get('company', '')}",
-                        "company": job.get("company", ""),
-                        "location": job.get("location", ""),
-                        "linkedin_url": linkedin_url,
-                        "post_url": job_url,
-                        "post_text": job.get("descriptionText", "")[:3000],
-                        "posted_at": _parse_posted_at(job.get("postedAt")),
-                        "engagement_likes": 0,
-                        "engagement_comments": 0,
-                        "profile_picture_url": job.get("companyLogo", ""),
-                        "connections_count": 0,
-                        "lead_type": "hiring",
-                        "job_work_type": job.get("workType", ""),
-                        "job_salary": job.get("salary", ""),
-                        "job_seniority": job.get("seniority", ""),
-                        "job_function": job.get("jobFunction", ""),
-                        "job_industry": job.get("companyIndustry", ""),
-                    }
-                    all_leads.append(job_lead)
-
-        # Trim to max_results
-        if len(all_leads) > max_results:
-            all_leads = all_leads[:max_results]
-
-        # User-requested country filter (slow pipeline)
-        if req_country_codes:
-            before = len(all_leads)
-            all_leads = [l for l in all_leads if _country_ok(l, "requested", req_country_codes)]
-            logger.info(f"[LinkedInPipeline:{search_id}] Country filter: {len(all_leads)}/{before} matched requested countries")
-
-        # Count by lead_category based on ai_score
-        hot = sum(1 for l in all_leads if l.get("ai_score", 0) >= 85)
-        warm = len(all_leads) - hot
-
-        if not all_leads:
-            await _update_search(supabase, search_id, {
-                "status": "completed",
-                "progress_percent": 100,
-                "message": "No relevant leads found after AI qualification.",
-                "total_results": 0,
-                "hot_leads": 0,
-                "warm_leads": 0,
-                "skipped": all_skipped,
-                "emails_found": 0,
-                "completed_at": datetime.now(timezone.utc).isoformat(),
-            })
-            return
-
+        # profile enrichment ONLY for candidates missing a headline (cost control).
+        await _enrich_profiles_for(filtered)
         await _update_search(supabase, search_id, {
-            "progress_percent": 85,
-            "message": f"Saving {len(all_leads)} qualified leads ({hot} hot, {warm} warm)...",
+            "progress_percent": min(30 + iteration * 10, 84),
+            "message": f"Iteration {iteration}: qualifying {len(filtered)} candidates...",
         })
 
-        lead_ids = await _save_leads(supabase, search_id, user_id, all_leads)
-
-        emails_found = 0
-        if enrich_emails and lead_ids:
-            await _update_search(supabase, search_id, {
-                "progress_percent": 80,
-                "message": "Finding emails for your leads...",
-            })
-            emails_found = await _enrich_emails(supabase, search_id, user_id, all_leads, lead_ids)
-
-        saved = len(lead_ids)
-        total_skipped = max(0, raw_count - saved)
-        suffix = f", {emails_found} emails" if emails_found else ""
-        await _update_search(supabase, search_id, {
-            "status": "completed",
-            "progress_percent": 100,
-            "message": f"Found {saved} leads{suffix}",
-            "total_results": saved,
-            "hot_leads": hot,
-            "warm_leads": warm,
-            "skipped": total_skipped,
-            "emails_found": emails_found,
-            "completed_at": datetime.now(timezone.utc).isoformat(),
-        })
-        logger.info(f"[LinkedInPipeline:{search_id}] Completed — {saved} leads ({hot} hot, {warm} warm), {emails_found} emails")
-
-    except ApifyError as e:
-        logger.error(f"[LinkedInPipeline:{search_id}] Apify error: {e}", exc_info=True)
-        await _update_search(supabase, search_id, {
-            "status": "failed",
-            "message": "LinkedIn scraper failed",
-            "error_message": str(e),
-        })
-    except Exception as e:
-        logger.error(f"[LinkedInPipeline:{search_id}] Unexpected error: {e}", exc_info=True)
-        await _update_search(supabase, search_id, {
-            "status": "failed",
-            "message": "Search failed unexpectedly",
-            "error_message": str(e),
-        })
-
-
-async def _save_leads(supabase, search_id: str, user_id: str, leads: list[dict]) -> list[str]:
-    remaining_leads = await _get_remaining_leads(supabase, user_id)
-    if remaining_leads <= 0:
-        logger.warning(f"[LinkedInPipeline:{search_id}] Monthly leads limit reached, skipping saves")
-        return []
-
-    existing = await asyncio.to_thread(
-        lambda: supabase.table("leads")
-        .select("linkedin_url")
-        .eq("user_id", user_id)
-        .neq("linkedin_url", "")
-        .execute()
-    )
-    existing_urls = set((row.get("linkedin_url") or "") for row in (existing.data or []))
-
-    lead_ids: list[str] = []
-    for lead in leads:
-        if remaining_leads <= 0:
-            logger.warning(f"[LinkedInPipeline:{search_id}] Monthly leads limit reached. Stopping at {len(lead_ids)} saved.")
-            break
-        linkedin_url = (lead.get("linkedin_url") or "").strip()
-        if linkedin_url and linkedin_url in existing_urls:
-            continue
-
-        ai_score = lead.get("ai_score", 0)
-        if ai_score >= 85:
-            lead_category = "hot"
-        else:
-            lead_category = "warm"
-
-        # Map AI semantic type to the post_type CHECK values the DB allows
-        # (buyer / hiring / job_seeker). "agency" posts are buyer signals —
-        # map to buyer.
-        ai_type = lead.get("lead_type") or ""
-        if ai_type in ("explicit_need", "problem_awareness", "research", "agency"):
-            post_type = "buyer"
-        elif ai_type == "agency_wanted":
-            post_type = "agency_wanted"
-        elif ai_type in ("hiring",):
-            post_type = "hiring"
-        elif ai_type in ("job_seeker",):
-            post_type = "job_seeker"
-        else:
-            post_type = "buyer"
-
-        # Prepend work-type tag to headline so the UI shows Remote/Contract/Part-time
-        work_label = {
-            "remote": "🌍 Remote",
-            "contract": "📄 Contract",
-            "part_time": "⏱️ Part-time",
-            "full_time_onsite": "🏢 On-site",
-        }.get((lead.get("work_type") or "").lower())
-        headline = lead.get("headline") or ""
-        if work_label and headline:
-            headline = f"{work_label} — {headline}"
-        elif work_label:
-            headline = work_label
-
-        # Skip leads with empty linkedin_url (cannot dedupe or reference)
-        if not linkedin_url:
-            logger.warning(f"[LinkedInPipeline:{search_id}] Skipping lead '{lead.get('full_name')}' - empty linkedin_url")
-            continue
-
-        row = {
-            "search_id": search_id,
-            "user_id": user_id,
-            "source": "linkedin",
-            "business_name": lead.get("full_name") or "Unknown",
-            "category": lead.get("company") or "LinkedIn",
-            "full_address": lead.get("location") or "",
-            "phone": "",
-            "email_found": "",
-            "website_url": "",
-            "rating": None,
-            "total_reviews": 0,
-            "google_maps_link": "",
-            "description": lead.get("post_text") or "",
-            "lead_category": lead_category,
-            "post_type": post_type,
-            "linkedin_url": linkedin_url,
-            "post_url": lead.get("post_url") or "",
-            "post_text": lead.get("post_text") or "",
-            "headline": headline,
-            "profile_picture_url": lead.get("profile_picture_url") or "",
-            "connections_count": lead.get("connections_count") or 0,
-            "posted_at": lead.get("posted_at"),
-            "ai_qualified": True,
-            # column is constrained to 0..1 — store normalized score
-            "ai_confidence_score": ai_score / 100.0,
-            "ai_reason": lead.get("ai_reason"),
-            "ai_pitch": lead.get("outreach_angle"),
-        }
-        try:
-            response = await asyncio.to_thread(
-                lambda: supabase.table("leads").insert(row).execute()
-            )
-            if response.data and len(response.data) > 0:
-                lead_ids.append(response.data[0]["id"])
-                remaining_leads -= 1
-                if linkedin_url:
-                    existing_urls.add(linkedin_url)
-        except Exception as e:
-            logger.error(f"[LinkedInPipeline:{search_id}] Failed to save lead '{lead.get('full_name', '?')}': {e}")
-    return lead_ids
-
-
-async def _get_remaining_leads(supabase, user_id: str) -> int:
-    """Get remaining LinkedIn leads for this user (monthly-based)."""
-    try:
-        from datetime import datetime, timezone
-        from app.services.plans import get_plan_row, resolve_effective_subscription
-
-        eff = resolve_effective_subscription(supabase, user_id)
-        plan = get_plan_row(supabase, eff["plan_id"])
-        plan_limit = int(plan.get("linkedin_hq_leads_monthly", 0) or 0)
-
-        month_str = datetime.now(timezone.utc).replace(day=1).date().isoformat()
-        existing = supabase.table("monthly_usage").select("linkedin_hq_generated").eq("user_id", user_id).eq("usage_month", month_str).limit(1).execute()
-        used = int((existing.data or [{}])[0].get("linkedin_hq_generated", 0) or 0)
-        return max(0, plan_limit - used)
-    except Exception as e:
-        logger.warning(f"[LinkedInPipeline] remaining-leads calc failed, defaulting: {e}")
-        return 50
-
-
-async def _enrich_emails(
-    supabase, search_id: str, user_id: str, leads: list[dict], lead_ids: list[str]
-) -> int:
-    urls = []
-    for lead in leads:
-        url = (lead.get("linkedin_url") or "").strip()
-        if url:
-            urls.append(url)
-    if not urls:
-        return 0
-
-    try:
-        profiles = await asyncio.to_thread(enrich_profiles, urls, 50)
-    except ApifyError as e:
-        logger.warning(f"[LinkedInPipeline:{search_id}] Email enrichment failed: {e}")
-        return 0
-
-    email_by_identifier: dict[str, str] = {}
-    location_by_identifier: dict[str, str] = {}
-    company_by_identifier: dict[str, str] = {}
-    for profile in profiles:
-        identifier = profile.get("publicIdentifier") or ""
-        if not identifier:
-            continue
-        emails = profile.get("emails") or []
-        if emails:
-            email_by_identifier[identifier] = emails[0]
-        location = _location_from_profile(profile)
-        if location:
-            location_by_identifier[identifier] = location
-        company = _company_from_profile(profile)
-        if company:
-            company_by_identifier[identifier] = company
-
-    if not email_by_identifier:
-        return 0
-
-    emails_found = 0
-    for idx, lead in enumerate(leads):
-        if idx >= len(lead_ids):
-            break
-        identifier = _public_id_from_url(lead.get("linkedin_url") or "")
-        email = email_by_identifier.get(identifier)
-        if not email:
-            continue
-        try:
-            update_data = {"email_found": email}
-            location = location_by_identifier.get(identifier)
-            if location:
-                update_data["full_address"] = location
-            company = company_by_identifier.get(identifier)
-            if company:
-                update_data["category"] = company
-            await asyncio.to_thread(
-                lambda: supabase.table("leads")
-                .update(update_data)
-                .eq("id", lead_ids[idx])
-                .eq("user_id", user_id)
-                .execute()
-            )
-            emails_found += 1
-        except Exception as e:
-            logger.warning(f"[LinkedInPipeline:{search_id}] Failed to attach email: {e}")
-    return emails_found
-
-
-def _public_id_from_url(url: str) -> str:
-    try:
-        part = url.split(".com/in/", 1)[1]
-        return part.split("/")[0].split("?")[0]
-    except Exception:
-        return ""
-
-
-async def _update_search(supabase, search_id: str, data: dict) -> None:
-    try:
-        await asyncio.to_thread(
-            lambda: supabase.table("searches").update(data).eq("id", search_id).execute()
-        )
-    except Exception as e:
-        logger.error(f"[LinkedInPipeline:{search_id}] Failed to update search: {e}")
-
-
-# ══════════════════════════════════════════════════════════════════════════
-# FAST PIPELINE — N selected leads → N parallel Apify lanes + async OpenAI
-# ══════════════════════════════════════════════════════════════════════════
-
-# Max concurrent OpenAI calls during async qualification. gpt-4o-mini TPM
-# budget is 200k tokens/call-org-min; each qualification call is ~1.7k
-# tokens, so 12 concurrent keeps us comfortably under the ceiling.
-AI_ASYNC_CONCURRENCY = 12
-
-# Acceptance tiers for the guarantee loop. Applied to ALREADY-SCORED leads,
-# so relaxing costs zero extra API calls. Both tiers ENFORCE the user's
-# country selection — only the SCORE threshold is relaxed to fill the count.
-# We never pad the count with leads from countries the user did not ask for
-# (better to return fewer real in-country leads than the wrong country).
-TIER_1 = {"min_score": 40, "country": "requested"}   # strict quality + country
-TIER_FINAL = {"min_score": 25, "country": "requested"}  # relax SCORE only, keep country
-TIERS = [TIER_1, TIER_FINAL]
-
-# ── Persistent guarantee loop limits ──────────────────────────────────────
-MAX_WAVES = 4                 # hunt up to 4 waves (down from 5 — saves Apify credits)
-WAVE_DEADLINE_SECONDS = 480   # never hunt longer than 8 minutes total
-TRIAGE_BATCH_SIZE = 20        # posts per cheap triage call
-TRIAGE_CONCURRENCY = 12
-DEEP_SCORE_CAP = 40           # max survivors sent to full GPT scoring (down from 90)
-
-
-async def triage_candidates_async(
-    candidates: list[dict],
-    query: str,
-    client=None,
-    concurrency: int = TRIAGE_CONCURRENCY,
-) -> list[dict]:
-    """Stage-1 CHEAP screening of EVERY parsed post (no engagement bias).
-
-    Batches of 20 posts per call ask gpt-4o-mini ONLY one question: does the
-    author show BUYING/HIRING intent for this service? Sellers, thought-
-    leadership, and job-seekers are dropped here so the
-    expensive deep scorer only sees genuine prospects. Costs ~500 tokens per
-    batch — screening 300 posts costs less than deep-scoring 15.
-    """
-
-    if not candidates:
-        return []
-    if client is None:
-        return candidates  # no key configured → don't gate, let deep stage decide
-
-    SYSTEM = """You triage LinkedIn posts for a B2B lead-generation CRM. For each numbered post decide if the AUTHOR shows BUYING signal for the given service: they need it done, are hiring a freelancer/contractor/agency (remote/contract/part-time), ask for recommendations of providers, or describe a business problem needing this service.
-
-KEEP (always include): posts mentioning "hiring", "looking for", "need", "want", "seeking", "we're hiring", "urgent hiring", "freelance", "contract", "remote", "part-time", "join our team", "we are looking for", "join us"; posts from companies/individuals actively recruiting for roles related to the service niche; posts asking for recommendations of service providers; posts looking for agency partners, need an agency, seeking agency help, looking for a team/company to handle this, need someone to manage/build/create this; posts from businesses needing external help with their service niche.
-
-REJECT (do NOT keep): freelancers/agents SELLING their own services ("I offer", "available for", portfolio posts, "I'm a [service] specialist", "we are a [service] agency"); pure content/tips/opinions/case-studies; job-seekers describing their own availability; students.
-
-Posts may be in ANY language — never reject a post just because it isn't in English; judge the intent, not the language.
-
-When in doubt, KEEP — better to pass a marginal lead than lose a genuine buyer. Output strict JSON."""
-
-    USER_TMPL = """Service niche: {query}
-
-Posts:
-{posts}
-
-Return JSON: {{"keep": [post numbers showing buying/hiring intent]}}"""
-
-    sem = asyncio.Semaphore(concurrency)
-    batches = [candidates[i:i + TRIAGE_BATCH_SIZE] for i in range(0, len(candidates), TRIAGE_BATCH_SIZE)]
-
-    async def _triage_batch(batch_idx: int, batch: list[dict]) -> list[int]:
-        lines = []
-        for j, c in enumerate(batch):
-            head = f"{c.get('full_name','?')} | {c.get('company') or c.get('headline','')[:80]}"
-            text = (c.get('post_text') or '')[:400].replace('\n', ' ')
-            lines.append(f"{j}. [{head}] {text}")
-        prompt = USER_TMPL.format(query=query, posts="\n".join(lines))
-        async with sem:
-            try:
-                resp = await client.chat.completions.create(
-                    model="gpt-4o-mini",
-                    messages=[
-                        {"role": "system", "content": SYSTEM},
-                        {"role": "user", "content": prompt},
-                    ],
-                    temperature=0.0,
-                    max_tokens=80,
-                    response_format={"type": "json_object"},
-                )
-                data = json.loads(resp.choices[0].message.content)
-                keep = data.get("keep", [])
-                return [int(k) for k in keep if isinstance(k, (int, float)) and 0 <= int(k) < len(batch)]
-            except Exception as e:
-                # Triage must never LOSE candidates on error → keep whole batch
-                logger.warning(f"[Triage] batch {batch_idx} failed ({str(e)[:100]}) — keeping all {len(batch)}")
-                return list(range(len(batch)))
-
-    results = await asyncio.gather(*[_triage_batch(i, b) for i, b in enumerate(batches)])
-    kept: list[dict] = []
-    for batch, keep_idx in zip(batches, results):
-        kept.extend(batch[k] for k in keep_idx)
-
-    logger.info(f"[LinkedInPipeline] Triage: {len(kept)}/{len(candidates)} posts show buying/hiring intent")
-    return kept
-
-
-def _job_country_ok(job: dict, req_country_codes: set[str]) -> bool:
-    """Does a job posting's location match the user's requested countries?
-
-    Remote jobs are accepted when the user has country restrictions, since
-    remote work is location-independent. Only jobs with locations that
-    explicitly mismatch the requested country are rejected.
-    """
-    if not req_country_codes:
-        return True  # No country requested → global, keep all.
-    loc = (job.get("location") or "").lower()
-    if not loc:
-        return False  # Unverifiable against the requested country.
-    # Remote/anywhere jobs are location-agnostic → always accept
-    remote_signals = ("remote", "anywhere", "worldwide", "global", "work from home", "wfh", "hybrid")
-    if any(sig in loc for sig in remote_signals):
-        return True
-    if any(name in loc for name, code in COUNTRY_NAME_TO_CODE.items() if code in req_country_codes):
-        return True
-    if any(city in loc for city, code in CITY_COUNTRY_HINTS.items() if code in req_country_codes):
-        return True
-    return False
-
-
-def _country_ok(lead: dict, mode: str, req_country_codes: set[str] | None = None) -> bool:
-    """Country gate — fully user-driven (see `_country_match`).
-
-    mode='any' relaxes the gate entirely (last-resort acceptance tier).
-    Otherwise the lead must match one of the user's requested countries; with
-    no countries requested, every market is allowed.
-    """
-    if mode == "any":
-        return True
-    loc_signal = lead.get("location") or lead.get("headline") or ""
-    return _country_match(lead.get("country_code") or "", loc_signal, req_country_codes)
-
-
-def _type_ok(lead: dict, allowed_types: set[str] | None) -> bool:
-    if not allowed_types:
-        return True
-    return lead.get("lead_type") in allowed_types
-
-
-# Lead type mapping: UI selection → AI lead_type values
-_LEAD_TYPE_MAP = {
-    # "buyer" = people/companies needing freelancers. ONLY genuine buyer
-    # signals — hiring posts are excluded (they belong to "hiring").
-    # Buyer searches use boolean-NOT + authorKeywords filters so the posts
-    # found are real "I need X" requests, not hiring ads.
-    "buyer": ["explicit_need", "problem_awareness", "research"],
-    "hiring": ["hiring"],
-    # "agency_wanted" = people/companies actively seeking an external agency,
-    # agency partner, service provider, or specialist firm. These are
-    # BUYING/SOURCING signals — the user is looking for an agency to hire.
-    "agency_wanted": ["agency_wanted"],
-}
-
-
-def tier_filter(scored: list[dict], lead_types: list[str], tier: dict, req_country_codes: set[str] | None = None) -> list[dict]:
-    """Filter scored leads by a relaxation tier.
-
-    Returns (accepted_leads, rejected_author_urls). Rejected URLs are
-    authors whose ONLY post failed this tier — they may pass a looser tier.
-    """
-    all_types = lead_types is None or set(lead_types) == {"buyer", "hiring", "agency_wanted"}
-    allowed = None
-    if not all_types:
-        allowed = set()
-        for lt in lead_types or []:
-            allowed.update(_LEAD_TYPE_MAP.get(lt, [lt]))
-
-    accepted: list[dict] = []
-    for lead in scored:
-        score = lead.get("ai_score", 0) or 0
-        if score < tier["min_score"]:
-            continue
-        if not _country_ok(lead, tier["country"], req_country_codes):
-            continue
-        if not _type_ok(lead, allowed):
-            continue
-        accepted.append(lead)
-    return accepted
-
-
-def split_lane_phrases(pool: list[str], n_lanes: int, per_lane_cap: int = 12) -> tuple[list[list[str]], list[str]]:
-    """Split the phrase pool into n_lanes chunks (+ leftover phrases for wave 2)."""
-    pool = list(dict.fromkeys(p.strip() for p in pool if p.strip()))
-    per_lane = min(per_lane_cap, max(4, len(pool) // n_lanes))
-    lanes, used = [], 0
-    for i in range(n_lanes):
-        chunk = pool[used : used + per_lane]
-        if not chunk:
-            break
-        lanes.append(chunk)
-        used += len(chunk)
-    return lanes, pool[used:]
-
-
-async def qualify_leads_with_ai_async(
-    leads: list[dict],
-    query: str,
-    client=None,
-    concurrency: int = AI_ASYNC_CONCURRENCY,
-) -> list[dict]:
-    """Async twin of qualify_leads_with_ai — SAME prompts & rules (quality
-    unchanged), but all OpenAI calls fire concurrently via AsyncOpenAI +
-    semaphore instead of a 5-worker thread pool."""
-    import json as _json
-
-    if not leads:
-        return []
-    if client is None:
-        settings = get_settings()
-        if not settings.openai_api_key:
-            logger.warning("OpenAI API key not configured, skipping AI qualification")
-            for l in leads:
-                l.setdefault("ai_qualified", True)
-                l.setdefault("ai_score", 50)
-                l.setdefault("lead_type", "problem_awareness")
-                l.setdefault("work_type", "unknown")
-            return leads
-        from openai import AsyncOpenAI
-        client = AsyncOpenAI(api_key=settings.openai_api_key)
-
-    SYSTEM_PROMPT = """You are a senior B2B lead qualification specialist for an AI-powered lead-generation platform. You decide whether a LinkedIn post is a genuine BUYING signal that a service provider could convert into a client. Your decisions feed a CRM, so precision matters more than recall: one excellent lead is worth more than ten noise records.
-
-WORKFLOW — always follow these steps in order:
-1. Read the post and identify the AUTHOR's role (headline/company).
-2. Determine WHO IS THE SUBJECT: is the author BUYING this service, or SELLING their own labor/services?
-3. Identify the work arrangement (remote / contract / part-time / full-time on-site).
-4. Apply the hard rules below.
-5. Score the six dimensions, then compute lead_score.
-6. Cross-check internal consistency before emitting JSON.
-
-HARD RULES (never violate):
-- R1: A company/owner HIRING a freelancer/contractor/agency on a REMOTE, CONTRACT or PART-TIME basis = STRONG LEAD.
-- R2: A company hiring a FULL-TIME ON-SITE employee = NOT a lead (is_lead=false). They are building a payroll team, not buying your service.
-- R3: The author SELLING their own services ("I'm available", "open to projects", "seeking contract work", "DM me for work", "I offer X", "my services include") = NEVER a lead, regardless of how well the post matches the niche.
-- R4: A RECRUITER/STAFFING agency posting on behalf of clients = NOT a lead.
-- R5: Job seekers looking for a role for themselves = NOT a lead.
-- R6: Pure content/thought-leadership ("5 tips", "why you need", "trends", "case study", "opinion") = NOT a lead even if it scores high on service_match.
-- R7: Posts may be written in ANY language — evaluate buying intent regardless of language. A genuine buyer writing in Spanish, German, French, Hindi, Arabic, etc. is STILL a lead. Do NOT reject on language. (Which countries to include is handled separately by the country filter, not by you.) Always write `reason` and `outreach_angle` in English.
-
-WHO IS THE SUBJECT? (the single most important question)
-SELLING (reject): "I'm available for X", "I'm open to remote work", "I'm seeking projects", "Looking to collaborate", "I offer X", "DM me for X", "I provide X", "My services include", "I build X". Headline reads "Freelance X" and the post promotes their availability.
-BUYING (accept): "We're looking for a developer", "I need a website", "Looking for someone to build our X", "We are hiring a freelance X for a project", "Need a designer on contract", "Anyone know a good agency?", "Recommendations for X services?", "Need an agency to handle our X", "Looking for agency partners", "Seeking a team to build/manage/create this", or a business describing a problem it needs solved (traffic drop, no website, bad conversions, launching a product).
-"Looking for partners/agencies/marketers/freelancers" = SOURCING suppliers = BUYER.
-RECRUITER EXCEPTION: staffing agency placing candidates at THIRD-PARTY clients = reject. BUT a firm saying "Experts required for our projects" = BUYING expertise = ACCEPT (lead_type="hiring").
-
-SCORING (six dimensions, then total):
-- service_match (0-25): direct mention = 25; adjacent problem = 20; general growth = 15; vague = 10; unrelated = 0.
-- business_problem (0-20): metrics declining/explicit build = 20; clear pain = 15; dissatisfaction = 10; exploring = 5; none = 0.
-- buying_intent (0-20): explicit vendor search with budget/ASAP = 20; HIRING freelancer/remote/part-time = 18; strong implicit ("recommendations?") = 15; problem + commercial context = 10; passive = 5; none = 0.
-- decision_maker_likelihood (0-15): Founder/CEO/Owner/VP/Director = 15; Manager/Lead = 12; unclear but business context = 10; individual contributor = 5; student = 0.
-- urgency (0-10): urgent/ASAP = 10; looking now = 8; soon = 7; active problem no timeline = 5; none = 0.
-- outreach_worthiness (0-10): explicit vendor search + problem + decision maker = 10; strong problem + reachable role = 8; clear problem unclear authority = 6; vague = 4; wrong audience = 0.
-
-lead_score = sum (0-100).
-TIERS: 85+ HOT, 70-84 WARM, 40-69 POTENTIAL, 25-39 BORDERLINE, <25 NOT a lead.
-
-CONSISTENCY: is_lead=true requires lead_score>=25 AND service_match>=10. hiring+full_time_onsite => is_lead=false. irrelevant => is_lead=false.
-
-LEAD_TYPE CLASSIFICATION (critical — determines which user sees the lead):
-- lead_type="hiring": author is hiring a specific ROLE (freelancer, contractor, part-time, remote employee for a specific job). Posts like "WE ARE HIRING a [role]", "looking for a [role] to join", "need a [role] for X months".
-- lead_type="explicit_need": author has a SPECIFIC BUSINESS PROBLEM needing a service — includes seeking an agency/team/company to handle a project. Posts like "looking for an agency to handle our X", "need a team to build/manage/create this", "seeking agency partners", "our X is broken", "need help with Y", "looking for someone to fix/improve Z".
-- lead_type="problem_awareness": author describes a PROBLEM but hasn't started searching yet. Posts like "struggling with X", "anyone else dealing with Y?".
-- lead_type="research": author is RESEARCHING options. Posts like "comparing X vs Y", "what do you recommend?".
-
-When a post could be "hiring" OR "explicit_need", prefer "explicit_need" if the author is looking for an external team/company to handle work (not hiring an individual for a role).
-
-OUTREACH_ANGLE: reference a SPECIFIC detail from their post/company; never generic; 1 sentence under 25 words.
-
-Always output valid JSON only."""
-
-    PROMPT_TEMPLATE = """Analyze this LinkedIn post for a business offering: {query}
-
---- POST CONTENT ---
-{post_text}
-
---- AUTHOR HEADLINE ---
-{headline}
-
---- AUTHOR COMPANY ---
-{company}
-
---- AUTHOR LOCATION ---
-{location}
-
-STEP 1 — Who is the subject? A) BUYING B) SELLING C) recruiter/job-seeker/content. If B or C → is_lead=false.
-STEP 2 — If A: remote/contract/freelance/part-time → VALID lead; full-time on-site → is_lead=false.
-STEP 3 — Score the six dimensions honestly. Vague posts 40-55, strong hiring posts 80+.
-STEP 4 — Verify consistency (is_lead=true requires score>=25 AND service_match>=10).
-
-Output EXACTLY this JSON:
-{{
-  "is_lead": true/false,
-  "lead_score": 0-100,
-  "service_match": 0-25,
-  "business_problem": 0-20,
-  "buying_intent": 0-20,
-  "decision_maker_likelihood": 0-15,
-  "urgency": 0-10,
-  "outreach_worthiness": 0-10,
-  "lead_type": "explicit_need|problem_awareness|research|hiring|agency_wanted|irrelevant",
-  "work_type": "remote|contract|part_time|full_time_onsite|unknown",
-  "reason": "1-2 sentences with SPECIFIC quoted evidence",
-  "outreach_angle": "one specific opening line referencing their exact situation (max 25 words)"
-}}
-
-Return ONLY valid JSON."""
-
-    sem = asyncio.Semaphore(concurrency)
-
-    # Shared TPM cooldown: when any call hits a 429, ALL tasks pause until
-    # this timestamp. Single event loop → no lock needed.
-    cooldown_until = 0.0
-
-    def _retry_wait_ms(err_text: str, attempt: int) -> float:
-        m = re.search(r"try again in (\d+)ms", err_text)
-        if m:
-            return int(m.group(1)) + 150
-        return (1.5 ** attempt) * 1000 + 250
-
-    async def _one(lead: dict) -> dict | None:
-        nonlocal cooldown_until
-        async with sem:
-            post_text = lead.get("post_text", "")[:3000]
-            prompt = PROMPT_TEMPLATE.format(
-                query=query,
-                post_text=post_text,
-                headline=lead.get("headline", "")[:500],
-                company=lead.get("company", "")[:200],
-                location=lead.get("location", "")[:100],
-            )
-            result = None
-            # Up to 4 attempts with adaptive backoff on rate limits.
-            for attempt in range(4):
-                pause = cooldown_until - asyncio.get_event_loop().time()
-                if pause > 0:
-                    await asyncio.sleep(pause)
-                try:
-                    resp = await client.chat.completions.create(
-                        model="gpt-4o-mini",
-                        messages=[
-                            {"role": "system", "content": SYSTEM_PROMPT},
-                            {"role": "user", "content": prompt},
-                        ],
-                        temperature=0.0,
-                        max_tokens=700,
-                        response_format={"type": "json_object"},
-                    )
-                    result = json.loads(resp.choices[0].message.content)
-                    break
-                except Exception as e:
-                    err_text = str(e)
-                    if "rate_limit" in err_text or "429" in err_text:
-                        # Cool the WHOLE org briefly so parallel calls drain.
-                        cooldown_until = asyncio.get_event_loop().time() + 2.0
-                        if attempt < 3:
-                            await asyncio.sleep(_retry_wait_ms(err_text, attempt) / 1000.0)
-                            continue
-                    logger.warning(f"[FastQualify] dropping {lead.get('full_name', '?')} after {attempt + 1} attempts: {err_text[:120]}")
-                    return None  # NEVER accept unqualified — quality first
-
-            if result is None:
-                return None
-
-        work_type = (result.get("work_type") or "unknown").lower()
-        if result.get("lead_type") == "hiring" and work_type == "full_time_onsite":
-            return None  # hard rule: no on-site payroll hires
-        # ALWAYS attach AI data to lead — even is_lead=false. This ensures
-        # candidates are tracked in last_scored_candidates for the relaxation
-        # pass, which can rescue borderline posts with its lower threshold.
-        lead["ai_score"] = result.get("lead_score") or 0
-        lead["lead_type"] = result.get("lead_type", "potential")
-        lead["work_type"] = work_type
-        lead["ai_reason"] = result.get("reason", "")
-        lead["outreach_angle"] = result.get("outreach_angle", "")
-        if result.get("is_lead") and (result.get("lead_score", 0) >= 10):
-            lead["ai_qualified"] = True
-            return lead
-        return lead  # return anyway for relaxation tracking
-
-    results = await asyncio.gather(*[_one(l) for l in leads])
-    qualified = [r for r in results if r is not None]
-    logger.info(f"[FastQualify] {len(qualified)}/{len(leads)} candidates passed AI gate")
-    return qualified
-
-
-async def _save_leads_bulk(supabase, search_id: str, user_id: str, leads: list[dict], lead_types: list[str] = None) -> list[str]:
-    """Bulk-insert only leads covered by this search's monthly reservation."""
-    reservation = await asyncio.to_thread(
-        lambda: supabase.table("searches").select("reserved_leads")
-        .eq("id", search_id).limit(1).execute()
-    )
-    remaining_leads = int((reservation.data or [{}])[0].get("reserved_leads", 0) or 0)
-    if remaining_leads <= 0:
-        # Fallback: if reserved_leads not set, save all leads (best-effort)
-        remaining_leads = len(leads)
-
-    rows: list[dict] = []
-    for lead in leads[:remaining_leads]:
-        ai_score = lead.get("ai_score", 0) or 0
-        lead_category = "hot" if ai_score >= 85 else "warm"
-
-        ai_type = lead.get("lead_type") or ""
-        if ai_type in ("explicit_need", "problem_awareness", "research", "agency"):
-            post_type = "buyer"
-        elif ai_type == "hiring":
-            post_type = "hiring"
-        elif ai_type == "job_seeker":
-            post_type = "job_seeker"
-        else:
-            post_type = "buyer"
-
-        work_label = {
-            "remote": "🌍 Remote",
-            "contract": "📄 Contract",
-            "part_time": "⏱️ Part-time",
-            "full_time_onsite": "🏢 On-site",
-        }.get((lead.get("work_type") or "").lower())
-        headline = lead.get("headline") or ""
-        if work_label and headline:
-            headline = f"{work_label} — {headline}"
-        elif work_label:
-            headline = work_label
-
-        linkedin_url = (lead.get("linkedin_url") or "").strip()
-        rows.append({
-            "search_id": search_id,
-            "user_id": user_id,
-            "source": "linkedin",
-            "business_name": lead.get("full_name") or "Unknown",
-            "category": lead.get("company") or "LinkedIn",
-            "full_address": lead.get("location") or "",
-            "phone": "",
-            "email_found": "",
-            "website_url": "",
-            "rating": None,
-            "total_reviews": 0,
-            "google_maps_link": "",
-            "description": lead.get("post_text") or "",
-            "lead_category": lead_category,
-            "post_type": post_type,
-            "linkedin_url": linkedin_url,
-            "post_url": lead.get("post_url") or "",
-            "post_text": lead.get("post_text") or "",
-            "headline": headline,
-            "profile_picture_url": lead.get("profile_picture_url") or "",
-            "connections_count": lead.get("connections_count") or 0,
-            "posted_at": lead.get("posted_at"),
-            "ai_qualified": True,
-            "ai_confidence_score": min(ai_score, 100) / 100.0,
-            "ai_reason": lead.get("ai_reason"),
-            "ai_pitch": lead.get("outreach_angle"),
-        })
-
-    if not rows:
-        return []
-
-    # DEDUPLICATION: before inserting, remove leads whose linkedin_url
-    # already exists for this user. Prevents duplicates across searches.
-    try:
-        existing = await asyncio.to_thread(
-            lambda: supabase.table("leads").select("linkedin_url")
-            .eq("user_id", user_id).neq("linkedin_url", "").execute()
-        )
-        existing_urls = {
-            (r.get("linkedin_url") or "").split("?")[0].rstrip("/").lower()
-            for r in (existing.data or [])
-        }
-        original_count = len(rows)
-        rows = [r for r in rows if (r.get("linkedin_url") or "").split("?")[0].rstrip("/").lower() not in existing_urls]
-        if not rows:
-            logger.info(f"[LinkedInPipeline:{search_id}] All {original_count} leads already exist for user — skipping insert")
-            return []
-    except Exception as e:
-        logger.warning(f"[LinkedInPipeline:{search_id}] Dedup check failed ({e}) — proceeding with insert")
-
-    try:
-        response = await asyncio.to_thread(
-            lambda: supabase.table("leads").insert(rows).execute()
-        )
-        if response.data:
-            return [r["id"] for r in response.data]
-        return []
-    except Exception as e:
-        logger.warning(f"[LinkedInPipeline:{search_id}] Bulk insert failed ({e}), falling back to per-row")
-        lead_ids: list[str] = []
-        for row in rows:
-            try:
-                response = await asyncio.to_thread(
-                    lambda r=row: supabase.table("leads").insert(r).execute()
-                )
-                if response.data and len(response.data) > 0:
-                    lead_ids.append(response.data[0]["id"])
-            except Exception as row_err:
-                logger.error(f"[LinkedInPipeline:{search_id}] Row insert failed for '{row.get('business_name')}': {row_err}")
-        return lead_ids
-
-
-async def run_linkedin_pipeline_fast(
-    search_id: str,
-    user_id: str,
-    query: str,
-    enrich_emails: bool,
-    max_results: int,
-    lead_types: list[str] = None,
-    location: str = "",
-) -> None:
-    """GUARANTEED-COUNT fast pipeline.
-
-    User selects N leads → N parallel Apify lanes (each on its own key)
-    fire SIMULTANEOUSLY → all candidates scored by GPT-4o-mini with up to
-    30 CONCURRENT async calls → tiered acceptance guarantees at least N
-    fresh leads whenever they exist. Wave 2 lanes + job-scraper act as
-    gap fillers. Quality ordering is always by ai_score desc.
-    """
-    supabase = get_supabase_admin()
-    max_results = max(1, min(max_results, MAX_RESULTS_CAP))
-    if lead_types is None:
-        lead_types = ["buyer", "hiring"]
-
-    # User-requested location → country codes (e.g. "Mumbai" → IN, "US" → US).
-    # Empty set means the user chose no country → search every market.
-    req_country_codes, req_city = _parse_location_request(location or "")
-    logger.info(
-        f"[LinkedInPipeline:{search_id}] location='{location}' → "
-        f"countries={req_country_codes or 'any (global)'} city={req_city or ''}"
-    )
-
-    settings = get_settings()
-    openai_client = None
-    if settings.openai_api_key:
-        from openai import AsyncOpenAI
-        openai_client = AsyncOpenAI(api_key=settings.openai_api_key)
-
-    try:
-        # ── Phase 0: prefetch user's already-saved author URLs so the
-        # guarantee counts FRESH leads only (no silent dedupe shrink later).
-        await _update_search(supabase, search_id, {
-            "status": "scraping", "progress_percent": 3,
-            "message": "Preparing parallel search...",
-        })
-        try:
-            existing_resp = await asyncio.to_thread(
-                lambda: supabase.table("leads").select("linkedin_url")
-                .eq("user_id", user_id).neq("linkedin_url", "").execute()
-            )
-            known_urls = {
-                (r.get("linkedin_url") or "").split("?")[0].rstrip("/").lower()
-                for r in (existing_resp.data or [])
-            }
-        except Exception as e:
-            logger.warning(f"[LinkedInPipeline:{search_id}] Known-url prefetch failed: {e}")
-            known_urls = set()
-
-        # ── HARD LIMIT: no daily leads left → fail fast WITHOUT burning
-        # any Apify/OpenAI credits. User sees the upgrade prompt.
-        remaining_now = await _get_remaining_leads(supabase, user_id)
-        if remaining_now <= 0:
-            logger.warning(f"[LinkedInPipeline:{search_id}] HARD STOP — monthly LinkedIn lead limit already reached")
-            await _update_search(supabase, search_id, {
-                "status": "completed", "progress_percent": 100,
-                "message": "Monthly LinkedIn lead limit reached — upgrade your plan to get more leads.",
-                "total_results": 0, "hot_leads": 0, "warm_leads": 0,
-                "skipped": 0, "emails_found": 0,
-                "completed_at": datetime.now(timezone.utc).isoformat(),
-            })
-            return
-
-        # ── Phase 1: build phrase pool (cycled across guarantee waves).
-        pool = list(build_boolean_query(query))
-        for variant in range(2, 9):
-            pool.extend(build_boolean_query_variant(query, variant))
-        # BUYER-only searches: prepend strong buyer-intent phrases so the
-        # FIRST waves surface genuine "I need a service" posts instead of
-        # seller posts ("we offer X", "freelancer available").
-        if lead_types and "buyer" in lead_types and "hiring" not in lead_types:
-            base = " ".join(query.strip().strip('"').split())
-            base = base.replace("ui-ux", "ui ux").replace("ui/ux", "ui ux")
-            buyer_pool = [
-                f"need {base} for our",
-                f"looking for someone to {base}",
-                f"looking for help with {base}",
-                f"need help with our {base}",
-                f"looking for {base} services",
-                f"need {base} services",
-                f"anyone recommend {base}",
-                f"looking for a {base} expert",
-                f"who can help with {base}",
-                f"need {base} for my",
-                f"looking for {base} for my business",
-                f"need someone to handle {base}",
-            ]
-            pool = buyer_pool + pool
-        # AGENCY_WANTED searches: prepend agency-seeking phrases.
-        # These target people/companies actively SEEKING an external agency.
-        if lead_types and "agency_wanted" in lead_types:
-            base = " ".join(query.strip().strip('"').split())
-            base = base.replace("ui-ux", "ui ux").replace("ui/ux", "ui ux")
-            agency_pool = [
-                f"looking for {base} agency",
-                f"need {base} agency",
-                f"seeking {base} agency",
-                f"anyone recommend {base} agency",
-                f"need agency for {base}",
-                f"looking for agency to help with {base}",
-                f"recommendations for {base} agency",
-                f"looking for {base} agency partner",
-            ]
-            pool = agency_pool + pool
-        # CREDIT BUDGET: scale lanes and fetch count with request size.
-        # 3 leads → 1 lane, 5 → 2, 10 → 2, 20 → 3, 50 → 3
-        n_lanes = min(max_results, 3) if max_results >= 10 else (2 if max_results >= 5 else 1)
-        lanes_check, _ = split_lane_phrases(pool, n_lanes)
-        n_lanes = max(1, len(lanes_check))
-        # raw_budget: generous cap — count×3 items, max 90. When the user
-        # requested specific countries the post-search is still global (the
-        # actor has no geo filter), so only a fraction of fetched posts survive
-        # the country gate — fetch a larger raw sample so we can still deliver
-        # in-country leads instead of under-filling. Wider markets (region
-        # selections) survive more, so they don't need the extra headroom.
-        country_scoped = bool(req_country_codes) and len(req_country_codes) <= 3
-        if country_scoped:
-            raw_budget = min(max_results * 6, 180)
-        else:
-            raw_budget = min(max_results * 3, 90)
-        fetch_per_lane = max(5, min(10, -(-raw_budget // n_lanes)))
-
-        logger.info(
-            f"[LinkedInPipeline:{search_id}] FAST start: {n_lanes} parallel lanes "
-            f"(~{fetch_per_lane} posts each, raw budget {n_lanes * fetch_per_lane}), "
-            f"{len(pool)}-phrase pool, up to {MAX_WAVES} waves / {WAVE_DEADLINE_SECONDS}s"
-        )
-        await _update_search(supabase, search_id, {
-            "progress_percent": 8,
-            "message": f"Firing {n_lanes} parallel LinkedIn searches...",
-        })
-
-        seen_post_ids: set[str] = set()
-        raw_count_total = 0
-        all_skipped = 0
-        last_scored_candidates: list[dict] = []  # track scored candidates for final relaxation
-
-        async def _run_wave_async(lane_list: list[list[str]]) -> list[dict]:
-            buyer_only = lead_types and "buyer" in lead_types and "hiring" not in lead_types
-            results = await asyncio.gather(*[
-                asyncio.to_thread(run_lane_search, lq, fetch_per_lane, "month", buyer_only)
-                for lq in lane_list
-            ])
-            items: list[dict] = []
-            ok_lanes = 0
-            for lane_items in results:
-                if lane_items:
-                    ok_lanes += 1
-                    items.extend(lane_items)
-            logger.info(f"[LinkedInPipeline:{search_id}] wave done: {ok_lanes}/{len(lane_list)} lanes returned data")
-            return items
-
-        async def _process_items_to_candidates(items: list[dict]) -> tuple[list[dict], int]:
-            fresh = []
-            for it in items:
-                pid = it.get("postId") or it.get("id") or it.get("url") or it.get("linkedinUrl")
-                if pid and pid in seen_post_ids:
-                    continue
-                if pid:
-                    seen_post_ids.add(pid)
-                fresh.append(it)
-            deduped = dedupe_post_items(fresh)
-            # Keep EVERY parsed post (cap 400) — Stage-1 triage screens all of
-            # them cheaply, so genuine low-engagement buyers are never lost to
-            # viral-noise ranking.
-            candidates, skipped = process_items(deduped, 400, req_country_codes)
-            # Drop authors the user already has — BEFORE scoring (saves tokens).
-            candidates = [
-                c for c in candidates
-                if (c.get("linkedin_url") or "").split("?")[0].rstrip("/").lower() not in known_urls
-            ]
-            return candidates, skipped
-
-        # ── Phases 2-6: PERSISTENT GUARANTEE LOOP ─────────────────────────
-        # Waves keep hunting (fresh angles → cheap intent-triage on EVERY
-        # post → deep scoring on survivors → tiered absorption → job-postings
-        # filler) until max_results leads are delivered or the wave/time
-        # budget is exhausted. Accepted leads ACCUMULATE across waves.
-        # Exact-count policy: the user asked for max_results leads, they get
-        # EXACTLY max_results — no over-delivery, no wasted Apify/OpenAI credits.
-        overdeliver_cap = max_results
-        final_leads: list[dict] = []
-        chosen_urls: set[str] = set()
-        deadline = asyncio.get_event_loop().time() + WAVE_DEADLINE_SECONDS
-
-        def _absorb(leads_in: list[dict]) -> int:
-            """Accept tier-passing leads, best-scored first, into final list."""
-            added = 0
-            for l in sorted(leads_in, key=lambda x: x.get("ai_score", 0) or 0, reverse=True):
-                if len(final_leads) >= overdeliver_cap:
-                    break
-                key = (l.get("linkedin_url") or "").split("?")[0].rstrip("/").lower()
+        # AI classification — fail-closed, structured.
+        classifications = await classify(client, request.service, request.country_text, filtered)
+        scored = []
+        for cand in filtered:
+            cls = classifications.get(candidate_key(cand))
+            if cls is None:
+                continue  # unverified -> rejected (fail-closed)
+            scored.append(attach_classification(cand, cls))
+        it.after_ai_qualification = len(scored)
+        it.non_qualified_ai = len(filtered) - len(scored)
+        it.last_scored_types = _type_counts(scored)
+
+        accepted = []
+        for cand in scored:
+            decision = canonical_accept(cand, request_lead_types=request.lead_types,
+                                        requested_countries=request.country_codes, service=request.service)
+            if decision.accepted:
+                cand["quality_score"] = decision.quality_score
+                key = _identity_url(cand)
                 if key and key not in chosen_urls:
                     chosen_urls.add(key)
-                    final_leads.append(l)
-                    added += 1
-            return added
+                    accepted.append(cand)
+        it.accepted_this_iteration = len(accepted)
 
-        # Flat cycling phrase queue — repeated phrases are safe because
-        # seen_post_ids drops already-processed posts across waves.
-        flat_pool = list(dict.fromkeys(pool))
-        flat_pos = {"i": 0}
-
-        def _next_wave_lanes(count: int, per_lane: int) -> list[list[str]]:
-            lane_list = []
-            for _ in range(count):
-                chunk = []
-                for _ in range(per_lane):
-                    chunk.append(flat_pool[flat_pos["i"] % len(flat_pool)])
-                    flat_pos["i"] += 1
-                lane_list.append(chunk)
-            return lane_list
-
-        async def _run_job_filler(need: int) -> int:
-            """Hiring-intent filler from live job postings (strong buying signal).
-            Only for HIRING-type searches — job posts are hiring-type leads,
-            so a buyer-only request must never be filled with them."""
-            if need <= 0 or "hiring" not in lead_types:
-                return 0
-            await _update_search(supabase, search_id, {
-                "progress_percent": 70,
-                "message": f"Adding hiring-intent leads from job postings ({need} more)...",
-            })
-            job_queries = get_job_queries_for_niche(query)[: min(4, max(2, need))]
-            added = 0
-            # Expand location for better coverage: user's location → major
-            # cities in that country → Remote (global). For India, try
-            # Bangalore/Mumbai/Delhi since LinkedIn job search is city-level.
-            raw_loc = (location or "").strip()
-            if raw_loc:
-                expanded = [raw_loc]
-                if "india" in raw_loc.lower():
-                    expanded.extend(["Bangalore", "Mumbai", "Delhi", "Remote"])
-                elif "united states" in raw_loc.lower():
-                    expanded.extend(["New York", "San Francisco", "Remote"])
-                else:
-                    expanded.append("Remote")
-                job_locations = expanded
-            else:
-                job_locations = ["United States", "Remote"]
-            for job_loc in job_locations:
-                if added >= need:
-                    break
-                try:
-                    job_lists = await asyncio.gather(*[
-                        asyncio.wait_for(
-                            asyncio.to_thread(
-                                run_job_search,
-                                query=q,
-                                location=job_loc,
-                                time_range="7d",
-                                max_jobs=min(need * 2, 20),
-                            ),
-                            timeout=60,
-                        )
-                        for q in job_queries
-                    ])
-                except Exception as e:
-                    logger.warning(f"[LinkedInPipeline:{search_id}] job filler ({job_loc}) failed: {e}")
-                    continue
-                for jobs in job_lists:
-                    # Accept ALL jobs — work type filter is unreliable for
-                    # India locations. Country filter below handles quality.
-                    filtered = jobs
-                    # Country filter: drop jobs whose location text clearly
-                    # doesn't match the user's requested country.
-                    if req_country_codes:
-                        filtered = [j for j in filtered if _job_country_ok(j, req_country_codes)]
-                    logger.info(f"[LinkedInPipeline:{search_id}] job filler ({job_loc}): {len(filtered)} remote/contract jobs")
-                    for job in filtered:
-                        if len(final_leads) >= overdeliver_cap or added >= need:
-                            break
-                        company_url = (job.get("companyUrl") or "").strip()
-                        job_url = (job.get("jobUrl") or "").strip()
-                        # Convert the raw API endpoint the scraper returns
-                        # (https://www.linkedin.com/jobs-guest/jobs/api/jobPosting/123)
-                        # into the human-viewable job page so "View post on
-                        # LinkedIn" opens the actual posting.
-                        m = _re_job_id.search(job_url)
-                        if m:
-                            job_url = f"https://www.linkedin.com/jobs/view/{m.group(1)}/"
-                        # Link to the JOB POSTING itself (not the company
-                        # profile page) so "View post on LinkedIn" and the
-                        # profile link open the actual post.
-                        linkedin_url = job_url or company_url
-                        key = linkedin_url.split("?")[0].rstrip("/").lower()
-                        if not linkedin_url or key in chosen_urls or key in known_urls:
-                            continue
-                        final_leads.append({
-                            "full_name": job.get("company") or "Unknown Company",
-                            "headline": f"{job.get('title', '')} at {job.get('company', '')}",
-                            "company": job.get("company", ""),
-                            "location": job.get("location", ""),
-                            "linkedin_url": linkedin_url,
-                            "post_url": job_url,
-                            "post_text": (job.get("descriptionText") or "")[:3000],
-                            "posted_at": _parse_posted_at(job.get("postedAt")),
-                            "engagement_likes": 0,
-                            "engagement_comments": 0,
-                            "profile_picture_url": job.get("companyLogo", ""),
-                            "connections_count": 0,
-                            "ai_qualified": True,
-                            "ai_score": 75,
-                            "lead_type": "hiring",
-                            "work_type": "contract",
-                            "ai_reason": "Active LinkedIn job posting (remote/contract/part-time)",
-                            "outreach_angle": "",
-                            "country_code": "",
-                        })
-                        chosen_urls.add(key)
-                        added += 1
-            return added
-
-        async def _hunt_wave(wave_no: int, lane_list: list[list[str]]) -> None:
-            nonlocal raw_count_total, all_skipped
-            remaining = max_results - len(final_leads)
-            await _update_search(supabase, search_id, {
-                "progress_percent": min(25 + wave_no * 13, 82),
-                "message": f"Wave {wave_no}: hunting {remaining} more leads with {len(lane_list)} parallel searches...",
-            })
-
-            items = await _run_wave_async(lane_list)
-            raw_count_total += len(items)
-            candidates_w, skipped_w = await _process_items_to_candidates(items)
-            all_skipped += skipped_w
-            if not candidates_w:
-                logger.info(f"[LinkedInPipeline:{search_id}] Wave {wave_no}: no fresh candidates")
-                return
-
-            # STAGE 1 — cheap buying-intent triage over EVERY parsed post.
-            promising = await triage_candidates_async(candidates_w, query, openai_client)
-
-            # Enrich ONLY triage survivors missing a headline (Apify cost control).
-            missing = [c for c in promising if not (c.get("headline") or "").strip()]
-            if missing:
-                try:
-                    enrich_urls = [c["linkedin_url"] for c in missing[:PROFILE_ENRICHMENT_CAP]]
-                    profiles = await asyncio.to_thread(fetch_profile_details, enrich_urls, "basic")
-                    by_url = {(p.get("url") or "").rstrip("/").lower(): p for p in profiles if isinstance(p, dict)}
-                    for c in promising:
-                        p = by_url.get((c.get("linkedin_url") or "").rstrip("/").lower())
-                        if not p:
-                            continue
-                        c["headline"] = (p.get("headline") or c.get("headline") or "")[:500]
-                        c["company"] = _company_from_profile(p) or c.get("company") or ""
-                        c["location"] = _location_from_profile(p) or c.get("location") or ""
-                except Exception as e:
-                    logger.warning(f"[LinkedInPipeline:{search_id}] enrichment skipped: {e}")
-
-            await _update_search(supabase, search_id, {
-                "progress_percent": min(30 + wave_no * 13, 84),
-                "message": f"Wave {wave_no}: {len(promising)} prospects found. AI scoring...",
-            })
-
-            # STAGE 2 — full semantic scoring on the best survivors only.
-            survivors = promising[:DEEP_SCORE_CAP]
-            scored_w = await qualify_leads_with_ai_async(survivors, query, openai_client)
-            last_scored_candidates.extend(scored_w)  # track for final relaxation
-            if scored_w:
-                for sw in scored_w:
-                    logger.info(
-                        f"[LinkedInPipeline:{search_id}] scored: "
-                        f"{sw.get('full_name', '?')[:20]} | type={sw.get('lead_type')} "
-                        f"score={sw.get('ai_score')} cc={sw.get('country_code') or '?'}"
-                    )
-
-            for tier_idx, tier in enumerate(TIERS, 1):
-                if len(final_leads) >= max_results:
-                    break
-                got = _absorb(tier_filter(scored_w, lead_types, tier, req_country_codes))
-                logger.info(
-                    f"[LinkedInPipeline:{search_id}] Wave {wave_no} Tier {tier_idx}: "
-                    f"+{got} (total {len(final_leads)}/{max_results}, cap {overdeliver_cap})"
-                )
-
-            # Mid-loop filler: top up with job postings while still short.
-            if len(final_leads) < max_results:
-                added = await _run_job_filler(max_results - len(final_leads))
-                if added:
-                    logger.info(f"[LinkedInPipeline:{search_id}] Wave {wave_no} job filler: +{added}")
-
-        wave_no = 0
-        while len(final_leads) < max_results and wave_no < MAX_WAVES:
-            if asyncio.get_event_loop().time() > deadline:
-                logger.warning(f"[LinkedInPipeline:{search_id}] Wave deadline reached after {wave_no} waves")
+        accepted = rank_leads(accepted)
+        new = 0
+        for cand in accepted:
+            if len(valid_leads) >= request.request_count:
                 break
-            if raw_count_total >= raw_budget:
-                # DYNAMIC BUDGET: if still short, expand budget by 50% and continue
-                remaining_needed = max_results - len(final_leads)
-                if remaining_needed > 0 and wave_no < MAX_WAVES:
-                    raw_budget = int(raw_budget * 1.5)
-                    logger.info(
-                        f"[LinkedInPipeline:{search_id}] Budget expanded to {raw_budget} "
-                        f"(still need {remaining_needed} leads)"
-                    )
-                else:
-                    logger.info(
-                        f"[LinkedInPipeline:{search_id}] Apify raw budget reached "
-                        f"({raw_count_total}/{raw_budget}) — stopping waves"
-                    )
-                    break
-            wave_no += 1
-            await _hunt_wave(wave_no, _next_wave_lanes(n_lanes, fetch_per_lane))
+            key = _identity_url(cand)
+            if key in known_urls:
+                continue
+            valid_leads.append(cand)
+            new += 1
+        it.cumulative_valid = len(valid_leads)
+        if new > 0:
+            no_progress = 0
+            provider_fail_rounds = 0
+        else:
+            no_progress += 1
+        iterations.append(it)
+        if no_progress >= MAX_NO_PROGRESS_ITERATIONS:
+            reason = "no_progress"
+            break
 
-        # Final safety net: one last filler pass if somehow still short.
-        if len(final_leads) < max_results:
-            await _run_job_filler(max_results - len(final_leads))
+    # EXACT-COUNT SLICE — never overdeliver.
+    if len(valid_leads) > request.request_count:
+        valid_leads = rank_leads(valid_leads)[: request.request_count]
+    status = "complete" if len(valid_leads) >= request.request_count else "exhausted"
+    reason = reason or status
 
-        # FINAL RELAXATION: if still short after all waves, do one more pass
-        # with a lower SCORE threshold only. The lead-type and country gates
-        # are NEVER relaxed — a user who asked for a specific country/type must
-        # not be topped up with the wrong country or type just to hit a count.
-        # (So the final count may be < max_results when the market is thin.)
-        if len(final_leads) < max_results:
-            remaining_needed = max_results - len(final_leads)
-            logger.info(
-                f"[LinkedInPipeline:{search_id}] Final relaxation pass: "
-                f"need {remaining_needed} more leads, relaxing gates"
-            )
-            # Collect ALL scored candidates from last wave (not just tier-filtered)
-            all_scored = [s for s in last_scored_candidates if s.get("linkedin_url")]
-            # Relax: lower score threshold (50), but STILL respect lead type.
-            # User asked for specific types — don't give them wrong types.
-            relax_allowed = set()
-            for lt in (lead_types or []):
-                relax_allowed.update(_LEAD_TYPE_MAP.get(lt, [lt]))
-            for s in all_scored:
-                if len(final_leads) >= max_results:
-                    break
-                if (s.get("ai_score") or 0) < 50:
-                    continue
-                # Type gate: still enforce user's requested types
-                if relax_allowed and s.get("lead_type") not in relax_allowed:
-                    continue
-                key = (s.get("linkedin_url") or "").split("?")[0].rstrip("/").lower()
-                if not key or key in chosen_urls or key in known_urls:
-                    continue
-                # Country gate still applies (don't violate user's location request)
-                if not _country_ok(s, "requested", req_country_codes):
-                    continue
-                final_leads.append(s)
-                chosen_urls.add(key)
-            if final_leads:
-                logger.info(
-                    f"[LinkedInPipeline:{search_id}] Final relaxation: +{len(final_leads)} total"
-                )
+    if valid_leads:
+        await _save_leads(supabase, search_id, user_id, valid_leads, request)
 
-        final_leads = final_leads[:overdeliver_cap]  # == max_results (exact count)
+    await _finalize_search(supabase, search_id, user_id, valid_leads, request.request_count,
+                           [i.as_dict() for i in iterations], status, reason)
+    return {"status": status, "reason": reason, "final_valid_count": len(valid_leads),
+            "request_count": request.request_count, "iterations": [i.as_dict() for i in iterations]}
 
-        # ── Phase 7: save (bulk) + optional email enrichment.
-        hot = sum(1 for l in final_leads if (l.get("ai_score", 0) or 0) >= 85)
-        warm = len(final_leads) - hot
 
-        if not final_leads:
-            await settle_search_quota(supabase, search_id, user_id, 0)
-            await _update_search(supabase, search_id, {
-                "status": "completed", "progress_percent": 100,
-                "message": "No relevant leads found after AI qualification.",
-                "total_results": 0, "hot_leads": 0, "warm_leads": 0,
-                "skipped": all_skipped, "emails_found": 0,
-                "completed_at": datetime.now(timezone.utc).isoformat(),
-            })
-            return
+def _type_counts(candidates: list[dict]) -> dict:
+    counts: dict = {}
+    for c in candidates:
+        t = c.get("lead_type") or "unknown"
+        counts[t] = counts.get(t, 0) + 1
+    return counts
 
-        await _update_search(supabase, search_id, {
-            "progress_percent": 88,
-            "message": f"Saving {len(final_leads)} leads ({hot} hot, {warm} warm)...",
-        })
-        lead_ids = await _save_leads_bulk(supabase, search_id, user_id, final_leads, lead_types)
 
-        saved = len(lead_ids)
-        lead_limit_hit = saved < len(final_leads)  # plan cap truncated saves
-        emails_found = 0
-        if enrich_emails and lead_ids:
-            await _update_search(supabase, search_id, {
-                "progress_percent": 94, "message": "Finding emails for your leads...",
-            })
-            emails_found = await _enrich_emails(supabase, search_id, user_id, final_leads, lead_ids)
+async def _finalize_search(supabase, search_id: str, user_id: str, valid_leads: list[dict], request_count: int,
+                           iterations: list[dict], status: str, reason: str) -> None:
+    saved = len(valid_leads)
+    hot = sum(1 for l in valid_leads if (l.get("ai_score") or l.get("quality_score") or 0) >= 85)
+    warm = len(valid_leads) - hot
+    await settle_search_quota(supabase, search_id, user_id, saved)
+    msg = f"Found {saved} leads" if saved >= request_count else f"Found {saved} qualifying leads (requested {request_count})"
+    await _update_search(supabase, search_id, {
+        "status": "completed", "progress_percent": 100, "message": msg,
+        "total_results": saved, "hot_leads": hot, "warm_leads": warm, "skipped": 0,
+        "emails_found": 0, "completed_at": datetime.now(timezone.utc).isoformat(),
+    })
+    logger.info(f"[LinkedIn:{search_id}] {status} ({reason}) — saved {saved}/{request_count} leads ({hot} hot), iterations={len(iterations)}")
 
-        suffix = f", {emails_found} emails" if emails_found else ""
-        final_message = f"Found {saved} leads{suffix}"
-        if lead_limit_hit:
-            final_message += " | Monthly lead quota reached."
-        await settle_search_quota(supabase, search_id, user_id, saved)
-        await _update_search(supabase, search_id, {
-            "status": "completed", "progress_percent": 100,
-            "message": final_message,
-            "total_results": saved, "hot_leads": hot, "warm_leads": warm,
-            "skipped": max(0, raw_count_total - saved),
-            "emails_found": emails_found,
-            "completed_at": datetime.now(timezone.utc).isoformat(),
-        })
-        logger.info(
-            f"[LinkedInPipeline:{search_id}] FAST completed — {saved}/{max_results} leads "
-            f"({hot} hot), {emails_found} emails, limit_hit={lead_limit_hit}, {raw_count_total} raw posts"
-        )
 
-    except ApifyError as e:
-        logger.error(f"[LinkedInPipeline:{search_id}] Apify error: {e}", exc_info=True)
-        await settle_search_quota(supabase, search_id, user_id, 0)
-        await _update_search(supabase, search_id, {
-            "status": "failed", "message": "LinkedIn scraper failed", "error_message": str(e),
-        })
+# ══════════════════════════════════════════════════════════════════════════
+# BACKWARD-COMPAT ENTRY POINT — called by the search router. Runs the engine.
+# ══════════════════════════════════════════════════════════════════════════
+async def run_linkedin_pipeline_fast(
+    search_id: str, user_id: str, query: str, enrich_emails: bool, max_results: int,
+    lead_types: list[str] = None, location: str = "",
+) -> None:
+    """Background-task entry point. Runs the strict engine in the foreground of
+    this coroutine (search router already runs this as a background task)."""
+    try:
+        await run_linkedin_engine(search_id, user_id, query, enrich_emails, max_results, lead_types, location)
     except Exception as e:
-        logger.error(f"[LinkedInPipeline:{search_id}] Unexpected error: {e}", exc_info=True)
-        await settle_search_quota(supabase, search_id, user_id, 0)
+        logger.error(f"[LinkedIn:{search_id}] engine failed: {e}", exc_info=True)
+        supabase = get_supabase_admin()
         await _update_search(supabase, search_id, {
             "status": "failed", "message": "Search failed unexpectedly", "error_message": str(e),
         })

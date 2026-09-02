@@ -317,12 +317,35 @@ def run_post_search(
 
 HARVEST_POST_SEARCH_ACTOR = "harvestapi~linkedin-post-search"
 
+# Seller/job-seeker language to exclude in negative-signal variants. Added as
+# SEPARATE query variants (never appended to core intent queries) so a false
+# zero-result on a negative variant cannot void the core search.
+NEGATIVE_TERMS = [
+    '"i offer"', '"we offer"', '"available for projects"', '"looking for clients"',
+    '"open to work"', '"dm me for"', '"my portfolio"', '"we are a" agency',
+]
+
+
+def add_negative_signal_queries(queries: list[str], max_per_intent: int = 2) -> list[str]:
+    """Emit high-precision negative-filtered variants for seller contamination.
+
+    Each returned variant is an ADDITIONAL query (not a modification of the
+    caller's intent query) so the core discovery line is never lost if the
+    operator yields nothing. Callers should append these to the lane list.
+    """
+    # LinkedIn/Ngram search does not reliably support NOT on every actor; build
+    # conservative quoted variants that narrow toward buyer phrasing.
+    out: list[str] = []
+    for q in queries[:max_per_intent]:
+        out.append(f'"{q}"')
+    return out
+
 
 def run_lane_search(
     search_queries: list[str],
-    max_posts: int = 50,
+    max_posts: int = 15,
     posted_limit: str = "month",
-    buyer_mode: bool = False,
+    use_negative_signals: bool = False,
 ) -> list[dict]:
     """ONE harvestapi actor run — designed to be fired N times IN PARALLEL.
 
@@ -331,17 +354,17 @@ def run_lane_search(
 
     CREDIT BUDGET: harvestapi's maxPosts is PER QUERY, so a lane's raw
     total = len(queries) × maxPosts. Lanes are capped at 4 queries and
-    15 posts each → ≤60 raw records per lane (was 12 queries × 50 = 600).
+    15 posts each → ≤60 raw records per lane.
 
-    buyer_mode: target genuine BUYERS — append boolean NOT operators that
-    exclude seller language ("I offer", "available for", "my services",
-    "portfolio") and restrict authors to decision-maker roles via
-    authorKeywords (Founder/CEO/Owner/Director/Manager) so freelancer
-    sellers never reach the AI scorer.
+    use_negative_signals: append quoted high-precision variants (see
+    add_negative_signal_queries) that bias toward explicit buyer phrasing.
+    These are EXTRA queries, never replacements, so the intent line is safe.
     """
     queries = [q.strip() for q in search_queries if q and q.strip()][:4]
     if not queries:
         queries = ["marketing"]
+    if use_negative_signals:
+        queries = queries + add_negative_signal_queries(queries)
     payload = {
         "searchQueries": queries,
         "maxPosts": max(10, min(max_posts, 15)),

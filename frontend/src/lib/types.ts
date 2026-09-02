@@ -48,6 +48,12 @@ export interface SearchStatus {
   started_at?: string;
   completed_at?: string;
   error_message?: string;
+  requested_count?: number;
+  returned_count?: number;
+  lead_type?: string;
+  country?: string;
+  service?: string;
+  lead_status?: string;
 }
 
 export interface SearchHistoryItem {

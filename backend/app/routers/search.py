@@ -338,7 +338,7 @@ async def get_search_status(
     try:
         response = (
             supabase.table("searches")
-            .select("id, user_id, status, source, progress_percent, message, total_results, hot_leads, warm_leads, skipped, emails_found, error_message, created_at, completed_at")
+            .select("id, user_id, status, source, progress_percent, message, total_results, hot_leads, warm_leads, skipped, emails_found, error_message, created_at, completed_at, niche, location, max_results, lead_types")
             .eq("id", search_id)
             .limit(1)
             .execute()
@@ -388,6 +388,13 @@ async def get_search_status(
             "started_at": row.get("created_at"),
             "completed_at": row.get("completed_at"),
             "error_message": row.get("error_message"),
+            # Exact-count / intent contract (linkedin only). Backward compatible.
+            "requested_count": row.get("max_results"),
+            "returned_count": row.get("total_results"),
+            "lead_type": ("," .join(row.get("lead_types") or [])) if row.get("lead_types") else None,
+            "country": row.get("location"),
+            "service": row.get("niche"),
+            "lead_status": "complete" if row.get("status") == "completed" else None,
         }
     except HTTPException:
         raise

@@ -96,6 +96,17 @@ async def settle_search_quota(supabase, search_id: str, user_id: str, generated:
                         lambda: supabase.table("daily_usage").update({"leads_generated": daily_leads + generated})
                         .eq("id", daily_id).execute()
                     )
+                else:
+                    # Row doesn't exist yet — create it
+                    await asyncio.to_thread(
+                        lambda: supabase.table("daily_usage").insert({
+                            "user_id": user_id,
+                            "date": today_str,
+                            "searches_run": 0,
+                            "leads_generated": generated,
+                            "ai_calls": 0,
+                        }).execute()
+                    )
             except Exception:
                 pass
 

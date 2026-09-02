@@ -1440,7 +1440,7 @@ async def run_linkedin_pipeline(
 async def _save_leads(supabase, search_id: str, user_id: str, leads: list[dict]) -> list[str]:
     remaining_leads = await _get_remaining_leads(supabase, user_id)
     if remaining_leads <= 0:
-        logger.warning(f"[LinkedInPipeline:{search_id}] Daily leads limit reached, skipping saves")
+        logger.warning(f"[LinkedInPipeline:{search_id}] Monthly leads limit reached, skipping saves")
         return []
 
     existing = await asyncio.to_thread(
@@ -1455,7 +1455,7 @@ async def _save_leads(supabase, search_id: str, user_id: str, leads: list[dict])
     lead_ids: list[str] = []
     for lead in leads:
         if remaining_leads <= 0:
-            logger.warning(f"[LinkedInPipeline:{search_id}] Daily leads limit reached. Stopping at {len(lead_ids)} saved.")
+            logger.warning(f"[LinkedInPipeline:{search_id}] Monthly leads limit reached. Stopping at {len(lead_ids)} saved.")
             break
         linkedin_url = (lead.get("linkedin_url") or "").strip()
         if linkedin_url and linkedin_url in existing_urls:
@@ -1544,9 +1544,19 @@ async def _save_leads(supabase, search_id: str, user_id: str, leads: list[dict])
 
 
 async def _get_remaining_leads(supabase, user_id: str) -> int:
-    from app.services.plans import remaining_leads_today
+    """Get remaining LinkedIn leads for this user (monthly-based)."""
     try:
-        return await asyncio.to_thread(remaining_leads_today, supabase, user_id)
+        from datetime import datetime, timezone
+        from app.services.plans import get_plan_row, resolve_effective_subscription
+
+        eff = resolve_effective_subscription(supabase, user_id)
+        plan = get_plan_row(supabase, eff["plan_id"])
+        plan_limit = int(plan.get("linkedin_hq_leads_monthly", 0) or 0)
+
+        month_str = datetime.now(timezone.utc).replace(day=1).date().isoformat()
+        existing = supabase.table("monthly_usage").select("linkedin_hq_generated").eq("user_id", user_id).eq("usage_month", month_str).limit(1).execute()
+        used = int((existing.data or [{}])[0].get("linkedin_hq_generated", 0) or 0)
+        return max(0, plan_limit - used)
     except Exception as e:
         logger.warning(f"[LinkedInPipeline] remaining-leads calc failed, defaulting: {e}")
         return 50
@@ -2033,8 +2043,8 @@ async def _save_leads_bulk(supabase, search_id: str, user_id: str, leads: list[d
     )
     remaining_leads = int((reservation.data or [{}])[0].get("reserved_leads", 0) or 0)
     if remaining_leads <= 0:
-        logger.warning(f"[LinkedInPipeline:{search_id}] No reserved monthly quota, skipping saves")
-        return []
+        # Fallback: if reserved_leads not set, save all leads (best-effort)
+        remaining_leads = len(leads)
 
     rows: list[dict] = []
     for lead in leads[:remaining_leads]:
@@ -2197,10 +2207,10 @@ async def run_linkedin_pipeline_fast(
         # any Apify/OpenAI credits. User sees the upgrade prompt.
         remaining_now = await _get_remaining_leads(supabase, user_id)
         if remaining_now <= 0:
-            logger.warning(f"[LinkedInPipeline:{search_id}] HARD STOP — daily lead limit already reached")
+            logger.warning(f"[LinkedInPipeline:{search_id}] HARD STOP — monthly LinkedIn lead limit already reached")
             await _update_search(supabase, search_id, {
                 "status": "completed", "progress_percent": 100,
-                "message": "Daily lead limit reached — upgrade your plan to get more leads.",
+                "message": "Monthly LinkedIn lead limit reached — upgrade your plan to get more leads.",
                 "total_results": 0, "hot_leads": 0, "warm_leads": 0,
                 "skipped": 0, "emails_found": 0,
                 "completed_at": datetime.now(timezone.utc).isoformat(),

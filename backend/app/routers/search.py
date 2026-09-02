@@ -78,10 +78,6 @@ async def create_search(
     plan_limit = int(plan.get(
         "linkedin_hq_leads_monthly" if quota_source == "linkedin" else "gmb_leads_monthly", 0
     ) or 0)
-    reservation_amount = min(request.max_results, plan_limit)
-    if reservation_amount <= 0:
-        raise HTTPException(status_code=403, detail="Your plan does not include this lead source")
-
     # Check monthly usage directly
     month_str = datetime.now(timezone.utc).replace(day=1).date().isoformat()
     col = "linkedin_hq_generated" if quota_source == "linkedin" else "gmb_generated"
@@ -93,6 +89,9 @@ async def create_search(
     remaining = max(0, plan_limit - used)
     if remaining <= 0:
         raise HTTPException(status_code=403, detail=f"Monthly {quota_source} lead limit reached ({plan_limit}/{plan_limit})")
+    reservation_amount = min(request.max_results, remaining)
+    if reservation_amount <= 0:
+        raise HTTPException(status_code=403, detail="Your plan does not include this lead source")
 
     if request.source == "linkedin":
         try:

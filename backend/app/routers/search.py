@@ -35,6 +35,28 @@ from app.services.linkedin_pipeline import run_linkedin_pipeline_fast
 router = APIRouter(prefix="/api/searches", tags=["Searches"])
 
 
+def _increment_daily_searches(supabase, user_id: str) -> None:
+    """Increment daily_usage.searches_run for this user today (idempotent)."""
+    try:
+        from datetime import date
+        today_str = datetime.now(timezone.utc).date().isoformat()
+        existing = supabase.table("daily_usage").select("id,searches_run").eq("user_id", user_id).eq("date", today_str).limit(1).execute()
+        rows = existing.data or []
+        if rows:
+            cur = int(rows[0].get("searches_run", 0) or 0)
+            supabase.table("daily_usage").update({"searches_run": cur + 1}).eq("id", rows[0]["id"]).execute()
+        else:
+            supabase.table("daily_usage").insert({
+                "user_id": user_id,
+                "date": today_str,
+                "searches_run": 1,
+                "leads_generated": 0,
+                "ai_calls": 0,
+            }).execute()
+    except Exception as e:
+        logger.warning(f"Failed to increment daily searches: {e}")
+
+
 @router.post("", response_model=SearchResponse, status_code=status.HTTP_201_CREATED)
 async def create_search(
     request: SearchCreateRequest,
@@ -48,8 +70,7 @@ async def create_search(
     query_term = request.niche.strip()
     location_term = request.location.strip()
 
-    # Reserve the maximum number of leads this search may save. The database
-    # locks the monthly usage row so concurrent requests cannot overspend.
+    # Check monthly lead quota and reserve leads
     from app.services.plans import get_plan_row, resolve_effective_subscription
     effective = resolve_effective_subscription(supabase, user_id)
     plan = get_plan_row(supabase, effective["plan_id"])
@@ -60,28 +81,18 @@ async def create_search(
     reservation_amount = min(request.max_results, plan_limit)
     if reservation_amount <= 0:
         raise HTTPException(status_code=403, detail="Your plan does not include this lead source")
-    reservation_ok = False
+
+    # Check monthly usage directly
+    month_str = datetime.now(timezone.utc).replace(day=1).date().isoformat()
+    col = "linkedin_hq_generated" if quota_source == "linkedin" else "gmb_generated"
     try:
-        reservation = supabase.rpc("reserve_monthly_leads", {
-            "p_user_id": user_id,
-            "p_plan_id": effective["plan_id"],
-            "p_source": quota_source,
-            "p_amount": reservation_amount,
-        }).execute()
-        # -1 means the requested capacity was reserved; a non-negative value
-        # is the exact remaining balance and no reservation was created.
-        if reservation.data != -1:
-            raise HTTPException(
-                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-                detail={"message": "Monthly lead quota reached", "remaining_leads": reservation.data},
-            )
-        reservation_ok = True
-    except Exception as e:
-        if isinstance(e, HTTPException):
-            raise
-        # monthly_usage table may not exist yet — allow search to proceed
-        # without reservation (quota enforcement will be best-effort).
-        logger.warning(f"Monthly reservation unavailable, proceeding without: {e}")
+        existing_usage = supabase.table("monthly_usage").select(col).eq("user_id", user_id).eq("usage_month", month_str).limit(1).execute()
+        used = int((existing_usage.data or [{}])[0].get(col, 0) or 0)
+    except Exception:
+        used = 0
+    remaining = max(0, plan_limit - used)
+    if remaining <= 0:
+        raise HTTPException(status_code=403, detail=f"Monthly {quota_source} lead limit reached ({plan_limit}/{plan_limit})")
 
     if request.source == "linkedin":
         try:
@@ -108,13 +119,12 @@ async def create_search(
         except Exception as e:
             if not isinstance(e, HTTPException):
                 logger.error(f"Failed to create linkedin search: {e}")
-            try:
-                supabase.rpc("settle_monthly_leads", {"p_user_id": user_id, "p_source": quota_source, "p_reserved": reservation_amount, "p_generated": 0}).execute()
-            except Exception:
-                pass
             if isinstance(e, HTTPException):
                 raise
             raise HTTPException(status_code=500, detail="Failed to create search")
+
+        # Increment daily_usage.searches_run
+        _increment_daily_searches(supabase, user_id)
 
         background_tasks.add_task(
             run_linkedin_pipeline_fast,
@@ -129,33 +139,36 @@ async def create_search(
 
         return search
 
+    # Google Maps search — direct insert (no broken RPC)
     try:
-        response = supabase.rpc("create_search", {
-            "p_user_id": user_id,
-            "p_niche": query_term,
-            "p_location": location_term,
-        }).execute()
+        response = (
+            supabase.table("searches")
+            .insert({
+                "user_id": user_id,
+                "niche": query_term,
+                "location": location_term or "Google Maps",
+                "source": "google_maps",
+                "status": "queued",
+                "message": "Search queued",
+                "enrich_emails": request.enrich_emails,
+                "max_results": request.max_results,
+                "lead_types": request.lead_types,
+                "quota_source": quota_source,
+                "reserved_leads": reservation_amount,
+            })
+            .execute()
+        )
         if not response.data or len(response.data) == 0:
             raise HTTPException(status_code=500, detail="Failed to create search")
         search = response.data[0]
     except Exception as e:
-        if not isinstance(e, HTTPException):
-            logger.error(f"Failed to create search: {e}")
-        try:
-            supabase.rpc("settle_monthly_leads", {"p_user_id": user_id, "p_source": quota_source, "p_reserved": reservation_amount, "p_generated": 0}).execute()
-        except Exception:
-            pass
         if isinstance(e, HTTPException):
             raise
+        logger.error(f"Failed to create search: {e}")
         raise HTTPException(status_code=500, detail="Failed to create search")
 
-    # The legacy RPC creates the row; attach the reservation before starting
-    # the background job.
-    try:
-        supabase.table("searches").update({"quota_source": quota_source, "reserved_leads": reservation_amount}).eq("id", search["id"]).execute()
-    except Exception as col_err:
-        # Column may not exist in hosted DB yet — just log and continue.
-        logger.debug(f"Could not attach reservation metadata (columns may be missing): {col_err}")
+    # Increment daily_usage.searches_run
+    _increment_daily_searches(supabase, user_id)
 
     background_tasks.add_task(
         run_search_pipeline,

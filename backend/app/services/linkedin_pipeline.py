@@ -506,6 +506,15 @@ SELLER_PATTERNS = [
     r"\bi (started|launched|am) (building|growing) my (own |freelance |design |dev )?(studio|business|agency|practice|career)\b",
     r"\b(ready )?to (take on|accept) (new|more) (clients|projects|work)\b",
     r"\bi (just |am )?(left|leaving|am leaving) (my|a|the) (job|role|company|position)( to| and)\b",
+    # Supply-side pitch: seller offering data/lists/datasets/leads/services to
+    # the very agencies they address ("if you are looking for X, I have Y ... DM me"):
+    r"\bi (have|am offering|am selling|offer|got) (a |my )?(database|dataset|list|lists|data|leads|lead list|email list|contacts|prospects|generated leads)\b",
+    r"\b(database|dataset|list|leads|contacts) of (manually extracted|curated|verified|vetted|scraped)\b",
+    r"\bavailable for businesses looking to\b",
+    r"\b(best for|ideal for|perfect for|great for) cold (calling|emailing|outreach)\b",
+    r"\b(comment|reply|type|dm|message) ['\"][^'\"]{0,40}['\"] (below|to join|to get|and)\b",
+    r"\bi may have something useful\b", r"\bif you are looking for .{0,60},? i have\b",
+    r"\b(high[- ]?paying|qualified|exclusive) (clients|leads|opportunities)\b",
 ]
 TALENT_MARKETPLACE_PATTERNS = [
     r"\b(currently|now) (seeking|recruiting|looking for|hiring|sourcing) (talented professionals|freelancers|talent|creatives)\b",

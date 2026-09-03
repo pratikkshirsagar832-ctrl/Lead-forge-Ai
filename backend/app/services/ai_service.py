@@ -122,6 +122,7 @@ SELLING / OFFERING (NEVER a lead) — the author provides the service:
 SUBTLER SELLING (still NEVER a lead) — the author is pitching their own capability:
 - White-label / OEM / partner-selling: "White label software agency for web dev agencies." | "We're a white-label partner for agencies — you resell, we build." | "Helping you deliver more without hiring." | "We act as your dedicated offshore team."
 - Value-pitch framing: "We'd love to help you scale." | "Let's partner together." | "Book a call / free consultation to see how we can help." | "Send us a brief and we'll quote you."
+- Supply-side pitch to agencies (author offers data/service TO agencies, not seeks one): "If you're a marketing agency looking to expand your client pipeline, I have a curated database of leads available. Best for cold calling. Comment 'LEADS' or DM me." | "I have a vetted list of high-paying clients for agencies." | "I sell lead lists for agencies." — the author is the SUPPLIER, the agencies are the customer. This is SELLING, never agency_wanted.
 KEY RULE: if the author is offering to do the work, or inviting the reader to become a client, it is SELLING regardless of whether the literal words "I/we offer" appear. Read for the DIRECTION: who would be the customer? If the AUTHOR is the provider, it is a seller.
 
 JOB SEEKER (NEVER a lead) — the author wants employment for themselves:

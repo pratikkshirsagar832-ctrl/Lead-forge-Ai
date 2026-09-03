@@ -140,10 +140,26 @@ def test_job_remote_signal_detection():
     # freelancer announcing OWN availability / career change:
     (candidate(post_text="After 14 years in-house I'm now available for freelance design work and taking new clients.", headline="Freelance Graphic Designer"), "seller"),
     (candidate(post_text="It's time for an AI ad intervention. You don't need a designer anymore. Here's how to improve your ads.", headline="Brand Strategy | Marketing"), "content"),
+    # supply-side pitch: seller offering data/list/leads TO agencies (reverse direction):
+    (candidate(post_text="I am looking for digital marketing agency, SEO agency. I have a database of manually extracted USA leads. Best for cold calling. Comment 'USA LEADS' or DM me.", headline="AI SEO Services"), "seller"),
+    (candidate(post_text="If you're an agency looking to expand your client pipeline, I have a vetted list of high-paying clients. DM me.", headline="Lead Gen Specialist"), "seller"),
 ])
 def test_prefilter_rejects_garbage(reject, reason):
     got_reject, got_reason = lp.prefilter_reject(reject)
     assert got_reject, f"expected rejection ({reason}), got accepted"
+
+
+@pytest.mark.parametrize("post", [
+    "Looking for a marketing agency to run our paid campaigns.",
+    "We need an SEO agency for our ecommerce site.",
+    "Can anyone recommend a good branding agency?",
+    "Seeking a digital marketing agency to handle our social media.",
+    "Our company is looking for an agency to redesign our website.",
+])
+def test_prefilter_keeps_genuine_agency_sourcing(post):
+    c = candidate(post_text=post, headline="CMO at Acme", country_code="US", location="US")
+    reject, _ = lp.prefilter_reject(c)
+    assert not reject, f"genuine agency-sourcing post was rejected: {post}"
 
 
 def test_prefilter_keeps_genuine_buyer():

@@ -166,6 +166,25 @@ COUNTRY_ALIASES = {
     "jp": "JP", "japan": "JP", "kr": "KR", "south korea": "KR", "korea": "KR",
     "tw": "TW", "taiwan": "TW", "cn": "CN", "china": "CN", "ar": "AR", "argentina": "AR",
     "cl": "CL", "chile": "CL", "co": "CO", "colombia": "CO",
+    # East/Central Europe + rest of world
+    "pl": "PL", "poland": "PL", "cz": "CZ", "czechia": "CZ", "czech republic": "CZ",
+    "hu": "HU", "hungary": "HU", "ro": "RO", "romania": "RO", "bg": "BG", "bulgaria": "BG",
+    "gr": "GR", "greece": "GR", "hr": "HR", "croatia": "HR", "sk": "SK", "slovakia": "SK",
+    "si": "SI", "slovenia": "SI", "lt": "LT", "lithuania": "LT", "lv": "LV", "latvia": "LV",
+    "ee": "EE", "estonia": "EE", "rs": "RS", "serbia": "RS", "ua": "UA", "ukraine": "UA",
+    "ru": "RU", "russia": "RU", "by": "BY", "belarus": "BY", "kz": "KZ", "kazakhstan": "KZ",
+    "il": "IL", "israel": "IL", "jo": "JO", "jordan": "JO", "lb": "LB", "lebanon": "LB",
+    "am": "AM", "armenia": "AM", "ge": "GE", "georgia": "GE", "az": "AZ", "azerbaijan": "AZ",
+    "ma": "MA", "morocco": "MA", "dz": "DZ", "algeria": "DZ", "tn": "TN", "tunisia": "TN",
+    "ly": "LY", "libya": "LY", "sd": "SD", "sudan": "SD", "et": "ET", "ethiopia": "ET",
+    "tz": "TZ", "tanzania": "TZ", "ug": "UG", "uganda": "UG", "rw": "RW", "rwanda": "RW",
+    "cm": "CM", "cameroon": "CM", "ci": "CI", "ivory coast": "CI", "sn": "SN", "senegal": "SN",
+    "zm": "ZM", "zambia": "ZM", "zw": "ZW", "zimbabwe": "ZW", "bw": "BW", "botswana": "BW",
+    "mu": "MU", "mauritius": "MU", "pe": "PE", "peru": "PE", "ve": "VE", "venezuela": "VE",
+    "ec": "EC", "ecuador": "EC", "uy": "UY", "uruguay": "UY", "py": "PY", "paraguay": "PY",
+    "bo": "BO", "bolivia": "BO", "cr": "CR", "costa rica": "CR", "pa": "PA", "panama": "PA",
+    "gt": "GT", "guatemala": "GT", "do": "DO", "dominican republic": "DO", "jm": "JM", "jamaica": "JM",
+    "tt": "TT", "trinidad and tobago": "TT",
 }
 
 CITY_COUNTRY = {
@@ -225,6 +244,11 @@ def parse_country_request(location: str) -> tuple[set[str], str]:
     parts = re.split(r"[,/;]| and ", location.strip())
     codes: set[str] = set()
     for part in parts:
+        # Region (e.g. "Europe", "Asia") -> expand to the full country set.
+        region = part.strip().lower()
+        if region in REGION_COUNTRY_CODES:
+            codes |= REGION_COUNTRY_CODES[region]
+            continue
         code = normalize_country(part)
         if code:
             codes.add(code)
@@ -341,25 +365,89 @@ def job_country_pass(job_location: str, author_country_code: str, author_locatio
 # INTENT-SPECIFIC QUERY GENERATION (diversified, no cross-intent mixing)
 # ══════════════════════════════════════════════════════════════════════════
 SERVICE_SYNONYMS = {
+    # Visual / creative
     "design": ["graphic designer", "brand designer", "visual designer", "marketing designer"],
     "graphic": ["graphic designer", "graphic design", "brand designer", "visual designer"],
+    "ui": ["ui ux designer", "ui ux", "product designer", "ux designer"],
+    "ux": ["ui ux designer", "ui ux", "product designer", "ux designer"],
+    "logo": ["logo designer", "brand identity", "branding"],
+    "brand": ["brand designer", "branding", "brand identity"],
+    "illustr": ["illustrator", "illustration", "vector artist"],
+    # Web / software
     "web": ["web developer", "website developer", "web designer", "frontend"],
     "website": ["web developer", "website developer", "web designer", "frontend"],
     "shopify": ["shopify developer", "shopify expert", "ecommerce developer"],
-    "react": ["react developer", "frontend developer", "react js"],
-    "seo": ["seo expert", "seo specialist", "search engine optimization"],
-    "video": ["video editor", "post production", "motion designer"],
-    "edit": ["video editor", "editor", "post production"],
-    "ui": ["ui ux designer", "ui ux", "product designer", "ux designer"],
-    "ux": ["ui ux designer", "ui ux", "product designer", "ux designer"],
-    "mobile": ["mobile app developer", "app developer", "react native", "flutter"],
     "wordpress": ["wordpress developer", "wordpress"],
-    "brand": ["brand designer", "branding", "brand identity"],
-    "social": ["social media manager", "social media", "smm"],
+    "react": ["react developer", "frontend developer", "react js"],
+    "mobile": ["mobile app developer", "app developer", "react native", "flutter"],
+    "ios": ["ios developer", "swift developer"],
+    "android": ["android developer", "kotlin developer"],
+    "full stack": ["full stack developer", "fullstack developer", "full stack engineer"],
+    "backend": ["backend developer", "backend engineer"],
+    "backend development": ["backend developer", "node.js developer", "python developer"],
+    "frontend": ["frontend developer", "frontend engineer", "react developer"],
+    # Media / video / audio
+    "video": ["video editor", "video production", "post production", "motion designer"],
+    "edit": ["video editor", "editor", "post production"],
+    "film": ["film production", "video producer", "director", "post production"],
+    "motion": ["motion designer", "motion graphics", "animator"],
+    "animation": ["animator", "motion designer", "3d animator"],
+    "photo": ["photographer", "product photography", "photo editing"],
+    "photograph": ["photographer", "photo editing", "retoucher"],
+    "audio": ["audio engineer", "sound designer", "audio mixer"],
+    "music": ["music producer", "audio engineer", "composer"],
+    "voice": ["voice over artist", "voice actor", "narration"],
+    # Marketing / growth
     "market": ["marketing", "digital marketing", "growth", "performance marketing"],
+    "social": ["social media manager", "social media", "smm"],
+    "seo": ["seo expert", "seo specialist", "search engine optimization"],
+    "email mark": ["email marketing", "email marketer", "drip campaigns"],
+    "content": ["content writer", "content creator", "copywriter"],
     "copy": ["copywriter", "copywriting", "content writer"],
+    "ppc": ["ppc specialist", "paid ads manager", "google ads"],
+    "ads": ["ppc specialist", "paid ads manager", "google ads"],
+    "influencer": ["influencer marketer", "influencer manager", "creator marketing"],
+    "crm": ["crm specialist", "hubspot expert", "salesforce consultant"],
+    "lead gen": ["lead generation specialist", "growth hacker", "cold outreach"],
+    # Data / AI
+    "data": ["data analyst", "data scientist", "data engineer"],
+    "ai": ["ai developer", "machine learning engineer", "llm developer"],
+    "ml": ["machine learning engineer", "ml engineer", "ai developer"],
+    "automation": ["automation specialist", "zapier expert", "workflow automator"],
+    # Business / professional
     "account": ["accountant", "accounting", "bookkeeper"],
+    "bookkeeping": ["bookkeeper", "accountant", "xero expert"],
     "legal": ["lawyer", "attorney", "legal advisor"],
+    "hr": ["hr consultant", "recruiter", "people ops"],
+    "recruit": ["recruiter", "talent acquisition", "headhunter"],
+    "finance": ["financial analyst", "financial consultant", "cfo"],
+    "real estate": ["real estate agent", "property marketer", "realtor"],
+    "translat": ["translator", "translation", "localization"],
+    "writing": ["content writer", "copywriter", "blog writer"],
+    "blog": ["blog writer", "content writer", "seo writer"],
+    "customer": ["customer support", "cx specialist", "helpdesk"],
+    "devops": ["devops engineer", "cloud engineer", "sre"],
+    "cloud": ["cloud engineer", "aws consultant", "devops engineer"],
+    "cyber": ["cybersecurity consultant", "security analyst", "penetration tester"],
+    # Niche / other services (generic role derivation fallback also applies)
+    "film production": ["film production", "video production", "production crew", "production assistant"],
+    "event": ["event planner", "event manager", "event coordinator"],
+    "interior": ["interior designer", "interior design"],
+    "architect": ["architect", "architecture"],
+    "landscap": ["landscaper", "garden designer"],
+    "fitness": ["online coach", "fitness coach", "personal trainer"],
+    "nutrition": ["nutritionist", "dietitian"],
+    "catering": ["caterer", "catering"],
+    "travel": ["travel consultant", "travel agent"],
+    "logistics": ["logistics coordinator", "supply chain manager"],
+    "supply chain": ["supply chain manager", "procurement specialist"],
+    "pet": ["pet care", "dog walker", "veterinary"],
+    "cleaning": ["cleaning specialist", "commercial cleaning"],
+    "construction": ["construction manager", "general contractor", "renovation"],
+    "plumb": ["plumber", "plumbing"],
+    "electric": ["electrician", "electrical"],
+    "paint": ["painter", "painting contractor"],
+    "roof": ["roofer", "roofing"],
 }
 
 FREELANCER_TEMPLATES = [
@@ -395,14 +483,37 @@ def service_root(service: str) -> str:
 def _synonyms(service: str) -> list[str]:
     low = _norm(service)
     variants, seen = [], set()
-    for key, words in SERVICE_SYNONYMS.items():
-        if key in low:
-            variants.extend(words)
+
+    # Match SERVICE_SYNONYMS keys on a word boundary. If the service matches a
+    # SPECIFIC multi-word or niche key, exclude a few generic single-word keys
+    # that would otherwise bleed the wrong role ("interior design" must not
+    # inherit "graphic designer" from the bare "design" key).
+    matched_keys = []
+    for key in SERVICE_SYNONYMS:
+        if re.search(r"(?<![a-z])" + re.escape(key) + r"(?![a-z])", low):
+            matched_keys.append(key)
+    specific = any(k == low or " " in k or len(k) > 6 for k in matched_keys)
+    generic_keys = {"design", "web", "market", "edit", "copy", "content", "data", "ai"}
+    for key in matched_keys:
+        if specific and key in generic_keys and any(k != key for k in matched_keys if k in SERVICE_SYNONYMS and (k == low or " " in k or len(k) > 6)):
+            continue
+        variants.extend(SERVICE_SYNONYMS[key])
+
     root = service_root(service)
     variants.append(root)
+    # Generic role derivation from common suffixes, so arbitrary services
+    # ("film production", "logo design", "ux audit", etc.) still yield a natural
+    # role phrase rather than only the raw service term.
+    for suffix, role_sfx in (("production", "producer"), ("design", "designer"), ("development", "developer"),
+                             ("editing", "editor"), ("photography", "photographer"), ("marketing", "marketer"),
+                             ("management", "manager"), ("consulting", "consultant"), ("coaching", "coach"),
+                             ("writing", "writer"), ("analytics", "analyst"), ("engineering", "engineer"),
+                             ("translation", "translator"), ("accounting", "accountant"), ("valuation", "valuer")):
+        if suffix in low:
+            variants.append(low.replace(suffix, role_sfx))
     if "develop" in low:
         variants.append(low.replace("development", "developer"))
-    if "design" in low and "designer" not in low:
+    if re.search(r"(?<![a-z])design(?![a-z])", low) and "designer" not in low:
         variants.append(low.replace("design", "designer"))
     out = []
     for v in variants:

@@ -46,6 +46,40 @@ def test_parse_wire_lead_types():
     assert lp.parse_wire_lead_types(None) == []
 
 
+def test_arbitrary_service_gets_role_synonyms():
+    # A service not hardcoded ("film production") still yields role phrases.
+    qs = lp.generate_queries("freelancer_needed", "film production", set(), 0, 6)
+    joined = " ".join(qs)
+    assert any(k in joined for k in ("film production", "video producer", "director", "production"))
+
+
+def test_synonym_no_cross_contamination():
+    # "interior design" must not inherit bare-"design" -> graphic designer.
+    qs = lp.generate_queries("freelancer_needed", "interior design", set(), 0, 6)
+    joined = " ".join(qs)
+    assert "graphic designer" not in joined
+    assert "interior" in joined
+
+
+def test_worldwide_country_normalization():
+    for loc, code in (("Poland", "PL"), ("Czechia", "CZ"), ("Japan", "JP"), ("Nigeria", "NG"), ("New Zealand", "NZ"), ("Sri Lanka", "LK")):
+        codes, _ = lp.parse_country_request(loc)
+        assert codes == {code}, f"{loc} -> {codes}"
+
+
+def test_region_expands_to_countries():
+    codes, _ = lp.parse_country_request("Europe")
+    assert "DE" in codes and "GB" in codes and "FR" in codes
+    codes2, _ = lp.parse_country_request("South America")
+    assert "BR" in codes2 and "AR" in codes2
+
+
+def test_region_gate_accepts_only_region_countries():
+    codes, _ = lp.parse_country_request("Europe")
+    assert lp.country_pass("DE", "Berlin", codes)[0] is True
+    assert lp.country_pass("US", "New York", codes)[0] is False
+
+
 def test_canonical_to_post_type():
     assert lp.canonical_to_post_type("freelancer_needed") == "buyer"
     assert lp.canonical_to_post_type("agency_wanted") == "agency_wanted"

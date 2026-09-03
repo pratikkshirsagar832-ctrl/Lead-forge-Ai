@@ -515,6 +515,21 @@ SELLER_PATTERNS = [
     r"\b(comment|reply|type|dm|message) ['\"][^'\"]{0,40}['\"] (below|to join|to get|and)\b",
     r"\bi may have something useful\b", r"\bif you are looking for .{0,60},? i have\b",
     r"\b(high[- ]?paying|qualified|exclusive) (clients|leads|opportunities)\b",
+    # Creator/supplier seeking a talent agency to REPRESENT themselves:
+    r"\bseeking (a|an|talent) agency (representation|to represent me|to represent)\b",
+    r"\blocking for (an?) agency to represent\b", r"\btalent agency representation\b",
+    r"\b(i|I'?m) (a |an )?(creator|artist|model|influencer|talent) (seeking|looking for|in need of) (an? )?agency\b",
+    # Agency self-promotion / "reach out to OUR agency":
+    r"\breach out to (our|the|us at)? (our )?\w* ?(growth|marketing|digital|design|crm|lead|seo)? ?agency\b",
+    r"\breach out to \w+( \w+)* agency\b",
+    r"\b(contact|email|call|dm|message|write to) (us |our |your|\w+ )?\w* ?agency\b",
+    r"\b(our|the) (growth|marketing|digital|seo|design)( agency| team| firm)\b (can|is|has|helps|specializ|offer)\b",
+    r"\b(dm|email|contact|message|reach out to) (us at|our) \S*agency\b",
+    r"\bwe (are )?the (marketing|growth|digital|seo) agency (for|that|helping|dedicated to)\b",
+    # "How to choose / vet an agency" advice content (must be ADVICE framing, not
+    # an actual procurement action like "we are hiring a marketing agency"):
+    r"\b(hiring|choosing|selecting|vetting|finding) an? (marketing|digital|seo|design|web|branding) agency\??( ask| first| before|:)\b",
+    r"\b(ask this question|3 things to|what to look for|how to choose|before you hire|red flags) .{0,40}agency\b",
 ]
 TALENT_MARKETPLACE_PATTERNS = [
     r"\b(currently|now) (seeking|recruiting|looking for|hiring|sourcing) (talented professionals|freelancers|talent|creatives)\b",

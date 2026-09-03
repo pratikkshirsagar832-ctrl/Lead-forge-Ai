@@ -145,6 +145,14 @@ CONTENT / THOUGHT-LEADERSHIP (NEVER a lead):
 - freelancer_needed: author wants an INDEPENDENT freelancer/contractor/individual to do the work.
 - hiring: author is recruiting a specific role for their OWN organization (remote/contract/part-time/full-time are all hiring). A job seeker or a recruiting-seller is NEVER hiring.
 - agency_wanted: author wants to bring in an EXTERNAL AGENCY/studio/firm/team to handle the service. The word "agency" is NOT sufficient. There must be an explicit act of sourcing an external provider. "We are an agency" is a seller, never agency_wanted. A neutral mention of agencies ("agencies are struggling") is content, never agency_wanted.
+
+AGENCY_WANTED TRAPS — these are NOT agency_wanted (all are common and all are rejected):
+1. A CREATOR/candidate seeking a TALENT AGENCY to REPRESENT THEMSELVES ("seeking talent agency representation", "looking for an agency to represent me", "I'm available for agency representation") — the author IS the product being sold; they are SEEKING WORK, not sourcing a provider for their company. This is SELLING/job-seeking, NEVER agency_wanted.
+2. An AGENCY PROMOTING ITSELF ("reach out to our agency", "our growth agency can help", "email us at X agency") — the author is the provider, the reader is the client. SELLER.
+3. "HOW TO CHOOSE / HOW TO VET AGENCIES" ADVICE ("Hiring a marketing agency? Ask this question first", "choosing an agency is complicated", "what to look for in an agency") — THOUGHT-LEADERSHIP/content, no procurement action. NEVER a lead.
+4. An agency describing its services to attract clients ("we help RIA firms with SEO", "our agency specializes in X") — SELLER.
+
+RULE: agency_wanted requires the author (a company/person) to be the SEEKER who wants to CONTRACT an external agency to do work FOR THEM. If the author is a provider, a creator seeking representation, or just giving advice, it is NOT agency_wanted.
 - irrelevant: anything lacking genuine sourcing/hiring intent.
 
 CRITICAL DISTINCTION — the trap that causes most errors:

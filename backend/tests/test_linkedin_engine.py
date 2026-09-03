@@ -143,6 +143,10 @@ def test_job_remote_signal_detection():
     # supply-side pitch: seller offering data/list/leads TO agencies (reverse direction):
     (candidate(post_text="I am looking for digital marketing agency, SEO agency. I have a database of manually extracted USA leads. Best for cold calling. Comment 'USA LEADS' or DM me.", headline="AI SEO Services"), "seller"),
     (candidate(post_text="If you're an agency looking to expand your client pipeline, I have a vetted list of high-paying clients. DM me.", headline="Lead Gen Specialist"), "seller"),
+    # agency traps: creator seeking representation, agency self-promo, choosing-agency advice:
+    (candidate(post_text="I am actively seeking talent agency representation and brand management to scale my work. What I bring to the table: Curated Portfolios.", headline="AI fashion creator"), "seller"),
+    (candidate(post_text="If you're looking for more visibility and support, reach out to Lukman Growth Agency. Email: lukmangrowthagency@gmail.com. Send: My campaign is open.", headline="Lukman Growth Agency"), "seller"),
+    (candidate(post_text="Hiring a Marketing Agency for Your RIA? Ask This Question First. Choosing a digital marketing agency can be complicated. Before you sign a contract, ask one question.", headline="Author"), "seller"),
 ])
 def test_prefilter_rejects_garbage(reject, reason):
     got_reject, got_reason = lp.prefilter_reject(reject)
@@ -150,11 +154,12 @@ def test_prefilter_rejects_garbage(reject, reason):
 
 
 @pytest.mark.parametrize("post", [
-    "Looking for a marketing agency to run our paid campaigns.",
-    "We need an SEO agency for our ecommerce site.",
-    "Can anyone recommend a good branding agency?",
-    "Seeking a digital marketing agency to handle our social media.",
-    "Our company is looking for an agency to redesign our website.",
+    "We are looking for a marketing agency to run our paid campaigns next quarter.",
+    "Our company needs an SEO agency — our organic traffic dropped 40%.",
+    "Can anyone recommend a reliable branding agency for our relaunch?",
+    "Seeking a web development agency to rebuild our ecommerce site.",
+    "We are hiring a marketing agency for our B2B lead generation program.",
+    "Looking for a digital marketing agency to manage our social media.",
 ])
 def test_prefilter_keeps_genuine_agency_sourcing(post):
     c = candidate(post_text=post, headline="CMO at Acme", country_code="US", location="US")

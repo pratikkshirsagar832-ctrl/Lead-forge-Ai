@@ -5,3 +5,8 @@ backend/Scrapling/Website-analysis/
 backend/app/**/__pycache__/
 backend/sessions/
 
+backend/tests/__pycache__/
+
+__pycache__/
+*.pyc
+

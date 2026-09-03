@@ -210,6 +210,29 @@ def _inject_deepseek_classifier():
     return classify_linkedin_candidates, attach_classification, candidate_key
 
 
+def _make_query_provider(user_id: str):
+    """Return a sync callable(lead_type, service, country) -> list[learned queries].
+
+    The agent uses its up-to-date MEMORY of powerful queries (learned from DeepSeek
+    and stored in `agent_services`) so repeat searches get better and stay
+    consistent. Falls back to the engine's own templates if memory is empty.
+    """
+    from app.services.hyperagent_memory import get_or_learn_queries
+
+    def provider(lead_type: str, service: str, country: str) -> list[str]:
+        try:
+            loop = asyncio.new_event_loop()
+            try:
+                return loop.run_until_complete(get_or_learn_queries(user_id, service, lead_type, country or ""))
+            finally:
+                loop.close()
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("HyperAgent query provider failed (%s) — using templates", exc)
+            return []
+
+    return provider
+
+
 async def run_hyperagent_engine(
     search_id: str,
     user_id: str,
@@ -244,6 +267,7 @@ async def run_hyperagent_engine(
         max(1, min(int(max_results), MAX_RESULTS_CAP)),
         canonical_types, country_codes, country_text, enrich_emails,
         source="hyper_agent",
+        query_provider=_make_query_provider(user_id),
     )
 
     await _update_search(supabase, search_id, {

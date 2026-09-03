@@ -824,7 +824,7 @@ class IterationTelemetry:
 # ENGINE — iterative exact-count discovery orchestrator
 # ══════════════════════════════════════════════════════════════════════════
 class LeadRequest:
-    def __init__(self, search_id, user_id, service, request_count, lead_types, country_codes, country_text, enrich_emails, source="linkedin"):
+    def __init__(self, search_id, user_id, service, request_count, lead_types, country_codes, country_text, enrich_emails, source="linkedin", query_provider=None):
         self.search_id = search_id
         self.user_id = user_id
         self.service = service
@@ -834,6 +834,7 @@ class LeadRequest:
         self.country_text = country_text
         self.enrich_emails = enrich_emails
         self.source = source
+        self.query_provider = query_provider
         self.iteration = 0
 
     def primary_lead_type(self) -> str:
@@ -1089,18 +1090,69 @@ def _location_from_profile(profile: dict) -> str:
     return ""
 
 
+def _discover(queries: list[str], max_posts_per_lane: int = MAX_POSTS_PER_LANE) -> tuple[int, int, list[dict], list[str]]:
+    """Apify-backed discovery for the SEARCH-PAGE LinkedIn path.
+
+    NOTE: The HyperAgent page uses a browser-use discover instead (see
+    hyperagent_service). This is the search page's provider.
+    """
+    from app.services.apify_service import run_lane_search
+    n_lanes = min(3, max(1, (len(queries) + 3) // 4))
+    lanes = [[] for _ in range(n_lanes)]
+    for i, q in enumerate(queries):
+        lanes[i % n_lanes].append(q)
+    ok, errors, items = 0, [], []
+    for lane in lanes:
+        try:
+            result = run_lane_search(lane, max_posts_per_lane, "3months", True)
+            if result:
+                ok += 1
+                items.extend(result)
+        except Exception as e:
+            errors.append(str(e)[:160])
+    return ok, n_lanes, items, errors
+
+
 async def run_linkedin_engine(
     search_id: str, user_id: str, query: str, enrich_emails: bool, max_results: int,
     lead_types: list[str] = None, location: str = "",
 ) -> dict:
-    """STRICT exact-count iterative engine (browser-agent powered, DeepSeek brain).
+    """Strict exact-count iterative engine (Apify-backed, OpenAI-classified).
 
-    NOTE: This now delegates to the HyperAgent browser engine (linkedin_pipeline
-    no longer uses Apify). It is the single production LinkedIn engine.
+    NOTE: This is the SEARCH-PAGE path (uses the restored Apify provider). The
+    HyperAgent page uses run_hyperagent_engine (browser-use + DeepSeek).
     """
-    from app.services.hyperagent_service import run_hyperagent_engine
-    return await run_hyperagent_engine(
-        search_id, user_id, query, enrich_emails, max_results, lead_types, location,
+    from app.services.ai_service import (
+        attach_classification,
+        candidate_key,
+        classify_linkedin_candidates,
+    )
+
+    supabase = get_supabase_admin()
+    country_codes, country_text = parse_country_request(location or "")
+    canonical_types = parse_wire_lead_types(lead_types)
+    if not canonical_types:
+        canonical_types = [LeadType.FREELANCER_NEEDED.value]
+    request = LeadRequest(search_id, user_id, query.strip(), max(1, min(int(max_results), MAX_RESULTS_CAP)),
+                          canonical_types, country_codes, country_text, enrich_emails)
+
+    await _update_search(supabase, search_id, {
+        "status": "scraping", "progress_percent": 3,
+        "message": f"Searching LinkedIn for {', '.join(t.replace('_', ' ') for t in request.lead_types)} · {request.service} · {request.country_text or 'Any'}...",
+    })
+
+    client = _get_openai_client()
+    known_urls = await _prefetch_known_urls(supabase, user_id)
+
+    return await _run_engine_with_externals(
+        supabase=supabase,
+        request=request,
+        client=client,
+        known_urls=known_urls,
+        discover=_discover,
+        classify=classify_linkedin_candidates,
+        attach_classification=attach_classification,
+        candidate_key=candidate_key,
     )
 
 
@@ -1145,6 +1197,10 @@ async def _run_engine_with_externals(
         it.last_scored_types = {}
 
         queries = generate_queries(request.primary_lead_type(), request.service, request.country_codes, iteration, 12)
+        if getattr(request, "query_provider", None):
+            learned = request.query_provider(request.primary_lead_type(), request.service, request.country_text)
+            if learned:
+                queries = learned
         fresh_q = [q for q in queries if q not in used_queries]
         if not fresh_q:
             used_queries.clear()

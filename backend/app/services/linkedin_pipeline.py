@@ -496,6 +496,25 @@ SELLER_PATTERNS = [
     r"\b(we|our agency|our studio) deliver\b", r"\bwe take care of\b",
     r"\bsend (us|me) a (message|dm|note|brief)\b", r"\breach out (to us|today|now)\b",
     r"\bshow (you|them) how we\b", r"\b(results|outcomes) (for|guaranteed)\b",
+    # Freelancer announcing their OWN availability / career change (they are
+    # SELLING their labor, not needing a freelancer — opposite direction):
+    r"\b(open|available|seeking|looking) (for |to )?((new|freelance|remote|full-?time|contract|design) )?(work|projects|gigs|clients|opportunities|contracts)\b",
+    r"\b(now|currently|actively) (available|accepting|taking|booking|open) (new )?(clients|projects|work)\b",
+    r"\b(accepting|taking|booking) (new )?clients\b",
+    r"\bmy (design|development|creative) (services|work) (are|is) (available|open|for)\b",
+    r"\bit['’]s (my|time for my) time to (take|go|start|launch|pursue)\b",
+    r"\bi (started|launched|am) (building|growing) my (own |freelance |design |dev )?(studio|business|agency|practice|career)\b",
+    r"\b(ready )?to (take on|accept) (new|more) (clients|projects|work)\b",
+    r"\bi (just |am )?(left|leaving|am leaving) (my|a|the) (job|role|company|position)( to| and)\b",
+]
+TALENT_MARKETPLACE_PATTERNS = [
+    r"\b(currently|now) (seeking|recruiting|looking for|hiring|sourcing) (talented professionals|freelancers|talent|creatives)\b",
+    r"\bapplications are (now )?open\b", r"\b(freelance|remote) (professionals|roles)\b",
+    r"\bwe (match|connect|place) (freelancers|talent|designers|developers|professionals) (with|to) (clients|companies|businesses|organizations)\b",
+    r"\b(freelance|talent|gig) (marketplace|platform|network|dashboard)\b",
+    r"\bwe are (currently |now )?(seeking|recruiting|sourcing) (a )?(pool|roster|network|community) of\b",
+    r"\blooking for (freelancers|designers|developers|creatives) (to join|worldwide|across|for our|to work with)\b",
+    r"\b(apply|sign up|register) (today|now) (to|and)\b",
 ]
 JOB_SEEKER_PATTERNS = [
     r"\blooking for a job\b", r"\blooking for (a )?role\b", r"\blooking for employment\b",
@@ -528,6 +547,7 @@ _SELLER_RE = [re.compile(p, re.I) for p in SELLER_PATTERNS]
 _JOB_RE = [re.compile(p, re.I) for p in JOB_SEEKER_PATTERNS]
 _CONTENT_RE = [re.compile(p, re.I) for p in CONTENT_PATTERNS]
 _RECRUITER_RE = [re.compile(p, re.I) for p in RECRUITER_SELLER_PATTERNS]
+_MARKETPLACE_RE = [re.compile(p, re.I) for p in TALENT_MARKETPLACE_PATTERNS]
 
 
 def _any_match(text: str, patterns: list) -> bool:
@@ -540,6 +560,8 @@ def prefilter_reject(candidate: dict, *, allow_content: bool = False) -> tuple[b
     text = f"{post}\n{headline}"
     if _any_match(text, _SELLER_RE):
         return True, "seller"
+    if _any_match(text, _MARKETPLACE_RE):
+        return True, "marketplace"
     if _any_match(text, _JOB_RE):
         return True, "job_seeker"
     if _any_match(text, _RECRUITER_RE):

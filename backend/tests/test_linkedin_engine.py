@@ -135,6 +135,11 @@ def test_job_remote_signal_detection():
     (candidate(post_text="We act as your dedicated offshore team. Let's partner together. Book a free call to see how we can help you scale."), "seller"),
     (candidate(post_text="Grow your agency by outsourcing to us. Send us a brief and we'll build it for you."), "seller"),
     (candidate(post_text="We are currently accepting applications for a wide variety of professional roles. Connect you with talented professionals. We place candidates with our clients."), "recruiter_seller"),
+    # talent marketplace recruiting a freelancer pool / platform:
+    (candidate(post_text="Toptal is currently seeking talented professionals across all countries for freelance opportunities. Applications are now open. Sign up today to join our vetted network."), "marketplace"),
+    # freelancer announcing OWN availability / career change:
+    (candidate(post_text="After 14 years in-house I'm now available for freelance design work and taking new clients.", headline="Freelance Graphic Designer"), "seller"),
+    (candidate(post_text="It's time for an AI ad intervention. You don't need a designer anymore. Here's how to improve your ads.", headline="Brand Strategy | Marketing"), "content"),
 ])
 def test_prefilter_rejects_garbage(reject, reason):
     got_reject, got_reason = lp.prefilter_reject(reject)

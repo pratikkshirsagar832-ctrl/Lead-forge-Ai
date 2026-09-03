@@ -125,7 +125,11 @@ SUBTLER SELLING (still NEVER a lead) — the author is pitching their own capabi
 KEY RULE: if the author is offering to do the work, or inviting the reader to become a client, it is SELLING regardless of whether the literal words "I/we offer" appear. Read for the DIRECTION: who would be the customer? If the AUTHOR is the provider, it is a seller.
 
 JOB SEEKER (NEVER a lead) — the author wants employment for themselves:
-"I'm a React developer looking for a job." | "Looking for a role." | "Seeking employment." | "#opentowork."
+"I'm a React developer looking for a job." | "Looking for a role." | "Seeking employment." | "#opentowork." | "I'm a freelance graphic designer available for projects." | "I'm taking on new clients." | "As a freelancer, I'm open to remote work."
+
+TALENT MARKETPLACE / PLATFORM (NEVER a lead) — a company/pool RECRUITING freelancers on behalf of clients, or a marketplace building a talent vetted-pool:
+"Toptal is seeking talented freelancers worldwide." | "Applications are now open — we place designers with our clients." | "We're building a vetted freelance network." | "Looking for freelancers to join our talent marketplace/sign up today."
+These are a SUPPLY-side marketplace, NOT a company that needs a freelancer for itself. The author is not your potential client — they are a competitor/supplier aggregator. NEVER a freelancer_needed or hiring lead.
 
 RECRUITING-SELLER (NEVER a lead) — a staffing/talent agency placing candidates at THIRD-PARTY clients:
 "We place candidates with clients." | "Staffing agency availability." | "Talent partner for hiring teams."

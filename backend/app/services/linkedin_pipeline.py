@@ -856,7 +856,7 @@ def _discover(queries: list[str], max_posts_per_lane: int = MAX_POSTS_PER_LANE) 
     ok, errors, items = 0, [], []
     for lane in lanes:
         try:
-            result = run_lane_search(lane, max_posts_per_lane, "month", True)
+            result = run_lane_search(lane, max_posts_per_lane, "3months", True)
             if result:
                 ok += 1
                 items.extend(result)

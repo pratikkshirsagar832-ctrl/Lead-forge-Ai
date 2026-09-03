@@ -340,27 +340,47 @@ def run_post_search(
 
 HARVEST_POST_SEARCH_ACTOR = "harvestapi~linkedin-post-search"
 
-# Seller/job-seeker language to exclude in negative-signal variants. Added as
-# SEPARATE query variants (never appended to core intent queries) so a false
-# zero-result on a negative variant cannot void the core search.
-NEGATIVE_TERMS = [
-    '"i offer"', '"we offer"', '"available for projects"', '"looking for clients"',
-    '"open to work"', '"dm me for"', '"my portfolio"', '"we are a" agency',
+# Seller/job-seeker language to EXCLUDE at discovery time using LinkedIn Boolean
+# NOT search. LinkedIn supports up to 5 boolean operators (AND/OR/NOT) and 500
+# chars per query. NOT is applied after quotes/parentheses, so we phrase intent
+# in quotes and exclude seller framing with NOT. Uppercase operators required.
+_SELLER_NOT_TERMS = [
+    '"i offer"', '"we offer"', '"we provide"', '"our services"', '"dm me"', '"dm us"',
+    '"available for"', '"open to work"', '"looking for clients"', '"taking clients"',
+    '"my portfolio"', '"we help"', '"book a call"', '"get in touch"', '"we specialize in"',
+    '"we are a leading"', '"we deliver"', '"we take care of"', '"our agency"',
 ]
+MAX_NOT_TERMS = 4  # keep within the 5-operator cap and 500-char limit
+
+
+def _build_negative_query(intent: str, terms: list[str]) -> str | None:
+    """Build a Boolean query: "intent phrase" NOT term1 NOT term2 ...
+
+    Falls back to None if the query would exceed LinkedIn's 500-char limit.
+    """
+    base = f'"{intent.strip()}"'
+    remaining = terms[:MAX_NOT_TERMS]
+    for term in remaining:
+        if len(base) + len(term) + 5 > 500:
+            break
+        base = f"{base} NOT {term}"
+    return base
 
 
 def add_negative_signal_queries(queries: list[str], max_per_intent: int = 2) -> list[str]:
-    """Emit high-precision negative-filtered variants for seller contamination.
+    """Emit Boolean NOT-filtered variants to strip seller/job-seeker posts at
+    discovery time — BEFORE any AI spend.
 
-    Each returned variant is an ADDITIONAL query (not a modification of the
-    caller's intent query) so the core discovery line is never lost if the
-    operator yields nothing. Callers should append these to the lane list.
+    LinkedIn officially supports NOT (uppercase), quotes, and parentheses (max
+    5 operators / 500 chars). These are emitted as ADDITIONAL queries (never
+    replacements of the core intent line) so a false-zero on a NOT variant can
+    never void discovery. The AI classifier remains the authoritative gate.
     """
-    # LinkedIn/Ngram search does not reliably support NOT on every actor; build
-    # conservative quoted variants that narrow toward buyer phrasing.
     out: list[str] = []
     for q in queries[:max_per_intent]:
-        out.append(f'"{q}"')
+        neg = _build_negative_query(q, _SELLER_NOT_TERMS)
+        if neg:
+            out.append(neg)
     return out
 
 
@@ -379,9 +399,10 @@ def run_lane_search(
     total = len(queries) × maxPosts. Lanes are capped at 4 queries and
     15 posts each → ≤60 raw records per lane.
 
-    use_negative_signals: append quoted high-precision variants (see
-    add_negative_signal_queries) that bias toward explicit buyer phrasing.
-    These are EXTRA queries, never replacements, so the intent line is safe.
+    use_negative_signals: append Boolean-NOT high-precision variants (see
+    add_negative_signal_queries) that exclude seller/job-seeker language at
+    discovery time. These are EXTRA queries, never replacements, so the intent
+    line is safe even if a NOT variant returns nothing.
     """
     queries = [q.strip() for q in search_queries if q and q.strip()][:4]
     if not queries:
@@ -391,7 +412,7 @@ def run_lane_search(
     payload = {
         "searchQueries": queries,
         "maxPosts": max(10, min(max_posts, 15)),
-        "postedLimit": posted_limit if posted_limit in ("1h", "24h", "week", "month") else "month",
+        "postedLimit": posted_limit if posted_limit in ("1h", "24h", "week", "month", "3months", "6months", "year") else "month",
         "sortBy": "date",
         "profileScraperMode": "main",
         "scrapeReactions": False,

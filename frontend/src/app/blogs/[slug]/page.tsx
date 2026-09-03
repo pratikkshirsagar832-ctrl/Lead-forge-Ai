@@ -12,11 +12,12 @@ import Header from '../../../components/landing/Header';
 export const dynamic = 'force-dynamic';
 
 interface PageProps {
-  params: { slug: string };
+  params: Promise<{ slug: string }>;
 }
 
 export async function generateMetadata({ params }: PageProps): Promise<Metadata> {
-  const post = getBlog(params.slug);
+  const { slug } = await params;
+  const post = getBlog(slug);
   if (!post) return {};
   const url = `https://hyperclients.online/blogs/${post.slug}`;
   return {
@@ -38,8 +39,9 @@ export async function generateMetadata({ params }: PageProps): Promise<Metadata>
   };
 }
 
-export default function BlogPostPage({ params }: PageProps) {
-  const post = getBlog(params.slug);
+export default async function BlogPostPage({ params }: PageProps) {
+  const { slug } = await params;
+  const post = getBlog(slug);
   if (!post) notFound();
 
   const jsonLd = {

@@ -24,6 +24,13 @@ export const API_ROUTES = {
     pitch: (leadId: string) => `/api/ai/pitch/${leadId}`,
     websiteMessage: (leadId: string) => `/api/ai/website-message/${leadId}`,
   },
+  agent: {
+    chat: '/api/agent/chat',
+    runs: '/api/agent/runs',
+    runDetail: (id: string) => `/api/agent/runs/${id}`,
+    runStatus: (id: string) => `/api/agent/runs/${id}/status`,
+    runResults: (id: string) => `/api/agent/runs/${id}/results`,
+  },
 } as const;
 
 export const LEAD_CATEGORIES = {

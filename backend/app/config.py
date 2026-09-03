@@ -2,7 +2,6 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Literal
 
-from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -20,30 +19,18 @@ class Settings(BaseSettings):
 
     openai_api_key: str = ""
 
-    apify_api_key: str = ""
-    apify_api_key_2: str = ""
-    apify_api_key_3: str = ""
-    apify_api_key_4: str = ""
-    apify_api_key_5: str = ""
-    apify_api_key_6: str = ""
-    apify_api_key_7: str = ""
-    apify_api_key_8: str = ""
-    apify_api_key_9: str = ""
-    apify_api_key_10: str = ""
-    apify_api_key_11: str = ""
-    apify_api_key_12: str = ""
-    apify_api_key_13: str = ""
-    apify_api_key_14: str = ""
-    apify_api_key_15: str = ""
-    apify_api_key_16: str = ""
-    apify_api_key_17: str = ""
-    apify_api_key_18: str = ""
-    apify_api_key_19: str = ""
-    apify_api_key_20: str = ""
-    apify_api_key_21: str = ""
-    apify_api_key_22: str = ""
-    apify_api_key_23: str = ""
-    apify_api_key_24: str = ""
+    deepseek_api_key: str = ""
+    deepseek_base_url: str = "https://api.deepseek.com"
+    deepseek_model: str = "deepseek-v4-flash"
+
+    # HyperAgent (browser-use LinkedIn agent)
+    # LinkedIn auth via cookies: either paste the Cookie-Editor export JSON
+    # directly (linkedin_cookies) or point to a file (linkedin_cookies_file).
+    # Empty => guest mode (Jobs + company pages only).
+    linkedin_cookies: str = ""
+    linkedin_cookies_file: str = "sessions/linkedin_cookies.json"
+    hyperagent_headless: bool = True
+    hyperagent_python: str = ""
 
     razorpay_key_id: str = ""
     razorpay_key_secret: str = ""
@@ -63,30 +50,38 @@ class Settings(BaseSettings):
 
     environment: Literal["development", "staging", "production"] = "development"
 
-    @model_validator(mode="after")
-    def _collect_apify_keys(self):
-        self._apify_keys = [
-            k for k in (
-                self.apify_api_key, self.apify_api_key_2, self.apify_api_key_3,
-                self.apify_api_key_4, self.apify_api_key_5, self.apify_api_key_6,
-                self.apify_api_key_7, self.apify_api_key_8, self.apify_api_key_9,
-                self.apify_api_key_10, self.apify_api_key_11, self.apify_api_key_12,
-                self.apify_api_key_13, self.apify_api_key_14, self.apify_api_key_15,
-                self.apify_api_key_16, self.apify_api_key_17, self.apify_api_key_18,
-                self.apify_api_key_19, self.apify_api_key_20, self.apify_api_key_21,
-                self.apify_api_key_22, self.apify_api_key_23, self.apify_api_key_24,
-            )
-            if k
-        ]
-        return self
-
     @property
     def is_production(self) -> bool:
         return self.environment == "production"
 
     @property
-    def apify_keys(self) -> list[str]:
-        return getattr(self, "_apify_keys", [k for k in (self.apify_api_key, self.apify_api_key_2) if k])
+    def linkedin_cookies_json(self) -> str:
+        """Resolve LinkedIn cookies: inline JSON (if set) else read the file.
+
+        The default cookie file is backend/sessions/linkedin_cookies.json, which
+        resolves to /app/sessions/linkedin_cookies.json in Docker and
+        backend/sessions/linkedin_cookies.json in development.
+        """
+        if self.linkedin_cookies and self.linkedin_cookies.strip():
+            return self.linkedin_cookies
+        if not self.linkedin_cookies_file:
+            return ""
+        candidates = []
+        p = Path(self.linkedin_cookies_file)
+        if p.is_absolute():
+            candidates.append(p)
+        else:
+            # relative to the backend root (parent of app/)
+            candidates.append(Path(__file__).resolve().parent.parent / p)
+            candidates.append(Path("/app") / p)
+            candidates.append(p)  # relative to CWD
+        for cand in candidates:
+            try:
+                if cand.exists():
+                    return cand.read_text(encoding="utf-8").strip()
+            except Exception:
+                continue
+        return ""
 
     @property
     def scraper_binary_path(self) -> Path:

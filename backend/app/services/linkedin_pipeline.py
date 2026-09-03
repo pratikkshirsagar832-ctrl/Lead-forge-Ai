@@ -6,8 +6,8 @@ place, the canonical intent model, location hard-gate, intent-specific query
 generation, deterministic pre-filters, canonical acceptance + quality scoring,
 telemetry and the exact-count iterative orchestrator. It delegates:
 
-  - Discovery         -> app.services.apify_service  (actor, keys, lanes)
-  - AI qualification  -> app.services.ai_service     (strict schema, fail-closed)
+  - Discovery         -> app.services.hyperagent_browser  (browser-use, logged-in)
+  - AI qualification  -> app.services.ai_service     (DeepSeek V4 Flash, fail-closed)
 
 PRINCIPLE:
   find the EXACT number of genuinely qualified leads the user asked for, for
@@ -33,10 +33,6 @@ logger = logging.getLogger(__name__)
 
 from app.database import get_supabase_admin
 from app.services.usage import settle_search_quota
-from app.services.apify_service import (
-    fetch_profile_details,
-    run_lane_search,
-)
 
 # ══════════════════════════════════════════════════════════════════════════
 # LOOP-SAFETY / ENGINE LIMITS
@@ -235,6 +231,18 @@ def normalize_country(raw: str) -> str | None:
     for city, code in CITY_COUNTRY.items():
         if text.startswith(city) or city in text:
             return code
+    # "City, Region, Country" (e.g. "Noida, Uttar Pradesh, India"): the final
+    # comma-segment is usually the country; also try a bounded phrase search for
+    # a multi-word/long country name embedded anywhere in the string.
+    if "," in text:
+        last = text.rsplit(",", 1)[-1].strip()
+        if last in COUNTRY_ALIASES:
+            return COUNTRY_ALIASES[last]
+        for alias, code in COUNTRY_ALIASES.items():
+            # Avoid short/single-token codes ("in", "us") matching substrings;
+            # only phrase-match names of >=4 letters that appear as whole words.
+            if len(alias) >= 4 and re.search(r"(?<![a-z])" + re.escape(alias) + r"(?![a-z])", text):
+                return code
     return None
 
 
@@ -816,7 +824,7 @@ class IterationTelemetry:
 # ENGINE — iterative exact-count discovery orchestrator
 # ══════════════════════════════════════════════════════════════════════════
 class LeadRequest:
-    def __init__(self, search_id, user_id, service, request_count, lead_types, country_codes, country_text, enrich_emails):
+    def __init__(self, search_id, user_id, service, request_count, lead_types, country_codes, country_text, enrich_emails, source="linkedin"):
         self.search_id = search_id
         self.user_id = user_id
         self.service = service
@@ -825,6 +833,7 @@ class LeadRequest:
         self.country_codes = country_codes
         self.country_text = country_text
         self.enrich_emails = enrich_emails
+        self.source = source
         self.iteration = 0
 
     def primary_lead_type(self) -> str:
@@ -847,7 +856,7 @@ def _parse_candidate(item: dict) -> Optional[dict]:
         val = item.get(key)
         if isinstance(val, str) and val.strip():
             low = val.lower()
-            if "/posts/" in low or "/feed/" in low or "/activity-" in low:
+            if "/posts/" in low or "/feed/" in low or "/activity-" in low or "/jobs/" in low or "/jobs/view/" in low:
                 post_url = val.strip()
                 break
     if not post_url:
@@ -959,23 +968,6 @@ def _job_location_from_text(text: str) -> str:
     return ""
 
 
-def _discover(queries: list[str], max_posts_per_lane: int = MAX_POSTS_PER_LANE) -> tuple[int, int, list[dict], list[str]]:
-    n_lanes = min(3, max(1, (len(queries) + 3) // 4))
-    lanes = [[] for _ in range(n_lanes)]
-    for i, q in enumerate(queries):
-        lanes[i % n_lanes].append(q)
-    ok, errors, items = 0, [], []
-    for lane in lanes:
-        try:
-            result = run_lane_search(lane, max_posts_per_lane, "3months", True)
-            if result:
-                ok += 1
-                items.extend(result)
-        except Exception as e:
-            errors.append(str(e)[:160])
-    return ok, n_lanes, items, errors
-
-
 def _get_openai_client():
     from app.services.ai_service import _get_async_openai_client
     return _get_async_openai_client()
@@ -1008,8 +1000,9 @@ async def _save_leads(supabase, search_id: str, user_id: str, leads: list[dict],
         if not linkedin_url:
             continue
         cls = lead.get("classification") or {}
+        source = getattr(request, "source", "linkedin")
         rows.append({
-            "search_id": search_id, "user_id": user_id, "source": "linkedin",
+            "search_id": search_id, "user_id": user_id, "source": source,
             "business_name": lead.get("full_name") or "Unknown", "category": lead.get("company") or "LinkedIn",
             "full_address": lead.get("location") or "", "phone": "", "email_found": "", "website_url": "",
             "rating": None, "total_reviews": 0, "google_maps_link": "", "description": lead.get("post_text") or "",
@@ -1050,10 +1043,16 @@ async def _save_leads(supabase, search_id: str, user_id: str, leads: list[dict],
 
 
 async def _enrich_profiles_for(promising: list[dict]) -> None:
+    # Profile-headline enrichment is no longer needed: the HyperAgent browser
+    # client already captures author name / headline / company / location from
+    # the LinkedIn cards it discovers. This hook is kept a no-op for
+    # compatibility with the engine's call site.
+    return
     missing = [c for c in promising if not (c.get("headline") or "").strip()]
     if not missing:
         return
     try:
+        from app.services.apify_service import fetch_profile_details
         enrich_urls = [c["linkedin_url"] for c in missing[:PROFILE_ENRICHMENT_CAP]]
         profiles = await asyncio.to_thread(fetch_profile_details, enrich_urls, "basic")
         by_url = {(p.get("url") or "").rstrip("/").lower(): p for p in profiles if isinstance(p, dict)}
@@ -1094,38 +1093,14 @@ async def run_linkedin_engine(
     search_id: str, user_id: str, query: str, enrich_emails: bool, max_results: int,
     lead_types: list[str] = None, location: str = "",
 ) -> dict:
-    """Strict exact-count iterative engine. Returns a telemetry dict."""
-    from app.services.ai_service import (
-        attach_classification,
-        candidate_key,
-        classify_linkedin_candidates,
-    )
+    """STRICT exact-count iterative engine (browser-agent powered, DeepSeek brain).
 
-    supabase = get_supabase_admin()
-    country_codes, country_text = parse_country_request(location or "")
-    canonical_types = parse_wire_lead_types(lead_types)
-    if not canonical_types:
-        canonical_types = [LeadType.FREELANCER_NEEDED.value]
-    request = LeadRequest(search_id, user_id, query.strip(), max(1, min(int(max_results), MAX_RESULTS_CAP)),
-                          canonical_types, country_codes, country_text, enrich_emails)
-
-    await _update_search(supabase, search_id, {
-        "status": "scraping", "progress_percent": 3,
-        "message": f"Searching LinkedIn for {', '.join(t.replace('_', ' ') for t in request.lead_types)} · {request.service} · {request.country_text or 'Any'}...",
-    })
-
-    client = _get_openai_client()
-    known_urls = await _prefetch_known_urls(supabase, user_id)
-
-    return await _run_engine_with_externals(
-        supabase=supabase,
-        request=request,
-        client=client,
-        known_urls=known_urls,
-        discover=_discover,
-        classify=classify_linkedin_candidates,
-        attach_classification=attach_classification,
-        candidate_key=candidate_key,
+    NOTE: This now delegates to the HyperAgent browser engine (linkedin_pipeline
+    no longer uses Apify). It is the single production LinkedIn engine.
+    """
+    from app.services.hyperagent_service import run_hyperagent_engine
+    return await run_hyperagent_engine(
+        search_id, user_id, query, enrich_emails, max_results, lead_types, location,
     )
 
 

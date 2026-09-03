@@ -1,6 +1,5 @@
 
 # Vendored / heavy (agent runtime + scraper deps)
-backend/Hyper_Agent/
 backend/Scrapling/Website-analysis/
 backend/app/**/__pycache__/
 backend/sessions/

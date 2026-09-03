@@ -48,6 +48,26 @@ RUN pip install patchright --upgrade 2>&1 && \
     python -m patchright install chromium --with-deps 2>&1 && \
     echo "Patchright Chromium installed"
 
+# ── HyperAgent: build the browser-use Python runtime (its own venv) ─────────
+# The LinkedIn agent drives a real Chromium via browser-use. It runs as an
+# isolated SUBPROCESS so its heavy deps don't collide with the API venv. This
+# is a vendored fork (has ChatDeepSeek), so we install the source package.
+# Install Chromium (browser-use finds 'chromium-browser' on PATH).
+RUN apt-get update && apt-get install -y --no-install-recommends chromium chromium-driver \
+    && rm -rf /var/lib/apt/lists/*
+COPY Hyper_Agent/browser-use/ /app/Hyper_Agent/browser-use/
+RUN python -m venv /app/Hyper_Agent/browser-use/.venv && \
+    /app/Hyper_Agent/browser-use/.venv/bin/pip install --no-cache-dir --upgrade pip && \
+    /app/Hyper_Agent/browser-use/.venv/bin/pip install --no-cache-dir \
+        /app/Hyper_Agent/browser-use 2>&1 && \
+    echo "HyperAgent browser-use runtime installed"
+
+# Point browser-use at the apt-installed Chromium binary.
+ENV BROWSER_USE_EXECUTABLE_PATH=/usr/bin/chromium-browser
+ENV HYPERAGENT_PYTHON=/app/Hyper_Agent/browser-use/.venv/bin/python
+ENV BROWSER_USE_HEADLESS=true
+ENV ANONYMIZED_TELEMETRY=false
+
 # Copy the built Go binary
 COPY --from=go-builder /google-maps-scraper /app/google-maps-scraper/google-maps-scraper
 RUN chmod +x /app/google-maps-scraper/google-maps-scraper

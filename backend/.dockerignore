@@ -36,3 +36,16 @@ tools/
 # Logs and temp
 *.log
 tmp/
+
+# HyperAgent: only the browser_use package + packaging (venv is built in-image)
+Hyper_Agent/browser-use/.git/
+Hyper_Agent/browser-use/.venv/
+Hyper_Agent/browser-use/bin/
+Hyper_Agent/browser-use/docker/
+Hyper_Agent/browser-use/examples/
+Hyper_Agent/browser-use/scripts/
+Hyper_Agent/browser-use/skills/
+Hyper_Agent/browser-use/static/
+Hyper_Agent/browser-use/tests/
+Hyper_Agent/prime-agent/
+

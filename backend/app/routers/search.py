@@ -70,6 +70,14 @@ async def create_search(
     query_term = request.niche.strip()
     location_term = request.location.strip()
 
+    # Product policy: LinkedIn discovery always targets genuine service buyers —
+    # freelancer-needed (buyer) + agency-wanted. Hiring / job-seeker intents are
+    # never requested, whatever the client payload says.
+    if request.source == "linkedin":
+        lead_types = ["buyer", "agency_wanted"]
+    else:
+        lead_types = request.lead_types or []
+
     # Check monthly lead quota and reserve leads
     from app.services.plans import get_plan_row, resolve_effective_subscription
     effective = resolve_effective_subscription(supabase, user_id)
@@ -89,7 +97,11 @@ async def create_search(
     remaining = max(0, plan_limit - used)
     if remaining <= 0:
         raise HTTPException(status_code=403, detail=f"Monthly {quota_source} lead limit reached ({plan_limit}/{plan_limit})")
-    reservation_amount = min(request.max_results, remaining)
+    # LinkedIn lead runs are capped at 10 requested leads (UI offers 3/5/10).
+    effective_max_results = request.max_results
+    if request.source == "linkedin":
+        effective_max_results = min(request.max_results, 10)
+    reservation_amount = min(effective_max_results, remaining)
     if reservation_amount <= 0:
         raise HTTPException(status_code=403, detail="Your plan does not include this lead source")
 
@@ -105,8 +117,8 @@ async def create_search(
                     "status": "queued",
                     "message": "Search queued",
                     "enrich_emails": request.enrich_emails,
-                    "max_results": request.max_results,
-                    "lead_types": request.lead_types,
+                    "max_results": effective_max_results,
+                    "lead_types": lead_types,
                     "quota_source": quota_source,
                     "reserved_leads": reservation_amount,
                 })
@@ -131,8 +143,8 @@ async def create_search(
             user_id=user_id,
             query=query_term,
             enrich_emails=request.enrich_emails,
-            max_results=request.max_results,
-            lead_types=request.lead_types,
+            max_results=effective_max_results,
+            lead_types=lead_types,
             location=location_term,
         )
 
@@ -151,7 +163,7 @@ async def create_search(
                 "message": "Search queued",
                 "enrich_emails": request.enrich_emails,
                 "max_results": request.max_results,
-                "lead_types": request.lead_types,
+                "lead_types": lead_types,
                 "quota_source": quota_source,
                 "reserved_leads": reservation_amount,
             })

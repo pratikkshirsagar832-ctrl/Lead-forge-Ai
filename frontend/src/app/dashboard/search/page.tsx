@@ -67,12 +67,10 @@ function LiveResultCard({ lead, index }: { lead: any; index: number }) {
                   {lead.source === 'linkedin' && (
                     <span className={`text-[9px] px-1.5 py-0.5 rounded font-semibold border ${
                       lead.post_type === 'buyer' ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20'
-                      : lead.post_type === 'hiring' ? 'bg-amber-500/10 text-amber-400 border-amber-500/20'
                       : lead.post_type === 'agency_wanted' ? 'bg-violet-500/10 text-violet-400 border-violet-500/20'
                       : 'bg-white/5 text-ice/50 border-white/10'
                     }`}>
                       {lead.post_type === 'buyer' ? 'Freelancer Needed'
-                        : lead.post_type === 'hiring' ? 'Hiring'
                         : lead.post_type === 'agency_wanted' ? 'Agency Wanted' : 'Post'}
                     </span>
                   )}
@@ -194,7 +192,10 @@ export default function SearchPage() {
   const [source, setSource] = useState<'google_maps' | 'linkedin'>('google_maps');
   const sourceRef = useRef<'google_maps' | 'linkedin'>('google_maps');
   const [maxResults, setMaxResults] = useState(10);
-  const [leadTypes, setLeadTypes] = useState<('buyer' | 'hiring' | 'agency_wanted')[]>(['buyer']);
+  // LinkedIn discovery always targets genuine service buyers: freelancer-needed
+  // (buyer) + agency-wanted. Hiring/job-seeker intent is intentionally never
+  // requested, and the UI deliberately shows no lead-type selector.
+  const LINKEDIN_LEAD_TYPES = ['buyer', 'agency_wanted'] as const;
   const requestedCount = useSearchStore((s) => s.requestedCount);
   const isUnlocked = useSearchStore((s) => s.unlocked);
   const unlockResults = useSearchStore((s) => s.unlockResults);
@@ -264,7 +265,7 @@ export default function SearchPage() {
     if (isAtLimit) { setShowUpgradeModal(true); return; }
     try {
       if (source === 'linkedin') {
-        await startSearch(data.niche, data.location ?? '', { source: 'linkedin', enrichEmails: false, maxResults, leadTypes });
+        await startSearch(data.niche, data.location ?? '', { source: 'linkedin', enrichEmails: false, maxResults, leadTypes: [...LINKEDIN_LEAD_TYPES] });
       } else {
         await startSearch(data.niche, data.location ?? '');
       }
@@ -410,60 +411,23 @@ export default function SearchPage() {
                   <div>
                     <label className="block text-sm font-medium text-ice/70 mb-2 flex items-center gap-2">
                       <Users className="w-4 h-4 text-steel" />
-                      Max Leads
+                      Leads Needed
                     </label>
                     <select
                       value={maxResults}
                       onChange={(e) => setMaxResults(Number(e.target.value))}
                       className="w-full px-3 py-3 rounded-xl border border-ocean/30 bg-navy/60 text-offwhite outline-none focus:ring-2 focus:ring-steel/40"
                     >
-                      {[3, 5, 10, 20, 50].map(n => (
+                      {[3, 5, 10].map(n => (
                         <option key={n} value={n}>{n} leads</option>
                       ))}
                     </select>
                   </div>
                   <div className="md:col-span-2">
-                    <label className="block text-sm font-medium text-ice/70 mb-2 flex items-center gap-2">
-                      <Briefcase className="w-4 h-4 text-steel" />
-                      Lead Type
-                    </label>
-                    <div className="grid grid-cols-1 gap-3">
-                      {([
-                        { id: 'buyer', label: 'Freelancer Needed', desc: 'People/companies looking for freelancers/contractors' },
-                      ] as { id: 'buyer' | 'hiring' | 'agency_wanted'; label: string; desc: string }[]).map(opt => {
-                        const checked = leadTypes.includes(opt.id);
-                        return (
-                          <button
-                            key={opt.id}
-                            type="button"
-                            onClick={() => {
-                              if (opt.id !== 'buyer') return; // buyers only — hiring/agency removed
-                            }}
-                            className={`p-3 rounded-xl border text-left transition-all ${
-                              checked
-                                ? 'bg-sky-500/10 border-sky-500/40'
-                                : 'bg-navy/40 border-ocean/20 hover:border-ocean/40'
-                            }`}
-                          >
-                            <div className="flex items-center gap-2">
-                              <div className={`w-4 h-4 shrink-0 rounded border-2 flex items-center justify-center transition-colors ${
-                                checked ? 'border-sky-400 bg-sky-400' : 'border-steel/50'
-                              }`}>
-                                {checked && <svg className="w-3 h-3 text-navy" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="4"><path d="M5 13l4 4L19 7" strokeLinecap="round" strokeLinejoin="round"/></svg>}
-                              </div>
-                              <span className="text-sm font-semibold text-offwhite">{opt.label}</span>
-                            </div>
-                            <p className="text-[10px] text-ice/50 mt-1.5">{opt.desc}</p>
-                          </button>
-                        );
-                      })}
-                    </div>
-                  </div>
-                  <div className="md:col-span-2">
                     <p className="text-xs text-ice/60 leading-relaxed">
-                      We search LinkedIn posts for people & companies looking for freelancers — genuine
-                      buyers of your service — filtered to your country, and
-                      deliver exactly the number of leads you ask for.
+                      We search LinkedIn for genuine buyers of your service — freelancers and agencies actively
+                      looking for help (hiring/job-seeker posts are always excluded) — filtered to your country,
+                      and we deliver exactly the number of leads you ask for — no more, no less.
                     </p>
                   </div>
                   </>

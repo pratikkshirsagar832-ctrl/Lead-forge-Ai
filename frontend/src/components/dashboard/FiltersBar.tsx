@@ -64,7 +64,6 @@ export function FiltersBar() {
             >
               <option value="" style={{ color: '#cbd5e1', background: '#1e293b' }}>All Types</option>
               <option value="buyer" style={{ color: '#cbd5e1', background: '#1e293b' }}>Freelancer Needed</option>
-              <option value="hiring" style={{ color: '#cbd5e1', background: '#1e293b' }}>Hiring</option>
               <option value="agency_wanted" style={{ color: '#cbd5e1', background: '#1e293b' }}>Agency Wanted</option>
             </select>
           </div>

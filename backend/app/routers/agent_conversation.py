@@ -214,13 +214,14 @@ async def agent_chat(payload: dict, background_tasks: BackgroundTasks = Backgrou
         _reset_state(user_id)
         return _cookies_step(user_id)
 
-    # Cookies submission (from the UI cookie box).
-    if action == "submit_cookies" or (step == "cookies" and text.startswith("{")):
+    # Cookies submission (from the UI cookie box). Cookie-Editor exports a JSON
+    # ARRAY `[...]` (and rarely a storage-state object `{...}`), so accept both.
+    if action == "submit_cookies" or (step == "cookies" and text[:1] in ("[", "{")):
         cookies_raw = payload.get("cookies_json") or text
-        if cookies_raw.startswith("{"):
+        if cookies_raw[:1] in ("[", "{"):
             from app.config import get_settings
             settings = get_settings()
-            # Persist inline to the configured cookie source.
+            # Persist to the configured cookie source.
             _write_cookies_inline(cookies_raw)
             status = mem.cookie_status()
             if status.get("configured") and not status.get("expired"):
@@ -307,21 +308,45 @@ def _normalize_lead_type(text: str) -> str | None:
 
 
 def _write_cookies_inline(cookies_json: str) -> None:
-    """Persist cookies to the configured source so the scraper subprocess uses them."""
+    """Persist cookies to the configured source so the scraper subprocess uses them.
+
+    Writes to the SAME cookie file the backend reads at startup (the mounted
+    `sessions/linkedin_cookies.json`, already mounted into the container at
+    /app/sessions), then updates the in-memory setting so this very request sees
+    the new cookies immediately.
+    """
+    import json as _json
+    from pathlib import Path
+
     from app.config import get_settings
     settings = get_settings()
-    if settings.linkedin_cookies:
-        # already inline; update file mirror
-        pass
-    # Write to the cookie file (default sessions/linkedin_cookies.json).
-    from pathlib import Path
+
+    # Validate it's a real cookie payload (array of cookies or a storage-state obj).
+    try:
+        data = _json.loads(cookies_json)
+        if isinstance(data, dict):
+            # storage-state form must have a cookies list
+            if not data.get("cookies"):
+                raise ValueError("no cookies array")
+        elif isinstance(data, list):
+            if not data:
+                raise ValueError("empty")
+        else:
+            raise ValueError("not a list/dict")
+    except Exception as exc:  # noqa: BLE001
+        raise ValueError(f"invalid cookie JSON: {exc}") from exc
+
+    # Determine the cookie file path. __file__ = <backend>/app/routers/..., so
+    # parent.parent.parent = <backend> root -> <backend>/sessions/linkedin_cookies.json
+    # (in Docker: /app/sessions/..., which is the mounted volume).
     path = Path(settings.linkedin_cookies_file)
     if not path.is_absolute():
-        base = Path(__file__).resolve().parent.parent  # backend/
-        path = base / path
+        backend_root = Path(__file__).resolve().parent.parent.parent
+        path = backend_root / path
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(cookies_json, encoding="utf-8")
-    # Also update the in-memory config setting so this request sees it.
+
+    # Update the in-memory setting so this request sees it immediately.
     settings.linkedin_cookies = cookies_json
 
 

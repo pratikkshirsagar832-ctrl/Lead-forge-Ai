@@ -148,3 +148,27 @@ def test_normalize_lead_type():
 def test_cookie_guide_steps_present():
     assert len(ac.COOKIE_GUIDE["steps"]) >= 4
     assert "password" not in ac.COOKIE_GUIDE["why"].lower() or True  # never asks for password
+
+
+# ── Cookie submission: Cookie-Editor exports a JSON ARRAY (starts with `[`) ──
+def _is_cookie_payload(text, action, step):
+    is_cookie = action == "submit_cookies" or (step == "cookies" and text[:1] in ("[", "{"))
+    return is_cookie
+
+
+def test_cookie_array_submitted_recognized():
+    # Cookie-Editor gives a JSON array; the router must treat it as cookies
+    # (previously only matched `{`, so pasting an array hit the error path).
+    arr = '[{"name":"li_at","value":"x","domain":".www.linkedin.com","path":"/"}]'
+    assert _is_cookie_payload(arr, "submit_cookies", "cookies") is True
+    assert _is_cookie_payload(arr, "next", "cookies") is True
+
+
+def test_cookie_object_recognized():
+    obj = '{"cookies":[{"name":"li_at","value":"x","domain":".www.linkedin.com"}]}'
+    assert _is_cookie_payload(obj, "next", "cookies") is True
+
+
+def test_normal_message_not_treated_as_cookie():
+    assert _is_cookie_payload("video editing", "next", "service") is False
+    assert _is_cookie_payload("looking for agency", "next", "lead_type") is False

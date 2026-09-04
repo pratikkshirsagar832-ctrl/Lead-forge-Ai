@@ -540,18 +540,27 @@ _COUNTRY_NAME_FOR_CODE = {"US": "USA", "GB": "UK", "CA": "Canada", "IN": "India"
                           "NZ": "New Zealand", "IE": "Ireland", "NL": "Netherlands", "ES": "Spain"}
 
 
-def _add_country_bias(queries: list[str], country_codes: set[str]) -> list[str]:
+def _add_country_bias(queries: list[str], country_codes: set[str], iteration: int = 0) -> list[str]:
     """Soft discovery bias toward the requested country. NEVER a substitute for
-    the final deterministic country gate."""
+    the final deterministic country gate.
+
+    On the FIRST wave of a single-country request every query is country-scoped
+    (the broad duplicates return on later waves), so we stop paying harvest for
+    posts from wrong countries early in the run.
+    """
     if not country_codes:
         return queries
     name = _COUNTRY_NAME_FOR_CODE.get(next(iter(country_codes)).upper(), "")
     if not name:
         return queries
+    strict_first_wave = len(country_codes) == 1 and int(iteration) == 0
     out = []
     for q in queries:
-        out.append(q)
-        out.append(f"{q} {name}")
+        if strict_first_wave:
+            out.append(f"{q} {name}")
+        else:
+            out.append(q)
+            out.append(f"{q} {name}")
     return out
 
 
@@ -584,7 +593,7 @@ def generate_queries(lead_type: str, service: str, country_codes: set[str], iter
         _add(f"{buy_word} a freelance {base}")
         _add(f"{buy_word} freelance {base}")
 
-    queries = _add_country_bias(queries, country_codes)
+    queries = _add_country_bias(queries, country_codes, iteration)
     out, seen2 = [], set()
     for q in queries:
         key = _norm(q)

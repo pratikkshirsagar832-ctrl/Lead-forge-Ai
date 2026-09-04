@@ -98,27 +98,23 @@ def _mark_key_cooldown(key: str) -> None:
 
 
 def _ordered_keys() -> list[str]:
-    """Rotating view of configured keys: the PRIMARY key (APIFY_API_KEY)
-    is ALWAYS tried first, then the rest rotate from the cursor. Healthy
-    (non-cooldown) keys come before cooldown keys; revoked keys are skipped."""
+    """Round-robin view of configured keys (fair spread across accounts so no
+    single free-tier budget exhausts). Every call advances the cursor, so
+    sequential lane runs land on DIFFERENT healthy keys. Healthy (non-cooldown)
+    keys come before cooldown keys; revoked keys are skipped."""
     keys = _get_api_keys()
     if not keys:
         return []
-    primary = None
-    try:
-        primary = get_settings().apify_api_key or None
-    except Exception:
-        pass
+    # A single key should always be tried (avoids an empty ordering).
+    if len(keys) == 1:
+        return keys
 
     global _key_cursor
     with _key_lock:
         start = _key_cursor % len(keys)
         _key_cursor += 1
     rotated = keys[start:] + keys[:start]
-    if primary and primary in rotated:
-        rotated.remove(primary)
-        rotated.insert(0, primary)
-    # healthy first, cooldown keys at the end (so they are only tried as last resort)
+    # healthy first, cooldown keys at the end (last resort), revoked skipped
     live = [k for k in rotated if not _key_blacklisted(k)]
     healthy = [k for k in live if not _is_key_in_cooldown(k)]
     cooling = [k for k in live if _is_key_in_cooldown(k)]

@@ -194,7 +194,7 @@ export default function SearchPage() {
   const [source, setSource] = useState<'google_maps' | 'linkedin'>('google_maps');
   const sourceRef = useRef<'google_maps' | 'linkedin'>('google_maps');
   const [maxResults, setMaxResults] = useState(10);
-  const [leadTypes, setLeadTypes] = useState<('buyer' | 'hiring' | 'agency_wanted')[]>(['hiring', 'buyer']);
+  const [leadTypes, setLeadTypes] = useState<('buyer' | 'hiring' | 'agency_wanted')[]>(['buyer']);
   const requestedCount = useSearchStore((s) => s.requestedCount);
   const isUnlocked = useSearchStore((s) => s.unlocked);
   const unlockResults = useSearchStore((s) => s.unlockResults);
@@ -425,13 +425,11 @@ export default function SearchPage() {
                   <div className="md:col-span-2">
                     <label className="block text-sm font-medium text-ice/70 mb-2 flex items-center gap-2">
                       <Briefcase className="w-4 h-4 text-steel" />
-                      Lead Type (select any)
+                      Lead Type
                     </label>
-                    <div className="grid grid-cols-3 gap-3">
+                    <div className="grid grid-cols-1 gap-3">
                       {([
-                        { id: 'hiring', label: 'Hiring Posts', desc: 'Companies hiring freelancers/contractors' },
                         { id: 'buyer', label: 'Freelancer Needed', desc: 'People/companies looking for freelancers/contractors' },
-                        { id: 'agency_wanted', label: 'Agency Wanted', desc: 'Businesses seeking an agency to hire' },
                       ] as { id: 'buyer' | 'hiring' | 'agency_wanted'; label: string; desc: string }[]).map(opt => {
                         const checked = leadTypes.includes(opt.id);
                         return (
@@ -439,7 +437,7 @@ export default function SearchPage() {
                             key={opt.id}
                             type="button"
                             onClick={() => {
-                              setLeadTypes(prev => checked ? prev.filter(t => t !== opt.id) : [...prev, opt.id]);
+                              if (opt.id !== 'buyer') return; // buyers only — hiring/agency removed
                             }}
                             className={`p-3 rounded-xl border text-left transition-all ${
                               checked
@@ -463,8 +461,8 @@ export default function SearchPage() {
                   </div>
                   <div className="md:col-span-2">
                     <p className="text-xs text-ice/60 leading-relaxed">
-                      We search LinkedIn posts for buying signals matching your service — remote/contract hiring,
-                      people & companies looking for freelancers — filtered to your country, and
+                      We search LinkedIn posts for people & companies looking for freelancers — genuine
+                      buyers of your service — filtered to your country, and
                       deliver exactly the number of leads you ask for.
                     </p>
                   </div>

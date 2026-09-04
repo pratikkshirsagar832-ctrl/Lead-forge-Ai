@@ -13,3 +13,24 @@ __pycache__/
 *.tsbuildinfo
 npm-install.*.log
 
+# Secrets — never commit
+backend/.env
+backend/.env.*
+frontend/.env.local
+frontend/.env.*.local
+
+# Dependencies / environments
+**/node_modules/
+backend/.venv/
+**/.venv/
+
+# Local logs & build artifacts
+*.log
+backend/debug.log
+backend/info.log
+frontend/next-env.d.ts
+backend/google-maps-scraper/google-maps-scraper.exe
+backend/google-maps-scraper/env/
+
+# Duplicate actor repo (deployed separately from linkedin-post-scraper)
+backend/linkedin-post-scraper/

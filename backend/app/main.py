@@ -8,7 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.config import get_settings
 from app.database import get_supabase_admin
 
-from app.routers import search, leads, dashboard, ai, auth, subscriptions, agent, agent_conversation
+from app.routers import search, leads, dashboard, ai, auth, subscriptions, posts
 
 logging.basicConfig(
     level=logging.INFO,
@@ -72,11 +72,11 @@ def create_app() -> FastAPI:
     app.include_router(auth.router)
     app.include_router(subscriptions.router)
     app.include_router(search.router)
-    app.include_router(agent.router)
-    app.include_router(agent_conversation.router)
     app.include_router(leads.router)
     app.include_router(dashboard.router)
     app.include_router(ai.router)
+    app.include_router(posts.router)
+    posts.register_lead_posts_endpoint(app)
 
     @app.get("/", tags=["Root"])
     async def root():

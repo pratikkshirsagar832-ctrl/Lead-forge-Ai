@@ -6,7 +6,7 @@ place, the canonical intent model, location hard-gate, intent-specific query
 generation, deterministic pre-filters, canonical acceptance + quality scoring,
 telemetry and the exact-count iterative orchestrator. It delegates:
 
-  - Discovery         -> app.services.hyperagent_browser  (browser-use, logged-in)
+  - Discovery         -> app.services.apify_service (harvest keyword post search)
   - AI qualification  -> app.services.ai_service     (DeepSeek V4 Flash, fail-closed)
 
 PRINCIPLE:
@@ -1044,10 +1044,9 @@ async def _save_leads(supabase, search_id: str, user_id: str, leads: list[dict],
 
 
 async def _enrich_profiles_for(promising: list[dict]) -> None:
-    # Profile-headline enrichment is no longer needed: the HyperAgent browser
-    # client already captures author name / headline / company / location from
-    # the LinkedIn cards it discovers. This hook is kept a no-op for
-    # compatibility with the engine's call site.
+    # Profile-headline enrichment is no longer needed: harvest post-search
+    # already returns author name / headline / company / location per post.
+    # This hook is kept a no-op for compatibility with the engine's call site.
     return
     missing = [c for c in promising if not (c.get("headline") or "").strip()]
     if not missing:
@@ -1091,11 +1090,7 @@ def _location_from_profile(profile: dict) -> str:
 
 
 def _discover(queries: list[str], max_posts_per_lane: int = MAX_POSTS_PER_LANE) -> tuple[int, int, list[dict], list[str]]:
-    """Apify-backed discovery for the SEARCH-PAGE LinkedIn path.
-
-    NOTE: The HyperAgent page uses a browser-use discover instead (see
-    hyperagent_service). This is the search page's provider.
-    """
+    """Apify (harvest) keyword post-search discovery for the LinkedIn search path."""
     from app.services.apify_service import run_lane_search
     n_lanes = min(3, max(1, (len(queries) + 3) // 4))
     lanes = [[] for _ in range(n_lanes)]
@@ -1119,8 +1114,7 @@ async def run_linkedin_engine(
 ) -> dict:
     """Strict exact-count iterative engine (Apify-backed, OpenAI-classified).
 
-    NOTE: This is the SEARCH-PAGE path (uses the restored Apify provider). The
-    HyperAgent page uses run_hyperagent_engine (browser-use + DeepSeek).
+    NOTE: This is the SEARCH-PAGE path (harvest keyword post-search provider).
     """
     from app.services.ai_service import (
         attach_classification,

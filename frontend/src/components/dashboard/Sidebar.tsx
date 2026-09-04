@@ -22,7 +22,6 @@ import {
   ArrowUpRight,
   Kanban,
   UsersRound,
-  Bot,
 } from 'lucide-react';
 import { motion } from 'framer-motion';
 import { ThemeToggle } from '@/components/ThemeToggle';
@@ -30,7 +29,6 @@ import { ThemeToggle } from '@/components/ThemeToggle';
 const navItems = [
   { name: 'Dashboard', href: '/dashboard', icon: LayoutDashboard },
   { name: 'New Search', href: '/dashboard/search', icon: Search },
-  { name: 'HyperAgent', href: '/dashboard/agent', icon: Bot },
   { name: 'Leads', href: '/dashboard/leads', icon: Users },
   { name: 'Lead Manager', href: '/dashboard/pipeline', icon: Kanban },
   { name: 'Team', href: '/dashboard/team', icon: UsersRound },

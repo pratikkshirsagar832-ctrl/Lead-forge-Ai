@@ -46,24 +46,15 @@ class Settings(BaseSettings):
     apify_api_key_23: str = ""
     apify_api_key_24: str = ""
 
+    # LinkedIn public post-scraper actor (profile-URL -> public post history).
+    # The actor is private and owned by the account whose token is set here;
+    # when empty, the shared APIFY_API_KEY rotation is used as a fallback.
+    apify_post_scraper_actor_id: str = "2nZ0rjo0R3O4fzBy3"
+    apify_post_scraper_token: str = ""
+
     deepseek_api_key: str = ""
     deepseek_base_url: str = "https://api.deepseek.com"
     deepseek_model: str = "deepseek-v4-flash"
-
-    # HyperAgent (browser-use LinkedIn agent)
-    # LinkedIn auth via cookies: either paste the Cookie-Editor export JSON
-    # directly (linkedin_cookies) or point to a file (linkedin_cookies_file).
-    # Empty => guest mode (Jobs + company pages only).
-    linkedin_cookies: str = ""
-    linkedin_cookies_file: str = "sessions/linkedin_cookies.json"
-    hyperagent_headless: bool = True
-    hyperagent_python: str = ""
-    # Use the genuine autonomous HyperAgent (DeepSeek brain + browser-use Agent)
-    # for discovery instead of deterministic DOM probes.
-    hyperagent_use_agent: bool = True
-    # Optional residential proxy so LinkedIn doesn't flag the datacenter IP when
-    # running the agent. Format: http://user:pass@host:port or socks5://host:port
-    hyperagent_proxy: str = ""
 
     razorpay_key_id: str = ""
     razorpay_key_secret: str = ""
@@ -107,35 +98,6 @@ class Settings(BaseSettings):
     @property
     def is_production(self) -> bool:
         return self.environment == "production"
-
-    @property
-    def linkedin_cookies_json(self) -> str:
-        """Resolve LinkedIn cookies: inline JSON (if set) else read the file.
-
-        The default cookie file is backend/sessions/linkedin_cookies.json, which
-        resolves to /app/sessions/linkedin_cookies.json in Docker and
-        backend/sessions/linkedin_cookies.json in development.
-        """
-        if self.linkedin_cookies and self.linkedin_cookies.strip():
-            return self.linkedin_cookies
-        if not self.linkedin_cookies_file:
-            return ""
-        candidates = []
-        p = Path(self.linkedin_cookies_file)
-        if p.is_absolute():
-            candidates.append(p)
-        else:
-            # relative to the backend root (parent of app/)
-            candidates.append(Path(__file__).resolve().parent.parent / p)
-            candidates.append(Path("/app") / p)
-            candidates.append(p)  # relative to CWD
-        for cand in candidates:
-            try:
-                if cand.exists():
-                    return cand.read_text(encoding="utf-8").strip()
-            except Exception:
-                continue
-        return ""
 
     @property
     def scraper_binary_path(self) -> Path:

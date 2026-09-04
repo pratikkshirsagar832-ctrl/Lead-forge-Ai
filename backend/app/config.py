@@ -58,6 +58,9 @@ class Settings(BaseSettings):
     linkedin_cookies_file: str = "sessions/linkedin_cookies.json"
     hyperagent_headless: bool = True
     hyperagent_python: str = ""
+    # Use the genuine autonomous HyperAgent (DeepSeek brain + browser-use Agent)
+    # for discovery instead of deterministic DOM probes.
+    hyperagent_use_agent: bool = True
     # Optional residential proxy so LinkedIn doesn't flag the datacenter IP when
     # running the agent. Format: http://user:pass@host:port or socks5://host:port
     hyperagent_proxy: str = ""

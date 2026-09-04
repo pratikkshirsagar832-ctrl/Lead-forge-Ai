@@ -124,15 +124,19 @@ def make_browser_discover(
     max_per_query: int = MAX_POSTS_PER_LANE,
     enrich_locations: bool = True,
     proxy: str = "",
+    use_agent: bool = True,
+    lead_type: str = "",
 ) -> Callable:
     """Return a SYNC discover(queries) -> (ok_lanes, total_lanes, items, errors).
 
     Each call spawns the isolated browser-use scraper subprocess for the query
-    batch. When `enrich_locations` is on and `location` (a country request) is
-    given, it also fetches each author's profile location so the engine's
-    country hard-gate can validate post leads accurately. A transient failure
-    returns empty from the item lane (never raises), so the engine can retry
-    with diversified queries across iterations.
+    batch. When `use_agent` is on, the subprocess runs the GENUINE autonomous
+    HyperAgent (DeepSeek brain + browser-use hands + the LinkedIn system prompt),
+    which reasons, navigates and extracts — higher quality than deterministic DOM
+    probes. When `enrich_locations` is on and `location` (a country request) is
+    given, it also fetches each author's profile location so the engine's country
+    hard-gate can validate post leads accurately. A transient failure returns empty
+    from the item lane (never raises), so the engine can retry across iterations.
     """
     def discover(
         queries: list[str], max_posts_per_lane: int = MAX_POSTS_PER_LANE
@@ -151,6 +155,11 @@ def make_browser_discover(
                 "max_per_query": int(max_posts_per_lane),
                 "headless": bool(headless),
                 "proxy": proxy,
+                "agent": bool(use_agent),
+                "service": queries[0] if queries else "",
+                "lead_type": lead_type,
+                "country": location,
+                "count": int(max_posts_per_lane),
             }
             try:
                 res = _run_scraper(payload)
@@ -294,6 +303,8 @@ async def run_hyperagent_engine(
         location=request.country_text,
         default_kind=default_kind,
         proxy=settings.hyperagent_proxy,
+        use_agent=settings.hyperagent_use_agent,
+        lead_type=request.primary_lead_type(),
     )
 
     return await _run_engine_with_externals(

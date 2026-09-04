@@ -36,6 +36,20 @@ const LEAD_TYPE_LABELS: Record<string, string> = {
   agency_wanted: 'Agency Wanted',
 };
 
+const COOKIE_GUIDE = {
+  title: 'Connect LinkedIn',
+  what: 'The agent browses LinkedIn as YOU so it can read posts that are hidden from guests.',
+  steps: [
+    'Install the Cookie-Editor extension (Chrome/Edge/Firefox).',
+    'Log into LinkedIn in that browser (linkedin.com).',
+    'Open the page, click the Cookie-Editor icon.',
+    'Click Export → Export JSON. Copy the whole JSON array.',
+    'Paste it into the cookie box below (or save as sessions/linkedin_cookies.json).',
+  ],
+  why: "It stays on YOUR device / server. We never ask for your LinkedIn password.",
+  does: 'Lets the agent read post & people search results, qualify leads, and save them for you.',
+};
+
 function safeDistance(date?: string) {
   if (!date) return '—';
   try {
@@ -80,13 +94,22 @@ export default function AgentPage() {
             role: 'agent',
             text: data.cookie_status?.configured && !data.cookie_status?.expired
               ? 'Your LinkedIn connection is active. What service are you looking for?'
-              : `To find leads on LinkedIn, first let me connect your account.`,
+              : 'To find leads on LinkedIn, first let me connect your account.',
             guide: data.guide || undefined,
           },
         ]);
       }
     } catch (e) {
+      // If the chat state can't load, still show a usable welcome so the page
+      // is never a blank chat area.
       console.error('Failed to load agent chat state', e);
+      if (!messages.length) {
+        setMessages([{
+          role: 'agent',
+          text: 'Hi! I\'m your HyperAgent. Tell me what service you need leads for and I\'ll hunt LinkedIn for you.',
+          guide: COOKIE_GUIDE,
+        }]);
+      }
     }
   };
 
@@ -313,8 +336,8 @@ export default function AgentPage() {
                             {msg.guide.why && (
                               <p className="text-[11px] text-ice/40 mt-3 italic">💡 {msg.guide.why}</p>
                             )}
-                            {/* Cookie paste box */}
-                            {needsCookies && (
+                            {/* Cookie paste box — always available during the cookie step */}
+                            {(step === 'cookies') && (
                               <div className="mt-3">
                                 <textarea
                                   placeholder='Paste the Cookie-Editor JSON here (starts with [ ... ])'
@@ -389,28 +412,22 @@ export default function AgentPage() {
 
             {/* Input */}
             <div className="px-6 py-4 border-t border-ocean/30 bg-navy/20">
-              {needsCookies ? (
-                <p className="text-sm text-ice/50 text-center py-2">
-                  Connect LinkedIn first to begin. Export your cookies with Cookie-Editor ↗
-                </p>
-              ) : (
-                <div className="flex items-center gap-3">
-                  <input
-                    value={input}
-                    onChange={(e) => setInput(e.target.value)}
-                    onKeyDown={(e) => e.key === 'Enter' && handleSend()}
-                    placeholder="Type your answer… (e.g. video editing, 10 leads, United States)"
-                    className="flex-1 px-4 py-3 rounded-xl bg-navy/60 border border-ocean/30 text-offwhite placeholder-ice/30 outline-none focus:border-steel/50 focus:bg-navy/80 transition-all"
-                  />
-                  <button
-                    onClick={() => handleSend()}
-                    disabled={!input.trim() || isThinking}
-                    className="flex items-center gap-2 px-5 py-3 rounded-xl bg-gradient-to-r from-primary to-brand-accent text-offwhite font-semibold disabled:opacity-50 hover:opacity-90 transition-opacity"
-                  >
-                    <Send className="w-4 h-4" />
-                  </button>
-                </div>
-              )}
+              <div className="flex items-center gap-3">
+                <input
+                  value={input}
+                  onChange={(e) => setInput(e.target.value)}
+                  onKeyDown={(e) => e.key === 'Enter' && handleSend()}
+                  placeholder="Type your answer… (e.g. video editing, 10 leads, United States)"
+                  className="flex-1 px-4 py-3 rounded-xl bg-navy/60 border border-ocean/30 text-offwhite placeholder-ice/30 outline-none focus:border-steel/50 focus:bg-navy/80 transition-all"
+                />
+                <button
+                  onClick={() => handleSend()}
+                  disabled={!input.trim() || isThinking}
+                  className="flex items-center gap-2 px-5 py-3 rounded-xl bg-gradient-to-r from-primary to-brand-accent text-offwhite font-semibold disabled:opacity-50 hover:opacity-90 transition-opacity"
+                >
+                  <Send className="w-4 h-4" />
+                </button>
+              </div>
             </div>
           </GlassCard>
         </div>

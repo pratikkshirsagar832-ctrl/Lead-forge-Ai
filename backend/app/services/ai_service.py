@@ -177,6 +177,14 @@ Grade the match of the requested service to what the author needs:
 - adjacent: commercially connected and plausibly part of the same engagement ("ecommerce development" for "Shopify Development"; "web development" for "Website development"). Accept only when the post clearly connects them.
 - unrelated: does not materially connect. NEVER accept ("SEO" or "graphic design" for "Shopify Development"). Do NOT stretch adjacent into a match if the post is about something else.
 
+FINAL GATE — before you ever mark is_qualified=true, confirm ALL of these:
+  1. SERVICE: the author needs the EXACT requested service or its clear equivalent — never an adjacent hobby, a different service, or a mention in passing.
+  2. DIRECTION: the author is the BUYER sourcing an external provider. Never a seller, job-seeker, marketplace, recruiter, or advice-giver.
+  3. AUTHORITY: the author appears to own/decide the need (founder, owner, exec, marketing/ops lead). A student, anonymous reposter, or random commenter is not enough on its own.
+  4. EVIDENCE: you can QUOTE the exact phrase proving the need. If you cannot quote a concrete sourcing phrase, there is no evidence — is_qualified=false.
+Additionally: if the post's natural intent differs from the requested intent (e.g. an individual freelance need when agency_wanted was requested), label it HONESTLY (freelancer_needed / agency_wanted / hiring / irrelevant) — the strict type gate will reject mismatches. Never force a label to fit the request.
+
+
 RULE: if two grades are plausible, pick the LOWER (more conservative). service_match_score MUST be consistent with service_relevance: exact ≈ 90-100, equivalent ≈ 75-89, adjacent ≈ 55-74, unrelated ≤ 30.
 
 ═══════════════════════════════════════════════════════════════

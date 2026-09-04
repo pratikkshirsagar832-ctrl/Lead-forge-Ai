@@ -31,6 +31,7 @@ async def _scrape(req: dict) -> dict:
     location = req.get("location", "")
     max_per = int(req.get("max_per_query", 15))
     headless = bool(req.get("headless", True))
+    proxy = req.get("proxy", "")
 
     ok, errors, items = 0, [], []
     if not queries and not req.get("enrich_urls"):
@@ -39,11 +40,11 @@ async def _scrape(req: dict) -> dict:
     # Mode: location-enrichment only (no new search).
     enrich_urls = req.get("enrich_urls") or []
     if enrich_urls:
-        async with LinkedInBrowser(headless=headless, cookies_json=cookies_json) as browser:
+        async with LinkedInBrowser(headless=headless, cookies_json=cookies_json, proxy=proxy) as browser:
             locs = await browser.enrich_authors(enrich_urls, int(req.get("enrich_max", 20)))
             return {"ok": 1, "total": 1, "items": [], "errors": [], "locations": locs}
 
-    async with LinkedInBrowser(headless=headless, cookies_json=cookies_json) as browser:
+    async with LinkedInBrowser(headless=headless, cookies_json=cookies_json, proxy=proxy) as browser:
         for q in queries[:3]:
             try:
                 if kind == "job":

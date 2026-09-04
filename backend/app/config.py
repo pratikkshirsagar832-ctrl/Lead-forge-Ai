@@ -58,6 +58,9 @@ class Settings(BaseSettings):
     linkedin_cookies_file: str = "sessions/linkedin_cookies.json"
     hyperagent_headless: bool = True
     hyperagent_python: str = ""
+    # Optional residential proxy so LinkedIn doesn't flag the datacenter IP when
+    # running the agent. Format: http://user:pass@host:port or socks5://host:port
+    hyperagent_proxy: str = ""
 
     razorpay_key_id: str = ""
     razorpay_key_secret: str = ""

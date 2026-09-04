@@ -116,6 +116,7 @@ class LinkedInBrowser:
         cookies_json: str = "",
         allowed_domains: list[str] | None = None,
         user_data_dir: str = "",
+        proxy: str = "",
     ) -> None:
         _browser_use()  # fail fast with a clear error if not installed
         self.headless = headless
@@ -125,6 +126,7 @@ class LinkedInBrowser:
         self.domain = "www.linkedin.com"
         self.allowed_domains = allowed_domains or [self.domain]
         self.user_data_dir = user_data_dir
+        self.proxy = (proxy or "").strip()
         self._session = None
         self._page = None
 
@@ -178,6 +180,7 @@ class LinkedInBrowser:
             allowed_domains=self.allowed_domains,
             user_data_dir=self.user_data_dir or None,
             storage_state=self._storage_state(),
+            proxy=_build_proxy_settings(self.proxy),
         )
         self._session = BrowserSession(browser_profile=bp)
         await self._session.start()
@@ -503,6 +506,33 @@ class LinkedInBrowser:
 
 def _settle() -> float:
     return PAGE_SETTLE_SECONDS
+
+
+def _build_proxy_settings(proxy: str):
+    """Parse a proxy URL into browser-use ProxySettings, or None if empty.
+
+    Accepts: http://user:pass@host:port, socks5://host:port, host:port
+    """
+    if not proxy:
+        return None
+    from urllib.parse import urlparse
+    from browser_use.browser.profile import ProxySettings
+    raw = proxy.strip()
+    if "://" not in raw:
+        raw = "http://" + raw
+    try:
+        p = urlparse(raw)
+    except Exception:  # noqa: BLE001
+        logger.warning("HyperAgent: could not parse proxy URL %s", proxy)
+        return None
+    scheme = p.scheme or "http"
+    host = p.hostname or ""
+    port = p.port
+    if not host or not port:
+        logger.warning("HyperAgent: proxy URL must include host:port — got %s", proxy)
+        return None
+    server = f"{scheme}://{host}:{port}"
+    return ProxySettings(server=server, username=p.username or None, password=p.password or None)
 
 
 # ── DOM → raw item mapping ─────────────────────────────────────────────────

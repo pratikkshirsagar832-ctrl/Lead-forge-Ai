@@ -123,6 +123,7 @@ def make_browser_discover(
     default_kind: str = "post",
     max_per_query: int = MAX_POSTS_PER_LANE,
     enrich_locations: bool = True,
+    proxy: str = "",
 ) -> Callable:
     """Return a SYNC discover(queries) -> (ok_lanes, total_lanes, items, errors).
 
@@ -149,6 +150,7 @@ def make_browser_discover(
                 "location": location,
                 "max_per_query": int(max_posts_per_lane),
                 "headless": bool(headless),
+                "proxy": proxy,
             }
             try:
                 res = _run_scraper(payload)
@@ -162,13 +164,13 @@ def make_browser_discover(
 
         # Post leads carry no country; enrich authors when a country is requested.
         if enrich_locations and location and default_kind != "job":
-            items = _enrich_items_locations(items, cookies_json, headless, errors)
+            items = _enrich_items_locations(items, cookies_json, headless, errors, proxy)
         return ok, lane_count, items, errors
 
     return discover
 
 
-def _enrich_items_locations(items: list[dict], cookies_json: str, headless: bool, errors: list[str]) -> list[dict]:
+def _enrich_items_locations(items: list[dict], cookies_json: str, headless: bool, errors: list[str], proxy: str = "") -> list[dict]:
     """Fetch each post author's profile location and inject it into the item so
     the engine's country gate can validate. Non-fatal on failure."""
     urls = []
@@ -181,7 +183,7 @@ def _enrich_items_locations(items: list[dict], cookies_json: str, headless: bool
     if not urls:
         return items
     try:
-        payload = {"enrich_urls": urls[:20], "enrich_max": 20, "cookies_json": cookies_json, "headless": headless}
+        payload = {"enrich_urls": urls[:20], "enrich_max": 20, "cookies_json": cookies_json, "headless": headless, "proxy": proxy}
         res = _run_scraper(payload)
         locs = res.get("locations") or {}
     except ScraperUnavailableError as exc:
@@ -291,6 +293,7 @@ async def run_hyperagent_engine(
         cookies_json=settings.linkedin_cookies_json,
         location=request.country_text,
         default_kind=default_kind,
+        proxy=settings.hyperagent_proxy,
     )
 
     return await _run_engine_with_externals(

@@ -270,3 +270,12 @@ def test_location_from_header_skips_language_and_headline():
     h = "Vishal trivedi · Українська (Ukrainian) · · 3rd · CEO | Growth · · Dehradun, India · · Contact info · Vien"
     assert hb._location_from_header(h) == "Dehradun, India"
 
+
+# ── Proxy parsing ───────────────────────────────────────────────────────────
+def test_proxy_empty_returns_none():
+    # Empty proxy must map to None (no proxy). This path returns before the
+    # browser_use import, so it works even in the CI venv without browser_use.
+    from app.services.hyperagent_browser import _build_proxy_settings
+    assert _build_proxy_settings("") is None
+
+

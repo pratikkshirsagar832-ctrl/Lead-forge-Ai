@@ -75,7 +75,10 @@ class LeadType(str, Enum):
     UNKNOWN = "unknown"
 
 
-REQUESTABLE_INTENTS = {LeadType.FREELANCER_NEEDED.value, LeadType.HIRING.value, LeadType.AGENCY_WANTED.value}
+# Product policy: only genuine service buyers are requestable — freelancer-needed
+# (buyer) + agency-wanted. Hiring / job-seeker intents are never requested; the
+# classifier still labels them internally so they can be hard-rejected.
+REQUESTABLE_INTENTS = {LeadType.FREELANCER_NEEDED.value, LeadType.AGENCY_WANTED.value}
 
 WIRE_TO_CANONICAL = {"buyer": LeadType.FREELANCER_NEEDED.value, "hiring": LeadType.HIRING.value, "agency_wanted": LeadType.AGENCY_WANTED.value}
 CANONICAL_TO_WIRE = {LeadType.FREELANCER_NEEDED.value: "buyer", LeadType.HIRING.value: "hiring", LeadType.AGENCY_WANTED.value: "agency_wanted"}
@@ -1044,49 +1047,10 @@ async def _save_leads(supabase, search_id: str, user_id: str, leads: list[dict],
 
 
 async def _enrich_profiles_for(promising: list[dict]) -> None:
-    # Profile-headline enrichment is no longer needed: harvest post-search
-    # already returns author name / headline / company / location per post.
-    # This hook is kept a no-op for compatibility with the engine's call site.
+    # Profile enrichment is retired: harvest post-search already returns author
+    # name / headline / company / location per post. Kept as a no-op for the
+    # engine's call site.
     return
-    missing = [c for c in promising if not (c.get("headline") or "").strip()]
-    if not missing:
-        return
-    try:
-        from app.services.apify_service import fetch_profile_details
-        enrich_urls = [c["linkedin_url"] for c in missing[:PROFILE_ENRICHMENT_CAP]]
-        profiles = await asyncio.to_thread(fetch_profile_details, enrich_urls, "basic")
-        by_url = {(p.get("url") or "").rstrip("/").lower(): p for p in profiles if isinstance(p, dict)}
-        for c in promising:
-            p = by_url.get((c.get("linkedin_url") or "").rstrip("/").lower())
-            if not p:
-                continue
-            c["headline"] = (p.get("headline") or c.get("headline") or "")[:500]
-            c["company"] = _company_from_profile(p) or c.get("company") or ""
-            c["location"] = _location_from_profile(p) or c.get("location") or ""
-    except Exception as e:
-        logger.warning(f"[LinkedIn] profile enrichment skipped: {e}")
-
-
-def _company_from_profile(profile: dict) -> str:
-    positions = profile.get("currentPosition") or []
-    for pos in positions:
-        if isinstance(pos, dict):
-            name = pos.get("companyName") or pos.get("name") or (pos.get("company") or {}).get("name")
-            if name:
-                return str(name)[:100]
-    return ""
-
-
-def _location_from_profile(profile: dict) -> str:
-    location = profile.get("location") or {}
-    if isinstance(location, dict):
-        text = location.get("linkedinText")
-        if text:
-            return text
-        parsed = location.get("parsed") or {}
-        if isinstance(parsed, dict) and parsed.get("text"):
-            return parsed["text"]
-    return ""
 
 
 def _discover(queries: list[str], max_posts_per_lane: int = MAX_POSTS_PER_LANE) -> tuple[int, int, list[dict], list[str]]:

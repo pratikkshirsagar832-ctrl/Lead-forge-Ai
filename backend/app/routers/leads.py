@@ -40,7 +40,7 @@ router = APIRouter(prefix="/api/leads", tags=["Leads"])
 async def list_leads(
     search_id: Optional[str] = Query(None, description="Filter by search ID"),
     source: Optional[str] = Query(None, description="Filter by source (google_maps/linkedin)"),
-    post_type: Optional[str] = Query(None, description="Filter LinkedIn leads by post type (buyer/agency/hiring)"),
+    post_type: Optional[str] = Query(None, description="Filter LinkedIn leads by post type (buyer/agency_wanted)"),
     lead_category: Optional[str] = Query(None, description="Filter by category (hot/warm)"),
     user_status: Optional[str] = Query(None, description="Filter by user status"),
     is_favorite: Optional[bool] = Query(None, description="Filter favorites only"),
@@ -131,7 +131,7 @@ CSV_EXPORT_PLANS = {"pro", "agency"}
 async def export_leads_csv(
     search_id: Optional[str] = Query(None, description="Filter by search ID"),
     source: Optional[str] = Query(None, description="Filter by source (google_maps/linkedin)"),
-    post_type: Optional[str] = Query(None, description="Filter LinkedIn leads by post type (buyer/agency/hiring)"),
+    post_type: Optional[str] = Query(None, description="Filter LinkedIn leads by post type (buyer/agency_wanted)"),
     lead_category: Optional[str] = Query(None),
     user_status: Optional[str] = Query(None),
     is_favorite: Optional[bool] = Query(None),

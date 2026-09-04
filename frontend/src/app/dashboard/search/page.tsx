@@ -426,7 +426,7 @@ export default function SearchPage() {
                   <div className="md:col-span-2">
                     <p className="text-xs text-ice/60 leading-relaxed">
                       We search LinkedIn for genuine buyers of your service — freelancers and agencies actively
-                      looking for help (hiring/job-seeker posts are always excluded) — filtered to your country,
+                      looking for help (seller & job-seeker posts are always excluded) — filtered to your country,
                       and we deliver exactly the number of leads you ask for — no more, no less.
                     </p>
                   </div>

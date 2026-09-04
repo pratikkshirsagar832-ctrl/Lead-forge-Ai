@@ -40,7 +40,9 @@ def test_to_canonical_mapping():
 
 
 def test_parse_wire_lead_types():
-    assert lp.parse_wire_lead_types(["buyer", "hiring"]) == ["freelancer_needed", "hiring"]
+    # Product policy: hiring is never requestable — it is filtered out even if
+    # passed by an (old) client. Only freelancer-needed + agency-wanted remain.
+    assert lp.parse_wire_lead_types(["buyer", "hiring"]) == ["freelancer_needed"]
     assert lp.parse_wire_lead_types(["agency_wanted"]) == ["agency_wanted"]
     assert lp.parse_wire_lead_types(["bad", None]) == []
     assert lp.parse_wire_lead_types(None) == []

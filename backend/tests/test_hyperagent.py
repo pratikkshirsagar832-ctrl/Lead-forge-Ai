@@ -231,6 +231,25 @@ def test_post_block_to_item_parses_real_feed():
     assert item["engagement"].get("likes") == 121
 
 
+def test_post_block_rejects_boilerplate():
+    # Nav / sign-in chrome must never be treated as a post.
+    assert hb._post_block_to_item(
+        "",  # no author url
+        "Skip to main content LinkedIn Top Content People Learning Jobs Games Join now",
+    ) is None
+    assert hb._post_block_to_item("https://www.linkedin.com/in/x", "Sign in ... find your dream job and build your career") is None
+    # Too short even with a valid author link.
+    assert hb._post_block_to_item("https://www.linkedin.com/in/x", "Feed post A · short") is None
+
+
+def test_post_block_rejects_partial_author():
+    # A post requires an /in/ author URL; page text without it is boilerplate.
+    assert hb._post_block_to_item(
+        "https://www.linkedin.com/company/acme",
+        "Some long paragraph of generic page text that is at least forty characters long.",
+    ) is None
+
+
 def test_post_block_to_item_rejects_short():
     assert hb._post_block_to_item("https://www.linkedin.com/in/x", "Feed post A · short") is None
 

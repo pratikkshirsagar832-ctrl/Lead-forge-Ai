@@ -286,7 +286,7 @@ class LinkedInBrowser:
             return []
 
         # Lazy-render: scroll a few times so LinkedIn hydrates the result cards.
-        await self._scroll_to_render()
+        await self._scroll_to_render(rounds=6)
 
         items: list[dict] = []
         if kind == "job":
@@ -295,9 +295,71 @@ class LinkedInBrowser:
             # For post/people feeds the robust path is the JS probe that pairs
             # each author profile link with the text of its post container.
             items = await self._extract_posts_by_author(max_items)
+            # If the pairing found nothing (LinkedIn's lazy rendering is
+            # nondeterministic), fall back to splitting the full page text into
+            # "Feed post <author> ..." blocks, which is far more reliable.
+            if not items:
+                items = self._text_post_splitter(await self._safe_body_text(), max_items)
         if not items:
             items = self._text_blocks_fallback(await self._safe_body_text(), max_items)
         logger.info("HyperAgent: collected %d %s items from %s", len(items), kind, url)
+        return items
+
+    def _text_post_splitter(self, body: str, max_items: int) -> list[dict]:
+        """Split the full page innerText into real posts by the 'Feed post <name>'
+        markers LinkedIn uses, pairing each with the author's profile URL when the
+        name is present (author URL is recovered in a later profile pass)."""
+        if not body:
+            return []
+        # Each post begins with "Feed post <Author Name>" then optional meta lines
+        # and the body, ending at the next "Feed post" or the engagement footer.
+        parts = re.split(r"(?i)\bfeed post\b", body)
+        # Also fall back to plain "Post" markers.
+        if len(parts) < 2:
+            parts = re.split(r"(?i)\npost\b", body)
+        items: list[dict] = []
+        seen_names: set[str] = set()
+        for chunk in parts[1:]:
+            chunk = " ".join(chunk.split())
+            if len(chunk) < 50:
+                continue
+            # First token(s) up to a delimiter is the author name (may be 1-3 words).
+            m = re.match(r"^([A-Z][A-Za-z.'-]+(?:\s+[A-Z][A-Za-z.'-]+){0,3})\s+", chunk)
+            author = m.group(1).strip() if m else ""
+            if not author or author.lower() in ("post", "news", "jobs"):
+                continue
+            # The real body starts after the author/headline/connection meta,
+            # which always ends at "Follow" (or "Connect"/"Message") in feed text.
+            body_text = chunk
+            for marker in (" Follow ", " Follow·", " Follow ", "· Follow", " Follow"):
+                idx = body_text.find(marker)
+                if idx > 0:
+                    body_text = body_text[idx + len(marker):]
+                    break
+            # Strip trailing engagement/footer chrome.
+            for cut in (" reactions", " comments", " Like · ", " · Comment", " Repost", "… more", " Comment ·"):
+                i = body_text.rfind(cut)
+                if i > 0:
+                    body_text = body_text[:i]
+                    break
+            body_text = " ".join(body_text.split())
+            low = (body_text + author).lower()
+            if any(mk in low for mk in ("skip to main content", "join now", "find your dream job", "linkedin membership")):
+                continue
+            if len(body_text) < 40:
+                continue
+            key = author.lower()
+            if key in seen_names:
+                continue
+            seen_names.add(key)
+            items.append({
+                "author": {"url": "", "name": author, "info": ""},
+                "content": body_text[:3000],
+                "postedAt": None,
+                "engagement": {},
+            })
+            if len(items) >= max_items:
+                break
         return items
 
     async def _scroll_to_render(self, rounds: int = 4) -> None:
@@ -628,6 +690,11 @@ def _post_block_to_item(author_url: str, text: str) -> dict | None:
     reactions = _num_from(_REACTIONS_RE.search(text))
     comments = _num_from(_COMMENTS_RE.search(text))
 
+    # Reject page chrome / boilerplate so we don't feed the classifier junk
+    # (sign-in banner, nav, search suggestions, get-the-app, footer, etc.).
+    if _is_boilerplate(body, author_url, author):
+        return None
+
     item = {
         "author": {"url": author_url, "name": author, "info": headline},
         "content": body[:3000],
@@ -644,6 +711,33 @@ def _name_from_url(author_url: str) -> str:
     parts = [p for p in re.split(r"[-_+]", slug) if p][:3]
     name = " ".join(p.title() for p in parts if len(p) > 1)
     return name or slug
+
+
+# Page chrome / boilerplate that must never be treated as a post.
+_BOILERPLATE_MARKERS = (
+    "skip to main content", "skip to search", "skip to footer", "join now",
+    "sign in", "find your dream job", "build your career", "people learning",
+    "jobs games", "top content", "linkedin corporation", "privacy & terms",
+    "help center", "accessibility", "get the linkedin app", "notifications",
+    "recent entity history", "suggestions available",
+)
+
+
+def _is_boilerplate(body: str, author_url: str, author_name: str) -> bool:
+    low = (body or "").lower()
+    # A real post has an in-repo author link and a few sentences.
+    if not author_url or "/in/" not in author_url:
+        return True
+    # Too short to be a real post.
+    if len((body or "").strip()) < 40:
+        return True
+    # If it's mostly chrome markers, drop it.
+    hits = sum(1 for m in _BOILERPLATE_MARKERS if m in low)
+    if hits >= 2:
+        return True
+    if any(m in low for m in ("skip to main content", "join now", "find your dream job")):
+        return True
+    return False
 
 
 def _num_from(match) -> int:

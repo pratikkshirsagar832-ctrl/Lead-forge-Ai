@@ -160,14 +160,8 @@ async def list_leads(
     for lead in paged:
         lead["has_pitch"] = bool(lead.get("ai_pitch"))
 
-    # Validate against the response schema (coerce defaulted fields).
-    validated = []
-    for lead in paged:
-        try:
-            validated.append(LeadListItem(**lead))
-        except Exception:
-            # Drift-proof: drop any key the schema doesn't define, then coerce.
-            validated.append(LeadListItem(**{k: v for k, v in lead.items() if k in _LEAD_ITEM_FIELDS}))
+    # Validate against the response schema (coerce defaulted/converted fields).
+    validated = [LeadListItem(**_coerce_lead(lead)) for lead in paged]
 
     return LeadPaginatedResponse(
         items=validated,
@@ -178,14 +172,37 @@ async def list_leads(
     )
 
 
-_LEAD_ITEM_FIELDS = {
-    "id", "search_id", "source", "business_name", "category", "full_address",
-    "phone", "email_found", "website_url", "rating", "total_reviews",
-    "lead_category", "website_health_score", "headline", "linkedin_url",
-    "post_url", "post_text", "profile_picture_url", "connections_count",
-    "posted_at", "post_type", "ai_confidence_score", "ai_pitch", "user_status",
-    "user_notes", "is_favorite", "has_pitch", "created_at",
-}
+def _coerce_lead(d: dict) -> dict:
+    """Normalize a raw DB row (Maps `leads` or LinkedIn `ha_leads`) to values
+    the LeadListItem schema accepts. Without this, a null lead_category /
+    connections_count or a float website_health_score 500s the list."""
+    out = dict(d)
+    if out.get("lead_category") is None:
+        # Schema requires a non-optional str; 'warm' is hidden in the UI for
+        # LinkedIn leads (which have no reliable category).
+        out["lead_category"] = "warm"
+    if out.get("connections_count") is None:
+        out["connections_count"] = 0
+    else:
+        try:
+            out["connections_count"] = int(out["connections_count"])
+        except (TypeError, ValueError):
+            out["connections_count"] = 0
+    if out.get("website_health_score") is not None:
+        try:
+            out["website_health_score"] = int(round(float(out["website_health_score"])))
+        except (TypeError, ValueError):
+            out["website_health_score"] = None
+    if out.get("total_reviews") is None:
+        out["total_reviews"] = 0
+    if out.get("rating") is not None:
+        try:
+            out["rating"] = float(out["rating"])
+        except (TypeError, ValueError):
+            out["rating"] = None
+    if out.get("source") is None:
+        out["source"] = "google_maps"
+    return out
 
 
 def _chunks(seq: list, size: int):

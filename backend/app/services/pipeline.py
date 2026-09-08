@@ -173,7 +173,7 @@ async def load_more_maps_search(
 
     try:
         raw_results = await run_maps_scraper(
-            query=f"{niche} in {location}",
+            query=f"{niche} in {location}" if (location or "").strip() else niche,
             max_results=20,
             timeout_seconds=120,
             depth=2,
@@ -221,7 +221,7 @@ async def _run_maps_search(
       outcome "cancelled" -> cancelled (terminal 'cancelled' already written)
       outcome "no_results"-> completed with zero leads (already written)
     """
-    query = f"{niche} in {location}"
+    query = f"{niche} in {location}" if (location or "").strip() else niche
     elapsed = time.time() - start_time
     remaining_timeout = max(60, int(MAX_SEARCH_TIME_SECONDS - elapsed - 60))
 

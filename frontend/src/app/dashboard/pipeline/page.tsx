@@ -161,7 +161,7 @@ function PipelineCard({ lead, isDragOverlay }: { lead: LeadListItem; isDragOverl
                   {workLabel}
                 </span>
               )}
-              {lead.connections_count != null && (
+              {lead.connections_count != null && lead.connections_count > 0 && (
                 <span className="text-[11px] text-ice/40">
                   {lead.connections_count.toLocaleString()} connections
                 </span>

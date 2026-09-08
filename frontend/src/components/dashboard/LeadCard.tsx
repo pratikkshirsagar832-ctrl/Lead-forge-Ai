@@ -52,12 +52,14 @@ export function LeadCard({ lead, onToggleFavorite, isUpdatingFav }: LeadCardProp
       <div className="p-5 flex-1 cursor-default relative z-10">
         <div className="flex justify-between items-start mb-3">
           <div className="flex gap-1.5 items-center flex-wrap">
-            <Badge
-              style={{ backgroundColor: (categoryConfig as any).bg, color: categoryConfig.color }}
-              className="font-bold border-0 shadow-sm text-[11px] px-2.5 py-1"
-            >
-              {categoryConfig.label}
-            </Badge>
+            {!isLinkedinSource && (
+              <Badge
+                style={{ backgroundColor: (categoryConfig as any).bg, color: categoryConfig.color }}
+                className="font-bold border-0 shadow-sm text-[11px] px-2.5 py-1"
+              >
+                {categoryConfig.label}
+              </Badge>
+            )}
             {lead.website_health_score != null && (
               <span className={`text-[11px] font-bold px-2 py-1 rounded-md bg-navy/60 border border-ocean/30 ${scoreColor}`}>
                 {lead.website_health_score}
@@ -109,10 +111,12 @@ export function LeadCard({ lead, onToggleFavorite, isUpdatingFav }: LeadCardProp
 
         <div className="flex items-center gap-2 mb-4">
           {isLinkedinSource ? (
-            <div className="flex items-center gap-2 bg-ocean/25 px-2 py-1 rounded-md border border-ocean/20">
-              <Users className="w-3 h-3 text-steel/70" />
-              <span className="font-semibold text-[11px] text-ice/80">{lead.connections_count != null ? `${formatNumber(lead.connections_count)} connections` : '—'}</span>
-            </div>
+            (lead.connections_count != null && lead.connections_count > 0) && (
+              <div className="flex items-center gap-2 bg-ocean/25 px-2 py-1 rounded-md border border-ocean/20">
+                <Users className="w-3 h-3 text-steel/70" />
+                <span className="font-semibold text-[11px] text-ice/80">{formatNumber(lead.connections_count)} connections</span>
+              </div>
+            )
           ) : (
           <div className="flex items-center gap-1 bg-ocean/25 px-2 py-1 rounded-md border border-ocean/20">
             <Star className="w-3 h-3 fill-amber-400 text-amber-400" />
@@ -122,9 +126,11 @@ export function LeadCard({ lead, onToggleFavorite, isUpdatingFav }: LeadCardProp
             )}
           </div>
           )}
-          <span className="text-[10px] px-2 py-1 bg-steel/10 text-ice/60 border border-steel/15 rounded-md font-medium truncate max-w-[130px]" title={lead.category || 'Unknown'}>
-            {lead.category || 'Unknown'}
+          {lead.category && (
+          <span className="text-[10px] px-2 py-1 bg-steel/10 text-ice/60 border border-steel/15 rounded-md font-medium truncate max-w-[130px]" title={lead.category}>
+            {lead.category}
           </span>
+          )}
         </div>
 
         <div className="space-y-2.5">

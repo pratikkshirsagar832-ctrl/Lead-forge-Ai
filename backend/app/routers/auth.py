@@ -348,6 +348,35 @@ async def get_me(current_user: dict = Depends(get_current_user)):
         except Exception as e:
             logger.error(f"Failed to fetch subscription directly: {e}")
 
+    # Lead quota is MONTHLY (the enforced cap comes from monthly_usage
+    # reservations). The daily `remaining_leads` above reads daily_usage,
+    # which is never incremented for leads — so it always showed the full cap
+    # and appeared to "reset daily". Override with the true monthly remaining
+    # per source so it resets on the 1st of the month, not every day.
+    if subscription:
+        try:
+            month_str = datetime.now(timezone.utc).replace(day=1).date().isoformat()
+            monthly = supabase.table("monthly_usage").select("*").eq("user_id", current_user["id"]).eq("usage_month", month_str).limit(1).execute()
+            mu = (monthly.data or [{}])[0] if monthly.data else {}
+        except Exception:
+            mu = {}
+        try:
+            from app.services.plans import get_plan_row
+            plan = get_plan_row(supabase, subscription.get("plan_id", "free"))
+        except Exception:
+            plan = {}
+        li_monthly = int(plan.get("linkedin_hq_leads_monthly", 0) or 0)
+        gmb_monthly = int(plan.get("gmb_leads_monthly", 0) or 0)
+        li_used = int(mu.get("linkedin_hq_generated", 0) or 0)
+        gmb_used = int(mu.get("gmb_generated", 0) or 0)
+        li_remaining = max(0, li_monthly - li_used)
+        gmb_remaining = max(0, gmb_monthly - gmb_used)
+        subscription["remaining_leads"] = li_remaining + gmb_remaining
+        subscription["linkedin_hq_leads_remaining"] = li_remaining
+        subscription["gmb_leads_remaining"] = gmb_remaining
+        subscription["linkedin_hq_leads_monthly"] = li_monthly
+        subscription["gmb_leads_monthly"] = gmb_monthly
+
     return {
         "id": current_user["id"],
         "email": current_user["email"],

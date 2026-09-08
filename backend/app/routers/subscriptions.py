@@ -96,7 +96,10 @@ async def get_current_subscription(current_user: dict = Depends(get_current_user
             "searches_per_day": searches_per_day,
             "leads_per_day": leads_per_day,
             "remaining_searches": max(0, searches_per_day - used_searches),
-            "remaining_leads": max(0, leads_per_day - used_leads),
+            # Lead quota is MONTHLY — remaining_leads must reflect the monthly
+            # cap (resets on the 1st), never the daily leads_per_day counter.
+            "remaining_leads": max(0, linkedin_limit - int(usage.get("linkedin_hq_generated", 0) or 0) - int(usage.get("linkedin_hq_reserved", 0) or 0))
+                              + max(0, gmb_limit - int(usage.get("gmb_generated", 0) or 0) - int(usage.get("gmb_reserved", 0) or 0)),
             "linkedin_hq_leads_monthly": linkedin_limit,
             "gmb_leads_monthly": gmb_limit,
             "linkedin_hq_leads_used": int(usage.get("linkedin_hq_generated", 0) or 0),

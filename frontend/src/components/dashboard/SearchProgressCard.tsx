@@ -22,6 +22,13 @@ export function SearchProgressCard({ onCancel, isCancelling }: SearchProgressCar
     : SEARCH_STATUSES.queued;
   const percentage = progress ? (isFinished ? 100 : Math.max(5, progress.progress_percent || 0)) : 0;
 
+  // "Total Found" stays honest to the requested count: if the engine reviewed
+  // 98 posts but the user asked for 3 leads, show 3 (the delivered count), never
+  // 98 (which is the number of posts reviewed, not leads found).
+  const requestedCount = progress?.requested_count ?? null;
+  const totalFound = progress?.total_results ?? 0;
+  const displayedFound = requestedCount ? Math.min(Number(totalFound), Number(requestedCount)) : Number(totalFound);
+
   if (!progress) return null;
 
   return (
@@ -87,7 +94,7 @@ export function SearchProgressCard({ onCancel, isCancelling }: SearchProgressCar
                   <Search className="w-4 h-4 text-steel" />
                   <p className="text-xs font-semibold text-ice/60 uppercase tracking-wider">Total Found</p>
                 </div>
-                <p className="text-3xl font-bold text-offwhite tracking-tight">{progress.total_results || 0}</p>
+                <p className="text-3xl font-bold text-offwhite tracking-tight">{displayedFound}</p>
               </div>
             </div>
 

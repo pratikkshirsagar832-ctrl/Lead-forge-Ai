@@ -20,7 +20,7 @@ import { LEAD_CATEGORIES } from '@/lib/constants';
 
 const mapsSchema = z.object({
   niche: z.string().min(2, 'Niche must be at least 2 characters'),
-  location: z.string().min(2, 'Location must be at least 2 characters'),
+  location: z.string().optional(),
 });
 
 const linkedinSchema = z.object({
@@ -63,12 +63,14 @@ function LiveResultCard({ lead, index }: { lead: any; index: number }) {
           <div className="p-4">
               <div className="flex items-start justify-between mb-2">
                 <div className="flex items-center gap-2">
-                  <Badge
-                    style={{ backgroundColor: (catCfg as any).bg, color: catCfg.color }}
-                    className="font-bold border-0 text-[10px] px-2 py-0.5"
-                  >
-                    {catCfg.label}
-                  </Badge>
+                  {lead.source !== 'linkedin' && (
+                    <Badge
+                      style={{ backgroundColor: (catCfg as any).bg, color: catCfg.color }}
+                      className="font-bold border-0 text-[10px] px-2 py-0.5"
+                    >
+                      {catCfg.label}
+                    </Badge>
+                  )}
                   <SourceBadge source={lead.source} />
                   {lead.source === 'linkedin' && (
                     <span className={`text-[9px] px-1.5 py-0.5 rounded font-semibold border ${
@@ -270,6 +272,16 @@ export default function SearchPage() {
     }
   }, []);
 
+  // Header reflects the service + the exact lead count the user selected
+  // (from the active search when one is running, else the live form value).
+  const selectedService = progress?.service || mapsForm.watch('niche') || '';
+  const selectedCount = progress?.requested_count || maxResults;
+  const serviceCap = selectedService.replace(/\s+/g, ' ').trim();
+  const _cap = (s: string) => (s ? s.charAt(0).toUpperCase() + s.slice(1) : s);
+  const headerLabel = serviceCap
+    ? `Finding ${selectedCount} High-quality ${selectedCount === 1 ? 'Lead' : 'Leads'} for your ${_cap(serviceCap)} Service`
+    : 'Finding hot leads';
+
   const remaining = subscription?.remaining_searches ?? 1;
   const searchesPerDay = subscription?.searches_per_day ?? 1;
   const isAtLimit = remaining <= 0;
@@ -280,7 +292,7 @@ export default function SearchPage() {
       if (source === 'linkedin') {
         await startSearch(data.niche, data.location ?? '', { source: 'linkedin', enrichEmails: false, maxResults, leadTypes: [linkedinLeadType] });
       } else {
-        await startSearch(data.niche, data.location ?? '');
+        await startSearch(data.niche, data.location ?? '', { source: 'google_maps', enrichEmails: false, maxResults });
       }
     } catch (e: any) {
       if (e.response?.status === 429) setShowUpgradeModal(true);
@@ -311,11 +323,11 @@ export default function SearchPage() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-3xl font-bold text-offwhite tracking-tight">
-            <span className="gradient-text">Finding hot leads</span>
+            <span className="gradient-text">{headerLabel}</span>
           </h1>
           <p className="text-ice/50 mt-2 text-sm">
             {source === 'linkedin'
-              ? 'Find the latest people worldwide who are asking for your service on LinkedIn.'
+              ? 'Genuine buyers of your service on LinkedIn — exact count, newest first.'
               : 'Find and qualify leads from Google Maps in seconds.'}
           </p>
         </div>
@@ -382,23 +394,21 @@ export default function SearchPage() {
                   {source === 'google_maps' && (
                   <div>
                     <label className="block text-sm font-medium text-ice/70 mb-2 flex items-center gap-2">
-                      <MapPin className="w-4 h-4 text-steel" />
-                      Location
+                      <Users className="w-4 h-4 text-steel" />
+                      Leads Needed
                     </label>
-                    <div className="relative group">
-                      <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
-                        <Globe className="h-5 w-5 text-steel/60 group-focus-within:text-steel transition-colors" />
-                      </div>
-                      <input
-                        {...mapsForm.register('location')}
-                        type="text"
-                        placeholder="e.g. Dallas TX, London UK"
-                        className="w-full pl-10 pr-4 py-3 rounded-xl border border-ocean/30 bg-navy/60 focus:bg-navy/80 focus:ring-2 focus:ring-steel/40 focus:border-steel/50 transition-all text-offwhite text-lg placeholder-ice/30 outline-none"
-                      />
-                    </div>
-                    {mapsForm.formState.errors.location && (
-                      <p className="text-red-400 text-sm mt-1.5">{mapsForm.formState.errors.location.message}</p>
-                    )}
+                    <select
+                      value={maxResults}
+                      onChange={(e) => setMaxResults(Number(e.target.value))}
+                      className="w-full px-3 py-3 rounded-xl border border-ocean/30 bg-navy/60 text-offwhite outline-none focus:ring-2 focus:ring-steel/40"
+                    >
+                      {[3, 5, 10, 15, 25].map(n => (
+                        <option key={n} value={n}>{n} leads</option>
+                      ))}
+                    </select>
+                    <p className="text-[11px] text-ice/40 mt-1.5">
+                      We search Google Maps and deliver up to this many qualified leads, newest first.
+                    </p>
                   </div>
                   )}
                   {source === 'linkedin' && (
@@ -542,34 +552,39 @@ export default function SearchPage() {
                   </button>
                 </div>
               )}
-              {!isSearchActive && resultsTotal > 0 && (
-                <div className="flex justify-center mt-6 gap-4 flex-wrap">
-                  <Link href="/dashboard/leads"
-                    className="btn-gradient-cyan inline-flex items-center justify-center px-6 py-2.5 rounded-xl text-sm transition-opacity"
-                  >
-                    View All Leads in Dashboard
-                  </Link>
-                  {progress?.source !== 'linkedin' && results.length >= 10 && (
-                    <LoadingButton
-                      onClick={handleLoadMore}
-                      isLoading={isLoadingMore}
-                      variant="glass"
-                      size="md"
-                    >
-                      <Search className="w-4 h-4 mr-1.5" />
-                      Load 10 More
-                    </LoadingButton>
-                  )}
-                  <LoadingButton
-                    onClick={() => { clearActiveSearch(); }}
-                    variant="glass"
-                    size="md"
-                  >
-                    New Search
-                  </LoadingButton>
-                </div>
-              )}
             </>
+          )}
+
+          {(!isSearchActive && (
+            resultsTotal > 0 || progress?.status === 'completed'
+          )) && (
+            <div className="flex justify-center mt-6 gap-4 flex-wrap">
+              {resultsTotal > 0 && (
+                <Link href="/dashboard/leads"
+                  className="btn-gradient-cyan inline-flex items-center justify-center px-6 py-2.5 rounded-xl text-sm transition-opacity"
+                >
+                  View All Leads in Dashboard
+                </Link>
+              )}
+              {resultsTotal > 0 && progress?.source !== 'linkedin' && results.length >= 10 && (
+                <LoadingButton
+                  onClick={handleLoadMore}
+                  isLoading={isLoadingMore}
+                  variant="glass"
+                  size="md"
+                >
+                  <Search className="w-4 h-4 mr-1.5" />
+                  Load 10 More
+                </LoadingButton>
+              )}
+              <LoadingButton
+                onClick={() => { clearActiveSearch(); }}
+                variant="glass"
+                size="md"
+              >
+                New Search
+              </LoadingButton>
+            </div>
           )}
         </motion.div>
       )}

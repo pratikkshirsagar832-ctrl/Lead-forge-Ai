@@ -508,7 +508,6 @@ async def get_search_status(
                 elif ha_status == "no_results":
                     ha_status = "completed"
                 row["status"] = ha_status
-                row["total_results"] = int(ha_row.get("found_count") or 0)
                 row["warm_leads"] = int(ha_row.get("scanned_count") or 0)
                 # ACTUAL saved leads (engine accepted_count can overstate: the
                 # type-content filter drops mismatched posts at save time).
@@ -522,6 +521,11 @@ async def get_search_status(
                     row["hot_leads"] = int(cnt.count or 0)
                 except Exception:
                     row["hot_leads"] = int(ha_row.get("accepted_count") or 0)
+                # "Total Found" = the DELIVERED qualified leads (<= requested N).
+                # Raw `found_count` is the count of posts reviewed, not leads —
+                # showing it here made "Total Found 40 / Processed 56" (processed
+                # > found), which is impossible. Show delivered leads instead.
+                row["total_results"] = row["hot_leads"]
                 row["skipped"] = max(int(row.get("skipped") or 0),
                                      int(row.get("warm_leads") or 0)
                                      - int(row.get("hot_leads") or 0))
@@ -583,7 +587,13 @@ async def get_search_status(
         hot = row.get("hot_leads", 0) or 0
         warm = row.get("warm_leads", 0) or 0
         skip = row.get("skipped", 0) or 0
-        processed = hot + warm + skip
+        # "Processed" = how many posts we actually ran through the pipeline.
+        # For LinkedIn that is the scanned/classified count (as many as we
+        # could process); never hot+warm+skip, which double-counts scanned.
+        if row.get("source") == "linkedin":
+            processed = warm
+        else:
+            processed = hot + warm + skip
         
         return {
             "id": row["id"],

@@ -96,11 +96,12 @@ def ha_lead_type_from(lead_types) -> str:
 def ha_time_window_from() -> str:
     """Freshness window — latest-first with enough pool volume.
 
-    14d window (Google crawl lag 1–3 days ⇒ ~11-13 real days of posts). The
-    engine + results endpoint sort newest-first, so the freshest genuine
-    buyers are always shown while a larger window keeps volume healthy.
+    28d window: repeated searches on the same niche quickly drain the 14d pool
+    (Google returns the same ~10-20 posts for a phrase family once exhausted,
+    which produced 0-lead runs). A 28d window keeps older genuine posts
+    findable while recency-first ordering still shows the newest first.
     """
-    return "14d"
+    return "28d"
 
 
 def _ha_settings() -> HaSettings:

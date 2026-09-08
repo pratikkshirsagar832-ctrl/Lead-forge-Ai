@@ -1,4 +1,4 @@
-"""GPT-4o structured lead classification — fail-closed by design (§7).
+"""DeepSeek (chat) structured lead classification — fail-closed by design (§7).
 
 Direction-of-intent is the core question: WHO NEEDS vs WHO OFFERS. Every
 seller trap from §2 is spelled out in the system prompt with examples.
@@ -61,10 +61,20 @@ REJECT CATEGORIES — recognize and reject each, even in disguise:
    No ask = no lead. Also reject "we are hiring freelancers" from a marketplace that profits from
    placements, and job ads that recruit an EMPLOYEE (full-time salary role with benefits) rather
    than a defined freelance/contract project for a genuine owner.
-6. Job ads for employees: "full-time position", "vacancy", "apply now", "benefits", "salary
-   range", "equity offered". These are irrelevant (never a lead). A post hiring a
-   freelance/contract worker for a defined project CAN be need_freelancer — judge on project vs
-   employment. A recruiter posting on behalf of other companies is a seller, not a buyer.
+6. Job ads for employees vs freelance projects — DECIDE, don't keyword-match. A post hiring a
+   freelance/contract worker for a bounded project CAN be need_freelancer; an employee job ad is
+   always irrelevant. Weigh the leaning signals against each other:
+   EMPLOYMENT-leaning: a required years-of-experience threshold ("2+ years", "5+ years hands-on"),
+   "join our team", an application/screening funnel ("fill out the form below", "apply here",
+   "send your CV"), benefits / equity / salary-range / full-time language, an ongoing open-ended
+   role, "you will work with our team" as an employee.
+   PROJECT-leaning: a bounded deliverable with scope, a stated timeline/deadline ("before the
+   15th", "this month", "one-off", "6-week project"), explicit contract/freelance framing tied to
+   a defined piece of work, a budget, "for a client", "for our project".
+   DECISION: when employment-leaning signals dominate — especially a required experience threshold
+   combined with an application funnel — classify as irrelevant EVEN IF the word
+   "freelance"/"contract" appears once. A single freelance-adjacent word does NOT override a
+   clearly employee-shaped post. A recruiter posting on behalf of other companies is a seller.
 7. Referral asks that are actually self-promotion: "DM me for recommendations" from someone who
    sells the service themselves is a seller. But "anyone know a good X, my project needs one"
    from a genuine owner IS a buyer (recommendation intent) — do not over-reject.
@@ -94,6 +104,13 @@ canonical pairs (paraphrased, for an imaginary production service) are:
    ->  is_qualified: false, is_job_seek: true (job-seeker, not a buyer).
 5. "Anyone know a video editor? We need 20 shorts cut for our campaign this month." (owner with a
    concrete need)  ->  is_qualified: true, lead_type: need_freelancer.
+6. "We are hiring a UI/UX designer with 5+ years of hands-on experience to design complex web
+   applications. Join our team — apply by filling out the form below."  ->  is_qualified: false,
+   lead_type: irrelevant (employee job ad: required experience threshold + application funnel, no
+   bounded project wording).
+7. "Need 20 short videos cut for our campaign before the 15th — freelance, project basis, budget
+   ready."  ->  is_qualified: true, lead_type: need_freelancer (bounded deliverable + deadline +
+   freelance framing).
 
 Same pattern for any {service}: the asker must need the work done, not offer to do it, not be a
 freelancer hunting for their own gig, and not be a recruiter stocking talent for other people.
@@ -284,6 +301,7 @@ class GptClassifier:
         self.model = model
         self.provider = (provider or "deepseek").lower()
         self.max_retries = max_retries
+        self.calls = 0  # live DeepSeek HTTP call counter (per classifier instance)
         if json_mode is None:
             json_mode = "json_object" if self.provider == "deepseek" else "json_schema"
         self.json_mode = json_mode  # json_object | json_schema
@@ -373,6 +391,7 @@ class GptClassifier:
             response_format = {"type": "json_object"}
         last_err: Exception | None = None
         for attempt in range(self.max_retries + 1):
+            self.calls += 1
             try:
                 resp = self._client.chat.completions.create(
                     model=self.model,

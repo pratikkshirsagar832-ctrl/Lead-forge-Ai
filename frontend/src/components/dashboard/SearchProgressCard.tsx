@@ -13,9 +13,16 @@ interface SearchProgressCardProps {
   isCancelling: boolean;
 }
 
+const STOP_REASON_LABELS: Record<string, string> = {
+  empty_rounds_stop: 'Stopped — no more new buyers were appearing in the pool',
+  ceiling_hit: 'Stopped — provider-spend ceiling reached for this search',
+  deadline_hit: 'Stopped — time limit reached',
+  query_pool_exhausted: 'Query ideas exhausted for this niche',
+  iteration_cap: 'Reached the maximum rounds for this search',
+};
+
 export function SearchProgressCard({ onCancel, isCancelling }: SearchProgressCardProps) {
   const { progress } = useSearchStore();
-
   const isFinished = progress ? ['completed', 'failed', 'cancelled'].includes(progress.status ?? '') : false;
   const statusConfig = progress
     ? SEARCH_STATUSES[(progress.status ?? 'queued') as keyof typeof SEARCH_STATUSES] || SEARCH_STATUSES.queued
@@ -121,6 +128,22 @@ export function SearchProgressCard({ onCancel, isCancelling }: SearchProgressCar
               </div>
             </div>
           </div>
+
+          {/* Tier-0 observability: per-search spend + stop reason */}
+          {(progress.serper_requests_used != null || progress.deepseek_calls_used != null) && (
+            <div className="flex flex-wrap items-center justify-between gap-2 mb-4 px-1 text-[11px] text-ice/40">
+              <span>
+                Serper <span className="text-ice/70 font-semibold">{progress.serper_requests_used ?? '—'}</span> calls
+                {' · '}DeepSeek <span className="text-ice/70 font-semibold">{progress.deepseek_calls_used ?? '—'}</span> calls
+                {progress.skipped != null && progress.skipped > 0 ? ` · ${progress.skipped} skipped` : ''}
+              </span>
+              {isFinished && progress.stop_reason && progress.stop_reason !== 'target_reached' && (
+                <span className="text-amber-400/80 font-medium">
+                  {STOP_REASON_LABELS[progress.stop_reason] || progress.stop_reason}
+                </span>
+              )}
+            </div>
+          )}
 
           <div className="flex justify-end gap-3 pt-6 border-t border-steel/15 relative z-10">
             {!isFinished ? (

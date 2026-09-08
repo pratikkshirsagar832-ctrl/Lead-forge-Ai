@@ -1,19 +1,19 @@
-"""Google SERP discovery client (Serper.dev-style) — the discovery engine.
+﻿"""Google SERP discovery client (Serper.dev-style) â€” the discovery engine.
 
 Discovery = Google search over LinkedIn posts, not LinkedIn-native scraping:
 
     <query> site:linkedin.com/posts after:YYYY-MM-DD
 
-Design notes (§0 — these are provider trade-offs, not bugs):
+Design notes (Â§0 â€” these are provider trade-offs, not bugs):
 * Coverage is partial/inconsistent: Google does not fully or promptly crawl
   linkedin.com/posts, so a precise query + tight window will OFTEN return
   zero organic results. Returning an empty batch is normal provider
-  behavior — it is never translated into a fake failure upstream.
+  behavior â€” it is never translated into a fake failure upstream.
 * The 24h window structurally underperforms (Google's crawl lag on LinkedIn
-  is typically 1–3 days); the UI says so under that option.
+  is typically 1â€“3 days); the UI says so under that option.
 * The date filter rides in the query string itself (after:YYYY-MM-DD),
   recomputed fresh from `since` on every call.
-* Every result still goes through GPT-4o classification upstream — SERP
+* Every result still goes through DeepSeek classification upstream â€” SERP
   relevance is a starting filter, not a verdict.
 """
 from __future__ import annotations
@@ -61,10 +61,10 @@ def _slug_tokens(slug: str) -> list[str]:
 def _author_from_url(link: str) -> str | None:
     """Best-effort author name from the post URL slug.
 
-    Google's titles often carry no author ("Looking for X… | LinkedIn"), but
+    Google's titles often carry no author ("Looking for Xâ€¦ | LinkedIn"), but
     the permalink always embeds the member/company vanity:
-      /posts/shobana-shankar-581708210_urg…  ->  "Shobana Shankar"
-      /posts/elizabetheadie_im-looking…      ->  "elizabetheadie"
+      /posts/shobana-shankar-581708210_urgâ€¦  ->  "Shobana Shankar"
+      /posts/elizabetheadie_im-lookingâ€¦      ->  "elizabetheadie"
     """
     m = _URL_SLUG.search(link or "")
     if not m:
@@ -105,7 +105,7 @@ class SerperDiscoveryClient(DiscoveryClient):
         timeout_seconds: float = 30.0,
     ) -> None:
         """`results_per_query` maps to Serper's `num`. Serper's FREE tier caps
-        `num` at 10 and rejects larger values with HTTP 400 — the default is
+        `num` at 10 and rejects larger values with HTTP 400 â€” the default is
         10 for that reason; raise it only on a paid Serper plan.
 
         `pages_per_query` fetches extra result pages for each query (bounded),
@@ -125,14 +125,14 @@ class SerperDiscoveryClient(DiscoveryClient):
 
     @property
     def config_errors(self) -> list[str]:
-        return [] if self.api_key else ["SERPER_API_KEY is not set — discovery cannot run (or set MOCK_MODE=1 for an offline demo)"]
+        return [] if self.api_key else ["SERPER_API_KEY is not set â€” discovery cannot run (or set MOCK_MODE=1 for an offline demo)"]
 
     # ------------------------------------------------------------------ query
     def _full_query(self, query: str, since: datetime) -> str:
         parts = [query]
         if self.site_restriction:
             parts.append(f"site:{self.site_restriction}")
-        parts.append(f"after:{since.date().isoformat()}")  # fresh per request (§3)
+        parts.append(f"after:{since.date().isoformat()}")  # fresh per request (Â§3)
         return " ".join(parts)
 
     # ------------------------------------------------------------------ http
@@ -155,14 +155,14 @@ class SerperDiscoveryClient(DiscoveryClient):
             raise DiscoveryError(f"Serper request failed: {exc}") from exc
         if resp.status_code in (401, 403):
             raise DiscoveryError(
-                f"Serper rejected the API key (HTTP {resp.status_code}) — check SERPER_API_KEY"
+                f"Serper rejected the API key (HTTP {resp.status_code}) â€” check SERPER_API_KEY"
             )
         if resp.status_code == 400:
             # Free Serper accounts reject num > 10 with a misleading
-            # "Query pattern not allowed" message — say what actually happened.
+            # "Query pattern not allowed" message â€” say what actually happened.
             hint = ""
             if num > 10:
-                hint = " Serper's free tier caps `num` at 10 — set SERPER_RESULTS_PER_QUERY=10 (or use a paid plan)."
+                hint = " Serper's free tier caps `num` at 10 â€” set SERPER_RESULTS_PER_QUERY=10 (or use a paid plan)."
             raise DiscoveryError(f"Serper request failed (HTTP 400): {(resp.text or '')[:200]}{hint}")
         if resp.status_code != 200:
             detail = (resp.text or "")[:300]
@@ -199,7 +199,7 @@ class SerperDiscoveryClient(DiscoveryClient):
             body = (m.group("body") or snippet or text).strip() or text
         else:
             body = snippet or title
-        # Titles often don't include the author ("Looking for X… | LinkedIn"),
+        # Titles often don't include the author ("Looking for Xâ€¦ | LinkedIn"),
         # but the permalink always embeds the member slug.
         if not author:
             author = _author_from_url(link)
@@ -257,7 +257,7 @@ class SerperDiscoveryClient(DiscoveryClient):
                 query_batch.extend(page_posts)
                 log.info("Serper %r page %d -> %d organic results", full[:160], page, len(organic))
                 if len(organic) < per_q:
-                    break  # last page reached — stop paging this query
+                    break  # last page reached â€” stop paging this query
             posts.extend(query_batch)
 
         # Dedupe by canonical post URL (same post found under several phrasings).
@@ -269,7 +269,7 @@ class SerperDiscoveryClient(DiscoveryClient):
                 continue
             seen.add(key)
             unique.append(p)
-        # Zero hits is EXPECTED for tight queries/windows (§0): report it as
+        # Zero hits is EXPECTED for tight queries/windows (Â§0): report it as
         # empty data, never as a broken discovery task.
         return SearchBatchResult(
             posts=unique,

@@ -8,6 +8,7 @@ The engine and the API only ever talk to the protocol below.
 from __future__ import annotations
 
 import logging
+import random
 from abc import ABC, abstractmethod
 from datetime import UTC, date, datetime, timedelta
 from typing import Any, Iterable
@@ -59,6 +60,12 @@ class Store(ABC):
     @abstractmethod
     def patch_lead(self, lead_id: str, *, status: str | None = None, notes: str | None = None) -> dict[str, Any] | None: ...
 
+    def record_rejections(self, rows: list[dict[str, Any]]) -> None:
+        """Best-effort persistence of rejected-candidate verdicts (Tier-0
+        observability). Default no-op so stores that predate the table never
+        break a search; SupabaseStore writes to `ha_rejections`."""
+        return
+
     # usage ----------------------------------------------------------------
     @abstractmethod
     def searches_used_today(self) -> int: ...
@@ -76,6 +83,7 @@ class MemoryStore(Store):
         self._searches: dict[str, dict[str, Any]] = {}
         self._leads: dict[str, dict[str, Any]] = {}
         self._lead_by_url: dict[str, str] = {}
+        self._rejections: list[dict[str, Any]] = []
 
     # ids -------------------------------------------------------------------
     @staticmethod
@@ -101,6 +109,9 @@ class MemoryStore(Store):
                 "error": None,
                 "finished_at": None,
                 "created_at": _utcnow(),
+                "serper_requests_used": 0,
+                "deepseek_calls_used": 0,
+                "stop_reason": None,
             }
             self._searches[row["id"]] = row
             return dict(row)
@@ -196,6 +207,10 @@ class MemoryStore(Store):
             if notes is not None:
                 lead["notes"] = notes
             return dict(lead)
+
+    def record_rejections(self, rows: list[dict[str, Any]]) -> None:
+        with self._lock:
+            self._rejections.extend(dict(r) for r in rows)
 
     def searches_used_today(self) -> int:
         with self._lock:
@@ -334,6 +349,33 @@ class SupabaseStore(Store):
             return (resp.data or [None])[0]
         resp = self._client.table("ha_leads").update(self._jsonable(payload)).eq("id", lead_id).execute()
         return resp.data[0] if resp.data else None
+
+    def record_rejections(self, rows: list[dict[str, Any]]) -> None:
+        """Persist rejected-candidate verdicts to `ha_rejections` (Tier-0
+        observability). Tolerant of the table not being migrated yet, and keeps
+        a rolling 14-day window."""
+        payload = []
+        for r in rows:
+            keep = {k: r.get(k) for k in (
+                "search_id", "post_url", "post_text", "lead_type_verdict",
+                "reason", "evidence", "accepted", "is_qualified")}
+            if not keep.get("post_url"):
+                continue
+            payload.append(self._jsonable(keep))
+        if not payload:
+            return
+        try:
+            self._client.table("ha_rejections").insert(payload).execute()
+        except Exception as exc:  # noqa: BLE001 - never break a search over telemetry
+            log.warning("ha_rejections insert failed (table not migrated yet?): %s", exc)
+            return
+        # Rolling window: prune rows older than 14 days occasionally.
+        try:
+            if random.random() < 0.05:
+                cutoff = (datetime.now(UTC) - timedelta(days=14)).isoformat()
+                self._client.table("ha_rejections").delete().lt("created_at", cutoff).execute()
+        except Exception as exc:  # noqa: BLE001
+            log.debug("ha_rejections cleanup skipped: %s", exc)
 
     def searches_used_today(self) -> int:
         start = _utcnow().replace(hour=0, minute=0, second=0, microsecond=0).isoformat()

@@ -344,6 +344,44 @@ def test_exact_count_skips_already_owned_posts_and_keeps_scanning():
     assert drip[0].url not in {l["post_url"] for l in leads}  # owned post not re-delivered
 
 
+def test_engine_independent_spend_ceiling_stops_honestly():
+    """Tier 1.2: a hard Serper ceiling must stop the search (stop_reason
+    ceiling_hit) even when the niche would otherwise keep looping."""
+    import dataclasses
+    from config import Settings
+
+    settings = dataclasses.replace(
+        _settings(),
+        max_serper_requests_per_search=1,   # one request is the budget
+        engine_early_stop_empty_rounds=99,  # never stop on empty rounds
+        engine_max_iterations=10,
+    )
+    store = MemoryStore()
+    sid = _mk_search(store, needed=100)  # far more than the corpus holds
+    summary = run_search(sid, store=store, discovery=MockDiscoveryClient(),
+                         classifier=MockClassifier(), settings=settings)
+    assert summary.status == "completed"
+    assert "ceiling" in summary.detail
+    row = store.get_search(sid)
+    assert row["stop_reason"] == "ceiling_hit"
+    assert row["serper_requests_used"] == 1
+    assert row["deepseek_calls_used"] <= settings.max_deepseek_calls_per_search
+
+
+def test_engine_records_rejections_for_observability():
+    """Tier 0.1: candidates that reach the classifier and are rejected are
+    recorded (search_id, url, verdict) instead of only being counted."""
+    store = MemoryStore()
+    sid = _mk_search(store, needed=100)
+    run_search(sid, store=store, discovery=MockDiscoveryClient(),
+               classifier=MockClassifier(), settings=_settings())
+    rej = getattr(store, "_rejections", [])
+    assert len(rej) > 0  # corpus contains sellers/job-seekers -> rejections
+    assert all(r.get("search_id") == sid for r in rej)
+    assert all(r.get("post_url") for r in rej)
+    assert all(r.get("accepted") is False for r in rej)
+
+
 def test_content_filter_drops_wrong_direction_before_llm_and_keeps_count_honest():
     """A cheap pre-LLM content-direction gate must (a) never reach the
     classifier with a post whose text it would reject, and (b) keep the

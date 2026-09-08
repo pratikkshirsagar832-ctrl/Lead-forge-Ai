@@ -67,6 +67,10 @@ class SearchStatusResponse(BaseModel):
     country: Optional[str] = None
     service: Optional[str] = None
     lead_status: Optional[str] = None
+    # Tier-0 observability: per-search spend counters + stop reason.
+    serper_requests_used: Optional[int] = None
+    deepseek_calls_used: Optional[int] = None
+    stop_reason: Optional[str] = None
 
 
 class SearchHistoryItem(BaseModel):

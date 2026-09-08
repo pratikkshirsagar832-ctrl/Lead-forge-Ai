@@ -1,4 +1,4 @@
-"""LIVE strict-type proof: real GPT-4o + real Serper + real Supabase.
+﻿"""LIVE strict-type proof: real DeepSeek + real Serper + real Supabase.
 
 For each requested lead type we wipe the tables, run a real search, and assert
 EVERY delivered lead has exactly the requested lead_type (no other buyer type
@@ -27,7 +27,7 @@ from engine import run_search  # noqa: E402
 from models import LeadType  # noqa: E402
 
 PROJECT_REF = "gtklleletrpajrfypofi"
-# Management token comes from the environment — NEVER commit it.
+# Management token comes from the environment â€” NEVER commit it.
 MGMT_TOKEN = os.environ.get("SUPABASE_MGMT_TOKEN", "")
 
 

@@ -216,7 +216,7 @@ def _map_ha_lead(row: dict) -> dict:
     post_type = {
         "need_freelancer": "buyer",
         "our_agency": "agency_wanted",
-    }.get(lead_type, "buyer" if lead_type in ("marketplace_match", "hiring_buyer") else (lead_type or ""))
+    }.get(lead_type, lead_type or "")
 
     score = row.get("overall_quality_score")
     try:

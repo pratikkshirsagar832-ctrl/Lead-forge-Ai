@@ -1,13 +1,13 @@
-"""Iterative exact-count engine (§9).
+"""Iterative exact-count engine (Â§9).
 
-Deliver exactly N qualified leads, or run out of provider results trying —
+Deliver exactly N qualified leads, or run out of provider results trying â€”
 never pad the count with weak matches. Sequence per iteration:
-queries -> discovery -> canonical dedupe -> deterministic prefilter -> GPT-4o
+queries -> discovery -> canonical dedupe -> deterministic prefilter -> DeepSeek
 classification (concurrent, fail-closed) -> scoring gates -> accept.
 If short of N, diversify the query set and repeat (iteration + deadline caps,
 early stop after consecutive zero-yield rounds), then slice to exactly N.
 
-SERP semantics (§0): with Google-over-LinkedIn discovery, an empty result set
+SERP semantics (Â§0): with Google-over-LinkedIn discovery, an empty result set
 for a tight query is EXPECTED provider behavior (partial crawl, 1-3 day lag),
 NOT a failure. Zero-hit searches therefore complete with a shortage and an
 explanatory message; only genuine provider errors (network, API rejection)
@@ -34,8 +34,8 @@ log = logging.getLogger(__name__)
 ProgressFn = Callable[[str, int, int, int, str], None]
 
 CRAWL_LAG_NOTE = (
-    "Google's coverage of LinkedIn posts is partial and typically lags 1–3 days, "
-    "so tight queries and short windows often return little — this is expected, not a failure."
+    "Google's coverage of LinkedIn posts is partial and typically lags 1â€“3 days, "
+    "so tight queries and short windows often return little â€” this is expected, not a failure."
 )
 
 
@@ -84,7 +84,7 @@ def run_search(
     call: return False to drop a candidate whose text clearly contradicts the
     requested content direction (e.g. an advice/seller post that merely
     contains the keywords). Dropping here saves the DeepSeek call AND keeps the
-    engine's exact-count loop honest — it only counts posts that survive the
+    engine's exact-count loop honest â€” it only counts posts that survive the
     content gate, so it keeps scanning until it genuinely finds N matching
     leads instead of stopping early on posts it later discards at save time.
     """
@@ -95,7 +95,7 @@ def run_search(
 
     service = row["service"]
     country_raw = row.get("country") or ""  # canonical code when recognized, else raw text
-    # Human-friendly label (canonical country name, else the raw free text) —
+    # Human-friendly label (canonical country name, else the raw free text) â€”
     # used for classifier context and location scoring, never for hard rejects.
     country = canonical_label(country_raw)
     lead_type = row["lead_type"]
@@ -109,7 +109,7 @@ def run_search(
     time_window = row["time_window"]
     leads_needed = int(row["leads_needed"])
 
-    # §3: freshness recomputed fresh from *now* on every request/run.
+    # Â§3: freshness recomputed fresh from *now* on every request/run.
     try:
         cutoff = TimeWindow(time_window).cutoff()
     except ValueError:
@@ -145,6 +145,40 @@ def run_search(
     zero_yield_rounds = 0
     iterations = 0
     detail = ""
+    # Tier-0 observability: per-search call counters + stop reason.
+    serp_base = int(getattr(discovery, "calls", 0) or 0)
+    llm_base = int(getattr(classifier, "calls", 0) or 0)
+    stop_reason = "target_reached"
+    reject_rows: list[dict[str, Any]] = []
+
+    def _call_counts() -> tuple[int, int]:
+        s = int(getattr(discovery, "calls", 0) or 0) - serp_base
+        d = int(getattr(classifier, "calls", 0) or 0) - llm_base
+        return max(0, s), max(0, d)
+
+    def _persist_stats(reason: str | None = None) -> None:
+        """Best-effort write of stat columns; ha_searches may not have them
+        migrated yet, so a failure must never crash the search."""
+        try:
+            s, d = _call_counts()
+            payload: dict[str, Any] = {"serper_requests_used": s, "deepseek_calls_used": d}
+            if reason:
+                payload["stop_reason"] = reason
+            store.update_search(search_id, **payload)
+        except Exception:  # noqa: BLE001
+            log.debug("ha_searches stat columns not present yet (ignored)", exc_info=True)
+
+    def _record_reject(post, classification, *, reason: str, verdict_type: str | None = None) -> None:
+        reject_rows.append({
+            "search_id": search_id,
+            "post_url": (post.post_url or "")[:400],
+            "post_text": (post.text or "")[:500],
+            "lead_type_verdict": verdict_type,
+            "reason": (reason or "")[:500],
+            "evidence": (getattr(classification, "evidence", None) or "")[:300],
+            "accepted": False,
+            "is_qualified": bool(getattr(classification, "is_qualified", False)),
+        })
 
     def _note_reject(qualified) -> None:
         for name, ok in qualified.gates.items():
@@ -155,8 +189,24 @@ def run_search(
         iterations = iteration + 1
         if time.monotonic() > deadline:
             deadline_hit = True
+            stop_reason = "deadline_hit"
             break
-        # Cooperative cancel — lets a user cancel stop provider spend promptly.
+        # Independent spend ceilings (Tier 1.2) â€” enforced regardless of the
+        # iteration/deadline/empty-round logic. 0/None disables a ceiling.
+        s_now, d_now = _call_counts()
+        if (
+            (settings.max_serper_requests_per_search or 0) > 0
+            and s_now >= settings.max_serper_requests_per_search
+        ) or (
+            (settings.max_deepseek_calls_per_search or 0) > 0
+            and d_now >= settings.max_deepseek_calls_per_search
+        ):
+            detail = (f"provider-spend ceiling reached (serper {s_now}/"
+                      f"{settings.max_serper_requests_per_search}, deepseek {d_now}/"
+                      f"{settings.max_deepseek_calls_per_search})")
+            stop_reason = "ceiling_hit"
+            break
+        # Cooperative cancel â€” lets a user cancel stop provider spend promptly.
         if should_stop is not None:
             try:
                 if should_stop():
@@ -181,6 +231,7 @@ def run_search(
                 queries = [f"{q} {country}" for q in queries]
         if not queries:
             detail = "query pool exhausted"
+            stop_reason = "query_pool_exhausted"
             break
         used_queries.update(queries)
         progress("running", raw_found, len(accepted), scanned, f"iteration {iteration + 1}: {len(queries)} queries")
@@ -203,14 +254,33 @@ def run_search(
             return _summary(search_id, "failed", raw_found, len(accepted), scanned, iterations, str(exc))
 
         raw_found += len(batch.posts)
-        candidates = []
+        # Pass 1: intra-search URL dedupe only â€” no prefilter/gate/LLM spend.
+        round_unique: list[Any] = []
         for post in batch.posts:
             if not post.post_url:
-                continue  # a lead without a post URL has no identity — never accept it
+                continue  # a lead without a post URL has no identity â€” never accept it
             key = canonical_post_url(post.post_url)
             if not key or key in seen_urls:
                 continue
             seen_urls.add(key)
+            round_unique.append(post)
+        # Pass 2 (Tier 1.1): cross-search ownership dedupe BEFORE the content
+        # gate and DeepSeek. A post already saved by an earlier search is
+        # skipped here (one cheap indexed lookup per round) instead of being
+        # fully classified first â€” previously it reached DeepSeek before being
+        # skipped (audit Â§6: dup_owned reached 11 in one run).
+        owned: set[str] = set()
+        if round_unique:
+            try:
+                owned = store.find_existing_post_urls(p.post_url for p in round_unique) or set()
+            except Exception:  # noqa: BLE001 - ownership lookup must never kill a round
+                log.debug("find_existing_post_urls failed (assuming all new)", exc_info=True)
+        candidates = []
+        for post in round_unique:
+            if post.post_url in owned:
+                dup_existing += 1
+                log.info("Skipping already-owned lead (from an earlier search): %s", post.post_url)
+                continue
             verdict = prefilter(
                 post.text or "",
                 max_comments=settings.max_comments_allowed,
@@ -219,12 +289,12 @@ def run_search(
             if not verdict.keep:
                 pref_dropped += 1
                 continue
-            # CONTENT-DIRECTION GATE (cheap — NO LLM call). When a content_filter
+            # CONTENT-DIRECTION GATE (cheap â€” NO LLM call). When a content_filter
             # is wired (it mirrors the save-time store gate), a post whose text
             # clearly contradicts the requested buyer direction is dropped here.
             # Only posts that survive this gate can ever be accepted, so the
             # exact-count loop never stops early on posts it would later discard
-            # at save time — engine "accepted" == rows actually persisted — and
+            # at save time â€” engine "accepted" == rows actually persisted â€” and
             # no DeepSeek call is spent classifying a guaranteed discard.
             if content_filter is not None:
                 try:
@@ -239,6 +309,7 @@ def run_search(
             zero_yield_rounds += 1
             if zero_yield_rounds >= settings.engine_early_stop_empty_rounds and iteration > 0:
                 detail = f"{zero_yield_rounds} rounds in a row added nothing new; stopped early"
+                stop_reason = "empty_rounds_stop"
                 break
             continue
 
@@ -254,17 +325,17 @@ def run_search(
         except Exception as exc:  # noqa: BLE001 - classifier unavailable == fail-closed
             msg = f"classifier unavailable: {exc}"
             errors.append(msg)
-            log.exception("Classifier batch failed (search %s) — fail-closed", search_id)
+            log.exception("Classifier batch failed (search %s) â€” fail-closed", search_id)
             store.update_search(search_id, status="failed", error=msg, finished_at=datetime.now(UTC))
             progress("failed", raw_found, len(accepted), scanned, msg)
             return _summary(search_id, "failed", raw_found, len(accepted), scanned, iterations, msg)
 
         gained = 0
-        qualified_batch: list[EngineResult] = []
         for post, classification in zip(candidates, classifications):
             scanned += 1
             if classification is None:
                 classify_failed += 1  # fail-closed: dropped
+                _record_reject(post, None, reason="classifier returned no verdict / parse failed")
                 continue
             if classification.lead_type not in accepted_types:
                 # TYPE GATE: the user asked for a specific buyer situation. When
@@ -272,6 +343,7 @@ def run_search(
                 # DIFFERENT type (e.g. our_agency found during a
                 # need_freelancer search) is not a lead for THIS search.
                 type_mismatch += 1
+                _record_reject(post, classification, reason=classification.reason or "type mismatch")
                 continue
             qualified = compute_score(
                 classification,
@@ -281,22 +353,15 @@ def run_search(
                 cfg=cfg,
             )
             if qualified.keep:
-                qualified_batch.append(EngineResult(post=post, classification=classification, qualified=qualified))
+                # Cross-search ownership was already checked before the LLM call
+                # (Tier 1.1), so every survivor here is a NEW lead.
+                accepted.append(EngineResult(post=post, classification=classification, qualified=qualified))
+                gained += 1
             else:
                 _note_reject(qualified)
-
-        # post_url is globally unique: posts you already own from EARLIER
-        # searches do not count toward N — skip them and keep scanning so the
-        # search delivers exactly N NEW leads (never fewer, never padded).
-        if qualified_batch:
-            existing = store.find_existing_post_urls(r.post.post_url for r in qualified_batch)
-            for result in qualified_batch:
-                if result.post.post_url in existing:
-                    dup_existing += 1
-                    log.info("Skipping already-owned lead (from an earlier search): %s", result.post.post_url)
-                    continue
-                accepted.append(result)
-                gained += 1
+                _record_reject(post, classification,
+                               reason=qualified.reason or "failed scoring gates",
+                               verdict_type=classification.lead_type)
 
         zero_yield_rounds = zero_yield_rounds + 1 if gained == 0 else 0
         # Keep the DB row live so the status poll shows progress.
@@ -306,18 +371,28 @@ def run_search(
             accepted_count=len(accepted),
             scanned_count=scanned,
         )
+        _persist_stats()
         progress("running", raw_found, len(accepted), scanned,
                  f"accepted {len(accepted)}/{leads_needed} {lead_type} leads (scanned {scanned}, pref-dropped {pref_dropped}, "
                  f"content-dropped {dir_dropped}, classify-dropped {classify_failed}, type-mismatch {type_mismatch}, "
                  f"already-owned {dup_existing})")
         if len(accepted) >= leads_needed:
+            stop_reason = "target_reached"
             break
-        # CREDIT SAFETY: stop as soon as several rounds added NO new lead —
+        # CREDIT SAFETY: stop as soon as several rounds added NO new lead â€”
         # whether that round had zero posts or posts that all got rejected.
         # Prevents a 0-lead niche from burning 200+ Serper calls.
         if zero_yield_rounds >= settings.engine_early_stop_empty_rounds and iteration > 0:
             detail = f"{zero_yield_rounds} rounds in a row added nothing new; stopped early"
+            stop_reason = "empty_rounds_stop"
             break
+
+    # -------- flush Tier-0 rejection telemetry -----------------------------
+    try:
+        if reject_rows:
+            store.record_rejections(reject_rows)
+    except Exception:  # noqa: BLE001 - telemetry must never break a search
+        log.debug("record_rejections unavailable (ignored)", exc_info=True)
 
     # -------- slice to EXACTLY N (never overdeliver) -----------------------
     # Recency-first WITHIN quality bands: a fresh post (>=80, or 65-79) is
@@ -333,7 +408,7 @@ def run_search(
 
     if not top and not raw_found and not errors and not deadline_hit:
         detail = detail or (
-            "no candidate posts returned by Google for this window/query set — "
+            "no candidate posts returned by Google for this window/query set â€” "
             + CRAWL_LAG_NOTE
         )
 
@@ -389,13 +464,17 @@ def run_search(
         error=None,
         finished_at=datetime.now(UTC),
     )
+    _persist_stats(stop_reason)
     if reject_reasons:
         log.info("Search %s reject breakdown: %s", search_id,
                  ", ".join(f"{k}={v}" for k, v in sorted(reject_reasons.items())))
+    _s, _d = _call_counts()
     log.info("Search %s done: status=%s found=%d accepted=%d scanned=%d (iterations=%d) "
-             "pref_dropped=%d content_dropped=%d classify_failed=%d type_mismatch=%d dup_owned=%d",
+             "pref_dropped=%d content_dropped=%d classify_failed=%d type_mismatch=%d dup_owned=%d "
+             "serper_requests=%d deepseek_calls=%d stop_reason=%s",
              search_id, status, raw_found, len(top), scanned, iterations,
-             pref_dropped, dir_dropped, classify_failed, type_mismatch, dup_existing)
+             pref_dropped, dir_dropped, classify_failed, type_mismatch, dup_existing,
+             _s, _d, stop_reason)
     progress(status, raw_found, len(top), scanned, final_detail or "search finished")
     return _summary(search_id, status, raw_found, len(top), scanned, iterations, final_detail)
 

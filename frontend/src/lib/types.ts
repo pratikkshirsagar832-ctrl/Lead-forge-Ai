@@ -54,6 +54,9 @@ export interface SearchStatus {
   country?: string;
   service?: string;
   lead_status?: string;
+  serper_requests_used?: number;
+  deepseek_calls_used?: number;
+  stop_reason?: string;
 }
 
 export interface SearchHistoryItem {

@@ -1,4 +1,4 @@
-"""Canonical domain model: lead types, time windows, and API schemas.
+﻿"""Canonical domain model: lead types, time windows, and API schemas.
 
 Lead-type taxonomy is the single source of truth for the whole system.
 Everything else (query builder, classifier prompt, scoring, schema.sql)
@@ -17,7 +17,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 class LeadType(str, Enum):
     """Buyer intents that are requestable. Everything else is rejected.
 
-    Exactly two requestable buyer situations (§1): an owner needs an
+    Exactly two requestable buyer situations (Â§1): an owner needs an
     independent freelancer, or an agency wants to bring in outside freelance
     help. Hiring/employee job ads and job seekers are never requestable.
     """
@@ -53,7 +53,7 @@ class TimeWindow(str, Enum):
     def cutoff(self, now: datetime | None = None) -> datetime:
         """Discovery-time cutoff.
 
-        Computed fresh on every call from *now* — never stored/hardcoded.
+        Computed fresh on every call from *now* â€” never stored/hardcoded.
         The cutoff is rounded down to the start of the UTC day `window` days
         ago, i.e. the widest bucket that guarantees at least one full day of
         posts and never less than the requested freshness.
@@ -98,7 +98,7 @@ class IntentStrength(str, Enum):
 # ---------------------------------------------------------------------------
 
 class LeadClassification(BaseModel):
-    """Structured classification returned by GPT-4o for one candidate post."""
+    """Structured classification returned by DeepSeek for one candidate post."""
 
     model_config = ConfigDict(extra="forbid")
 

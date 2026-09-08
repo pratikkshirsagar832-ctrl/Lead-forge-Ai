@@ -1,12 +1,12 @@
 """
-Hyperclients — Search Router
+Hyperclients â€” Search Router
 
 Endpoints:
-  POST /api/searches          — create a new search
-  GET  /api/searches          — search history
-  GET  /api/searches/{id}     — search detail
-  GET  /api/searches/{id}/status — search status (for polling)
-  POST /api/searches/{id}/cancel — cancel a running search
+  POST /api/searches          â€” create a new search
+  GET  /api/searches          â€” search history
+  GET  /api/searches/{id}     â€” search detail
+  GET  /api/searches/{id}/status â€” search status (for polling)
+  POST /api/searches/{id}/cancel â€” cancel a running search
 """
 
 from datetime import datetime, timezone
@@ -113,7 +113,7 @@ async def create_search(
     query_term = request.niche.strip()
     location_term = request.location.strip()
 
-    # Product policy: LinkedIn discovery targets genuine service buyers —
+    # Product policy: LinkedIn discovery targets genuine service buyers â€”
     # freelancer-needed (buyer) and agency-wanted. Hiring/job-ads and
     # job-seeker intents are never requested.
     if request.source == "linkedin":
@@ -149,7 +149,7 @@ async def create_search(
     effective_max_results = min(effective_max_results, reservation_amount)
 
     if request.source == "linkedin":
-        # Hyperagent engine: Serper.dev discovery + DeepSeek/GPT-4o classification
+        # Hyperagent engine: Serper.dev discovery + DeepSeek classification
         from app.services.hyperagent_service import (
             ha_lead_type_from,
             ha_time_window_from,
@@ -160,7 +160,7 @@ async def create_search(
         ha_lead_type = ha_lead_type_from(lead_types)
         ha_time_window = ha_time_window_from()
 
-        # GLOBAL SEARCH: location is intentionally removed for LinkedIn — the
+        # GLOBAL SEARCH: location is intentionally removed for LinkedIn â€” the
         # engine scans posts from every country and returns the latest buyers.
         country_stored = ""
         stored_location = "Global"
@@ -210,7 +210,7 @@ async def create_search(
 
         return search
 
-    # Google Maps search — direct insert (no broken RPC)
+    # Google Maps search â€” direct insert (no broken RPC)
     try:
         response = (
             supabase.table("searches")
@@ -425,19 +425,20 @@ async def get_search_results(
                         item["linkedin_url"] = item["author_profile_url"]
                     if not item.get("post_type") and item.get("lead_type"):
                         # Map Hyperagent lead_type to frontend post_type. Only
-                        # the two requestable buyer types are stored.
+                        # the two requestable buyer types are stored (no
+                        # legacy hiring_buyer / marketplace_match rows remain).
                         lt = item["lead_type"]
                         item["post_type"] = {
                             "need_freelancer": "buyer",
                             "our_agency": "agency_wanted",
-                        }.get(lt, "buyer" if lt in ("marketplace_match", "hiring_buyer") else lt)
+                        }.get(lt, lt)
                     if not item.get("headline") and item.get("author_name"):
                         item["headline"] = item["author_name"]
                     if not item.get("posted_at") and item.get("post_date"):
                         item["posted_at"] = item["post_date"]
                     if not item.get("website_health_score") and item.get("overall_quality_score"):
                         item["website_health_score"] = round(item["overall_quality_score"] * 100) if item["overall_quality_score"] <= 1 else item["overall_quality_score"]
-                    # ha_leads has no ai_pitch/rating/etc → default safe values
+                    # ha_leads has no ai_pitch/rating/etc â†’ default safe values
                     item.setdefault("email_found", "")
                     item.setdefault("ai_pitch", None)
                     item.setdefault("user_status", item.get("status") or "new")
@@ -501,7 +502,7 @@ async def get_search_status(
             except Exception:
                 ha_row = None
             if ha_row:
-                # Map engine lifecycle → main status vocabulary
+                # Map engine lifecycle â†’ main status vocabulary
                 ha_status = ha_row.get("status") or "queued"
                 if ha_status == "running":
                     ha_status = "scraping"
@@ -522,7 +523,7 @@ async def get_search_status(
                 except Exception:
                     row["hot_leads"] = int(ha_row.get("accepted_count") or 0)
                 # "Total Found" = the DELIVERED qualified leads (<= requested N).
-                # Raw `found_count` is the count of posts reviewed, not leads —
+                # Raw `found_count` is the count of posts reviewed, not leads â€”
                 # showing it here made "Total Found 40 / Processed 56" (processed
                 # > found), which is impossible. Show delivered leads instead.
                 row["total_results"] = row["hot_leads"]
@@ -535,6 +536,11 @@ async def get_search_status(
                     row["completed_at"] = ha_row["finished_at"]
                 # Exact-count context for the frontend contract
                 row["max_results"] = ha_row.get("leads_needed") or row.get("max_results")
+                # Tier-0 observability: per-search spend + stop reason (columns
+                # exist only after the observability migration; else 0/None).
+                row["serper_requests_used"] = int(ha_row.get("serper_requests_used") or 0)
+                row["deepseek_calls_used"] = int(ha_row.get("deepseek_calls_used") or 0)
+                row["stop_reason"] = ha_row.get("stop_reason")
 
         # Merge Hyperagent live progress if available
         ha_progress = get_hyperagent_progress(search_id)
@@ -542,7 +548,7 @@ async def get_search_status(
             row["total_results"] = ha_progress.get("found") or row.get("total_results", 0)
             row["hot_leads"] = ha_progress.get("accepted") or row.get("hot_leads", 0)
             row["warm_leads"] = ha_progress.get("scanned") or row.get("warm_leads", 0)
-            # Friendly live message — engine's internal iteration detail stays
+            # Friendly live message â€” engine's internal iteration detail stays
             # in the logs, never in the UI.
             if row.get("source") == "linkedin":
                 accepted_so_far = row["hot_leads"]
@@ -553,11 +559,11 @@ async def get_search_status(
                     wanted = None
                 found_so_far = row["total_results"]
                 if accepted_so_far > 0 and wanted:
-                    row["message"] = f"Scanning LinkedIn… {accepted_so_far} of {wanted} qualified leads found so far."
+                    row["message"] = f"Scanning LinkedInâ€¦ {accepted_so_far} of {wanted} qualified leads found so far."
                 elif found_so_far > 0:
-                    row["message"] = f"Scanning LinkedIn… {found_so_far} posts reviewed so far, still looking for qualified leads."
+                    row["message"] = f"Scanning LinkedInâ€¦ {found_so_far} posts reviewed so far, still looking for qualified leads."
                 else:
-                    row["message"] = "Scanning LinkedIn for buyers…"
+                    row["message"] = "Scanning LinkedIn for buyersâ€¦"
             elif ha_progress.get("message"):
                 row["message"] = ha_progress["message"]
             # Surface engine stage as progress percent (best-effort)
@@ -618,6 +624,9 @@ async def get_search_status(
             "country": "Global" if row.get("source") == "linkedin" else (row.get("location") or ""),
             "service": row.get("niche"),
             "lead_status": "complete" if row.get("status") == "completed" else None,
+            "serper_requests_used": int(row.get("serper_requests_used") or 0),
+            "deepseek_calls_used": int(row.get("deepseek_calls_used") or 0),
+            "stop_reason": row.get("stop_reason"),
         }
     except HTTPException:
         raise
@@ -743,7 +752,7 @@ async def debug_test_scraper(request: DebugSearchRequest, current_user: dict = D
     input_fd, input_path = tempfile.mkstemp(suffix=".txt")
     output_fd, output_path = tempfile.mkstemp(suffix=".csv")
     
-    # Close FDs immediately — we'll use path-based I/O from here
+    # Close FDs immediately â€” we'll use path-based I/O from here
     os.close(input_fd)
     os.close(output_fd)
     

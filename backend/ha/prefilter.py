@@ -1,4 +1,4 @@
-"""Deterministic cheap rejects — run BEFORE any AI spend.
+﻿"""Deterministic cheap rejects â€” run BEFORE any AI spend.
 
 Precision doctrine: a deterministic rule only drops a post when the drop is
 near-certain. Whenever a genuine buyer phrase and a negative category both
@@ -89,7 +89,7 @@ def _contains(text: str, phrases: tuple[str, ...]) -> bool:
 
 def prefilter(text: str, *, service: str = "", max_comments: int | None = None,
               num_comments: int | None = None) -> PrefilterVerdict:
-    """Decide cheaply whether a post is worth GPT-4o spend.
+    """Decide cheaply whether a post is worth DeepSeek spend.
 
     Never drops a post that shows any buyer marker (the classifier owns those
     ambiguous cases). Without a buyer marker, near-certain negatives are
@@ -97,7 +97,7 @@ def prefilter(text: str, *, service: str = "", max_comments: int | None = None,
 
     Comment ceiling: only applies to posts where the provider KNOWS the count
     (num_comments is not None) AND a ceiling is configured. An unknown-count
-    post is never rejected by this rule — no false drops on partial data.
+    post is never rejected by this rule â€” no false drops on partial data.
     """
     low = (text or "").lower()
     matched = {

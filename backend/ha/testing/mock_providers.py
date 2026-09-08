@@ -1,6 +1,6 @@
-"""Offline providers for demo mode and tests (no external keys needed).
+﻿"""Offline providers for demo mode and tests (no external keys needed).
 
-The corpus deliberately mixes genuine buyers of every lead type with the §2
+The corpus deliberately mixes genuine buyers of every lead type with the Â§2
 trap categories (sellers, job seekers, talent marketplaces, agency
 self-promotion, thought leadership, job ads), so engine behavior can be
 verified without spending real discovery/AI calls.
@@ -77,7 +77,7 @@ def _mk(
     )
 
 
-# (text contains "video editor" / "video editing" / "animation" style tokens — the
+# (text contains "video editor" / "video editing" / "animation" style tokens â€” the
 # generic corpus is service-agnostic: engine tests use service "video editor", and
 # posts below that mention "video" are boosted by include_in_generic scoring below.)
 CORPUS: list[FakePost] = [
@@ -106,7 +106,7 @@ CORPUS: list[FakePost] = [
         LeadType.NEED_FREELANCER, IntentStrength.ACTIVE_SEARCH, days=1.5),
     _mk("Seeking a video editor for our SaaS launch videos. We're a 40-person startup, decision this week.",
         LeadType.NEED_FREELANCER, IntentStrength.ACTIVE_SEARCH, days=4.0, decision=True),
-    _mk("Need a video editor asap for an investor deck trailer — deadline Friday, contractor fine.",
+    _mk("Need a video editor asap for an investor deck trailer â€” deadline Friday, contractor fine.",
         LeadType.NEED_FREELANCER, IntentStrength.EXPLICIT, days=0.1, commercial=95),
     _mk("We are hiring a freelance video editor for a 6-week campaign, not a full-time role. Rate negotiable within budget.",
         LeadType.NEED_FREELANCER, IntentStrength.ACTIVE_SEARCH, days=5.0, match=85),
@@ -118,32 +118,32 @@ CORPUS: list[FakePost] = [
     _mk("Looking for vetted freelance video editors to join our delivery bench for client work. Paid per project.",
         LeadType.OUR_AGENCY, IntentStrength.ACTIVE_SEARCH, days=7.0),
     # --- traps: seller / self-promotion --------------------------------------------
-    _mk("We offer video editing services — book a call for a free consultation and a quote within 24h.",
+    _mk("We offer video editing services â€” book a call for a free consultation and a quote within 24h.",
         "irrelevant", IntentStrength.NONE, days=0.3, match=10, commercial=10,
         reason="seller/offering: author provides the service"),
     _mk("DM me for video editing! I deliver 48h turnaround, white-label options for agencies.",
         "irrelevant", IntentStrength.NONE, days=1.0, match=15, reason="seller/offering: author provides the service"),
-    _mk("Our agency specializes in video editing for B2B. We can help your brand stand out — get in touch.",
+    _mk("Our agency specializes in video editing for B2B. We can help your brand stand out â€” get in touch.",
         "irrelevant", IntentStrength.NONE, days=0.6, match=12, reason="agency self-promotion, not our_agency"),
     _mk("Need video editing? We are a full-service production house with 15 years of experience. Sign up for a call.",
         "irrelevant", IntentStrength.NONE, days=2.2, match=10, reason="seller/offering"),
     # --- traps: job seekers ----------------------------------------------------------
-    _mk("I'm a freelance video editor available for projects — open to work, portfolio in comments.",
+    _mk("I'm a freelance video editor available for projects â€” open to work, portfolio in comments.",
         "irrelevant", IntentStrength.NONE, days=1.2, match=20, reason="job seeker: wants employment for themselves"),
     _mk("Freelance video editor seeking new clients and opportunities for 2025. Links below.",
         "irrelevant", IntentStrength.NONE, days=3.5, match=18, reason="job seeker"),
     # --- traps: talent marketplace / recruiting-seller ------------------------------
-    _mk("Our platform connects brands with vetted video editors. Join our talent network today — free for freelancers.",
+    _mk("Our platform connects brands with vetted video editors. Join our talent network today â€” free for freelancers.",
         "irrelevant", IntentStrength.NONE, days=0.9, reason="talent marketplace recruiting freelancers to place elsewhere"),
     _mk("We are a staffing agency placing video editors at enterprise clients. Submit your portfolio to join our pool.",
         "irrelevant", IntentStrength.NONE, days=4.5, reason="recruiting-seller"),
     # --- traps: thought leadership ---------------------------------------------------
-    _mk("5 video editing tips that will double your retention. Save this for later 🚀",
+    _mk("5 video editing tips that will double your retention. Save this for later ðŸš€",
         "irrelevant", IntentStrength.NONE, days=0.5, match=5, reason="thought leadership: generic tips, no procurement"),
     _mk("In my experience, good video editing is 80% storytelling. Here is my take on the craft.",
         "irrelevant", IntentStrength.NONE, days=6.5, match=5, reason="thought leadership"),
     # --- traps: job ads ----------------------------------------------------------------
-    _mk("We are hiring a full-time video editor. Apply now at careers.example.com — vacancy #4421.",
+    _mk("We are hiring a full-time video editor. Apply now at careers.example.com â€” vacancy #4421.",
         "irrelevant", IntentStrength.NONE, days=1.4, match=20, reason="job ad / vacancy"),
     _mk("Full-time position open: in-house video editor, benefits included. Apply before Friday.",
         "irrelevant", IntentStrength.NONE, days=8.0, match=15, reason="job ad"),
@@ -211,7 +211,7 @@ class MockDiscoveryClient:
 
 
 class MockClassifier:
-    """Deterministic stand-in for the GPT-4o classifier (offline only)."""
+    """Deterministic stand-in for the DeepSeek classifier (offline only)."""
 
     def __init__(self, corpus: list[FakePost] | None = None) -> None:
         self.corpus = corpus if corpus is not None else CORPUS
@@ -259,7 +259,7 @@ def build_service_corpus(
 ) -> list[FakePost]:
     """Deterministic offline corpus for ANY service/location.
 
-    Used by the generalization tests (§0): the same pipeline must work for a
+    Used by the generalization tests (Â§0): the same pipeline must work for a
     plumber, a UX designer or a wedding photographer purely from the values
     passed in. `terms` are the service words that must appear in post text
     (matching what the engine's queries will carry), `location` is embedded
@@ -308,7 +308,7 @@ def build_service_corpus(
     add(f"Our company needs a {svc} for a project{in_loc}. Approved budget and a tight timeline.",
         LeadType.NEED_FREELANCER, IntentStrength.EXPLICIT, days=1.0,
         commercial=95, decision=True, reason="genuine need_freelancer buyer (company)")
-    add(f"Seeking a {svc} for our team — project-based with possible retainer. Budget approved.",
+    add(f"Seeking a {svc} for our team â€” project-based with possible retainer. Budget approved.",
         LeadType.NEED_FREELANCER, IntentStrength.ACTIVE_SEARCH, days=3.5,
         reason="genuine need_freelancer buyer (company)")
     add(f"We're a local agency{at_loc} looking for freelance {svc_s} to work with our agency on client projects.",
@@ -316,19 +316,19 @@ def build_service_corpus(
         reason="genuine our_agency buyer")
 
     if include_traps:
-        add(f"We offer professional {svc} services — book a call for a free quote.",
+        add(f"We offer professional {svc} services â€” book a call for a free quote.",
             "irrelevant", IntentStrength.NONE, days=1.3, match=10, commercial=10,
             reason="seller/offering: author provides the service")
-        add(f"Our agency specializes in {svc} for businesses. We can help your brand — get in touch.",
+        add(f"Our agency specializes in {svc} for businesses. We can help your brand â€” get in touch.",
             "irrelevant", IntentStrength.NONE, days=2.0, match=12,
             reason="agency self-promotion, not our_agency")
-        add(f"I'm a freelance {svc} open to work — available for projects immediately.",
+        add(f"I'm a freelance {svc} open to work â€” available for projects immediately.",
             "irrelevant", IntentStrength.NONE, days=0.9, match=15,
             reason="job seeker: wants employment for themselves")
         add(f"Join our platform to book vetted {svc_s} for your needs. Sign up today.",
             "irrelevant", IntentStrength.NONE, days=1.6, match=8,
             reason="talent marketplace recruiting freelancers to place elsewhere")
-        add(f"We are hiring a full-time {svc} for our office. Apply now — vacancy #12.",
+        add(f"We are hiring a full-time {svc} for our office. Apply now â€” vacancy #12.",
             "irrelevant", IntentStrength.NONE, days=5.2, match=18,
             reason="job ad / vacancy")
         add(f"5 {svc} tips that will save you thousands. Save this for later.",

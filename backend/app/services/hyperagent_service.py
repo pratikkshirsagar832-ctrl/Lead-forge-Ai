@@ -129,6 +129,9 @@ def _ha_settings() -> HaSettings:
     os.environ["ENGINE_MAX_ITERATIONS"] = "12"
     os.environ["ENGINE_DEADLINE_SECONDS"] = "540"
     os.environ["ENGINE_EARLY_STOP_EMPTY_ROUNDS"] = "4"
+    # Independent per-search spend ceilings (safety net beyond iterations).
+    os.environ["MAX_SERPER_REQUESTS_PER_SEARCH"] = "60"
+    os.environ["MAX_DEEPSEEK_CALLS_PER_SEARCH"] = "150"
     # Model gate OFF: referral/recommendation posts (very common for agency
     # seekers) often hedge is_qualified=false despite real buying intent — the
     # score/intent/content gates already protect precision.

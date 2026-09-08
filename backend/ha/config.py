@@ -85,6 +85,12 @@ class Settings:
     engine_deadline_seconds: int = field(default_factory=lambda: _int("ENGINE_DEADLINE_SECONDS", 1800))
     engine_early_stop_empty_rounds: int = field(default_factory=lambda: _int("ENGINE_EARLY_STOP_EMPTY_ROUNDS", 3))
     classifier_concurrency: int = field(default_factory=lambda: _int("CLASSIFIER_CONCURRENCY", 8))
+    # Independent hard ceilings per search (regardless of iteration/deadline/
+    # empty-round logic) — the safety net for pathological niches.
+    max_serper_requests_per_search: int = field(
+        default_factory=lambda: _int("MAX_SERPER_REQUESTS_PER_SEARCH", 60))
+    max_deepseek_calls_per_search: int = field(
+        default_factory=lambda: _int("MAX_DEEPSEEK_CALLS_PER_SEARCH", 150))
 
     # Buyer-sibling acceptance: when ON, a need_freelancer search also accepts
     # hiring_buyer posts (both are genuine service buyers) and vice-versa.

@@ -77,13 +77,6 @@ async def get_current_subscription(current_user: dict = Depends(get_current_user
         leads_per_day = plan.get("leads_per_day", 30) or 30
 
         used_searches, used_leads = get_used_today(supabase, user_id)
-        # Search allowance resets MONTHLY, not daily — count this month's
-        # created searches against searches_per_day as the monthly cap.
-        try:
-            from app.services.plans import get_monthly_searches_used
-            used_searches_month = get_monthly_searches_used(supabase, user_id)
-        except Exception:
-            used_searches_month = used_searches
         month = datetime.now(timezone.utc).replace(day=1).date().isoformat()
         usage = {}
         try:
@@ -102,7 +95,7 @@ async def get_current_subscription(current_user: dict = Depends(get_current_user
             "status": status,
             "searches_per_day": searches_per_day,
             "leads_per_day": leads_per_day,
-            "remaining_searches": max(0, searches_per_day - used_searches_month),
+            "remaining_searches": max(0, searches_per_day - used_searches),
             # Lead quota is MONTHLY — remaining_leads must reflect the monthly
             # cap (resets on the 1st), never the daily leads_per_day counter.
             "remaining_leads": max(0, linkedin_limit - int(usage.get("linkedin_hq_generated", 0) or 0) - int(usage.get("linkedin_hq_reserved", 0) or 0))

@@ -323,20 +323,7 @@ def _pool(svc: str, naked: str, phrase: str | None, lead_type: LeadType) -> list
             f"looking for {A} for ongoing work",
             f"need {A} for ongoing projects",
         ]
-        # Tier-3 (audit §7): on crowded freelancer niches the pool's early
-        # iterations were dominated by generic "looking for {role}" phrasings,
-        # which surface the most sellers. Budget/timeline/urgency-qualified
-        # phrasings correlate with the commercial_intent the classifier rewards,
-        # so try THOSE first (they rank first in the slice next_queries takes).
-        _prio = [q for q in out if any(
-            k in q for k in (
-                "budget", "paid", "asap", "urgent", "urgently", "this week",
-                "next week", "soon", "one-off", "project basis", "deadline",
-            )
-        )]
-        _seen = set(_prio)
-        _rest = [q for q in out if not (q in _seen or _seen.add(q))]
-        return _prio + _rest
+        return out
 
     # OUR_AGENCY — discovery targets agencies/teams that want outside freelance
     # help for their own client work, plus companies seeking an agency/outside

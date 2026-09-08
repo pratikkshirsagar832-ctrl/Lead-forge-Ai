@@ -53,7 +53,7 @@ class TimeWindow(str, Enum):
     def cutoff(self, now: datetime | None = None) -> datetime:
         """Discovery-time cutoff.
 
-        Computed fresh on every call from *now* â€” never stored/hardcoded.
+        Computed fresh on every call from *now* - never stored/hardcoded.
         The cutoff is rounded down to the start of the UTC day `window` days
         ago, i.e. the widest bucket that guarantees at least one full day of
         posts and never less than the requested freshness.

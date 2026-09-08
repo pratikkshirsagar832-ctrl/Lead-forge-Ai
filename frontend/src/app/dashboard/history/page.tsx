@@ -119,7 +119,11 @@ export default function HistoryPage() {
                     </div>
                     <div className="text-center sm:text-right flex-1 sm:flex-none">
                       <p className="text-xs font-medium text-ice/60 uppercase tracking-wider mb-1">Processed</p>
-                      <p className="text-xl font-bold text-offwhite">{(item.hot_leads || 0) + (item.warm_leads || 0)}</p>
+                      <p className="text-xl font-bold text-offwhite">
+                        {item.source === 'linkedin'
+                          ? (item.warm_leads || 0)
+                          : (item.hot_leads || 0) + (item.warm_leads || 0)}
+                      </p>
                     </div>
                     <ChevronRight className="w-5 h-5 text-ice/40 group-hover:text-steel group-hover:translate-x-1 transition-all shrink-0 hidden sm:block" />
                   </div>

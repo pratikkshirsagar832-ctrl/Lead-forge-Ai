@@ -27,7 +27,7 @@ from engine import run_search  # noqa: E402
 from models import LeadType  # noqa: E402
 
 PROJECT_REF = "gtklleletrpajrfypofi"
-# Management token comes from the environment â€” NEVER commit it.
+# Management token comes from the environment - NEVER commit it.
 MGMT_TOKEN = os.environ.get("SUPABASE_MGMT_TOKEN", "")
 
 

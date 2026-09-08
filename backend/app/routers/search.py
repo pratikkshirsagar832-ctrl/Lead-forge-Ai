@@ -1,12 +1,12 @@
 """
-Hyperclients â€” Search Router
+Hyperclients - Search Router
 
 Endpoints:
-  POST /api/searches          â€” create a new search
-  GET  /api/searches          â€” search history
-  GET  /api/searches/{id}     â€” search detail
-  GET  /api/searches/{id}/status â€” search status (for polling)
-  POST /api/searches/{id}/cancel â€” cancel a running search
+  POST /api/searches          - create a new search
+  GET  /api/searches          - search history
+  GET  /api/searches/{id}     - search detail
+  GET  /api/searches/{id}/status - search status (for polling)
+  POST /api/searches/{id}/cancel - cancel a running search
 """
 
 from datetime import datetime, timezone
@@ -113,7 +113,7 @@ async def create_search(
     query_term = request.niche.strip()
     location_term = request.location.strip()
 
-    # Product policy: LinkedIn discovery targets genuine service buyers â€”
+    # Product policy: LinkedIn discovery targets genuine service buyers -
     # freelancer-needed (buyer) and agency-wanted. Hiring/job-ads and
     # job-seeker intents are never requested.
     if request.source == "linkedin":
@@ -160,7 +160,7 @@ async def create_search(
         ha_lead_type = ha_lead_type_from(lead_types)
         ha_time_window = ha_time_window_from()
 
-        # GLOBAL SEARCH: location is intentionally removed for LinkedIn â€” the
+        # GLOBAL SEARCH: location is intentionally removed for LinkedIn - the
         # engine scans posts from every country and returns the latest buyers.
         country_stored = ""
         stored_location = "Global"
@@ -210,7 +210,7 @@ async def create_search(
 
         return search
 
-    # Google Maps search â€” direct insert (no broken RPC)
+    # Google Maps search - direct insert (no broken RPC)
     try:
         response = (
             supabase.table("searches")
@@ -523,7 +523,7 @@ async def get_search_status(
                 except Exception:
                     row["hot_leads"] = int(ha_row.get("accepted_count") or 0)
                 # "Total Found" = the DELIVERED qualified leads (<= requested N).
-                # Raw `found_count` is the count of posts reviewed, not leads â€”
+                # Raw `found_count` is the count of posts reviewed, not leads -
                 # showing it here made "Total Found 40 / Processed 56" (processed
                 # > found), which is impossible. Show delivered leads instead.
                 row["total_results"] = row["hot_leads"]
@@ -548,7 +548,7 @@ async def get_search_status(
             row["total_results"] = ha_progress.get("found") or row.get("total_results", 0)
             row["hot_leads"] = ha_progress.get("accepted") or row.get("hot_leads", 0)
             row["warm_leads"] = ha_progress.get("scanned") or row.get("warm_leads", 0)
-            # Friendly live message â€” engine's internal iteration detail stays
+            # Friendly live message - engine's internal iteration detail stays
             # in the logs, never in the UI.
             if row.get("source") == "linkedin":
                 accepted_so_far = row["hot_leads"]
@@ -558,12 +558,19 @@ async def get_search_status(
                 except (TypeError, ValueError):
                     wanted = None
                 found_so_far = row["total_results"]
+                svc_label = (row.get("niche") or "").strip() or "your service"
                 if accepted_so_far > 0 and wanted:
-                    row["message"] = f"Scanning LinkedInâ€¦ {accepted_so_far} of {wanted} qualified leads found so far."
+                    row["message"] = (
+                        f"We found {accepted_so_far} of {wanted} genuine {svc_label} buyers so far. "
+                        "Scanning the latest posts to deliver the rest."
+                    )
                 elif found_so_far > 0:
-                    row["message"] = f"Scanning LinkedInâ€¦ {found_so_far} posts reviewed so far, still looking for qualified leads."
+                    row["message"] = (
+                        f"Searching LinkedIn for {svc_label} buyers... {found_so_far} posts reviewed, "
+                        "still looking for the strongest matches."
+                    )
                 else:
-                    row["message"] = "Scanning LinkedIn for buyersâ€¦"
+                    row["message"] = f"Searching LinkedIn for {svc_label} buyers..."
             elif ha_progress.get("message"):
                 row["message"] = ha_progress["message"]
             # Surface engine stage as progress percent (best-effort)
@@ -752,7 +759,7 @@ async def debug_test_scraper(request: DebugSearchRequest, current_user: dict = D
     input_fd, input_path = tempfile.mkstemp(suffix=".txt")
     output_fd, output_path = tempfile.mkstemp(suffix=".csv")
     
-    # Close FDs immediately â€” we'll use path-based I/O from here
+    # Close FDs immediately - we'll use path-based I/O from here
     os.close(input_fd)
     os.close(output_fd)
     

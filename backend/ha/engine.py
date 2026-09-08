@@ -1,6 +1,6 @@
 """Iterative exact-count engine (Â§9).
 
-Deliver exactly N qualified leads, or run out of provider results trying â€”
+Deliver exactly N qualified leads, or run out of provider results trying -
 never pad the count with weak matches. Sequence per iteration:
 queries -> discovery -> canonical dedupe -> deterministic prefilter -> DeepSeek
 classification (concurrent, fail-closed) -> scoring gates -> accept.
@@ -34,8 +34,8 @@ log = logging.getLogger(__name__)
 ProgressFn = Callable[[str, int, int, int, str], None]
 
 CRAWL_LAG_NOTE = (
-    "Google's coverage of LinkedIn posts is partial and typically lags 1â€“3 days, "
-    "so tight queries and short windows often return little â€” this is expected, not a failure."
+    "Google's coverage of LinkedIn posts is partial and typically lags 1-3 days, "
+    "so tight queries and short windows often return little - this is expected, not a failure."
 )
 
 
@@ -84,7 +84,7 @@ def run_search(
     call: return False to drop a candidate whose text clearly contradicts the
     requested content direction (e.g. an advice/seller post that merely
     contains the keywords). Dropping here saves the DeepSeek call AND keeps the
-    engine's exact-count loop honest â€” it only counts posts that survive the
+    engine's exact-count loop honest - it only counts posts that survive the
     content gate, so it keeps scanning until it genuinely finds N matching
     leads instead of stopping early on posts it later discards at save time.
     """
@@ -95,7 +95,7 @@ def run_search(
 
     service = row["service"]
     country_raw = row.get("country") or ""  # canonical code when recognized, else raw text
-    # Human-friendly label (canonical country name, else the raw free text) â€”
+    # Human-friendly label (canonical country name, else the raw free text) -
     # used for classifier context and location scoring, never for hard rejects.
     country = canonical_label(country_raw)
     lead_type = row["lead_type"]
@@ -191,7 +191,7 @@ def run_search(
             deadline_hit = True
             stop_reason = "deadline_hit"
             break
-        # Independent spend ceilings (Tier 1.2) â€” enforced regardless of the
+        # Independent spend ceilings (Tier 1.2) - enforced regardless of the
         # iteration/deadline/empty-round logic. 0/None disables a ceiling.
         s_now, d_now = _call_counts()
         if (
@@ -206,7 +206,7 @@ def run_search(
                       f"{settings.max_deepseek_calls_per_search})")
             stop_reason = "ceiling_hit"
             break
-        # Cooperative cancel â€” lets a user cancel stop provider spend promptly.
+        # Cooperative cancel - lets a user cancel stop provider spend promptly.
         if should_stop is not None:
             try:
                 if should_stop():
@@ -254,11 +254,11 @@ def run_search(
             return _summary(search_id, "failed", raw_found, len(accepted), scanned, iterations, str(exc))
 
         raw_found += len(batch.posts)
-        # Pass 1: intra-search URL dedupe only â€” no prefilter/gate/LLM spend.
+        # Pass 1: intra-search URL dedupe only - no prefilter/gate/LLM spend.
         round_unique: list[Any] = []
         for post in batch.posts:
             if not post.post_url:
-                continue  # a lead without a post URL has no identity â€” never accept it
+                continue  # a lead without a post URL has no identity - never accept it
             key = canonical_post_url(post.post_url)
             if not key or key in seen_urls:
                 continue
@@ -267,7 +267,7 @@ def run_search(
         # Pass 2 (Tier 1.1): cross-search ownership dedupe BEFORE the content
         # gate and DeepSeek. A post already saved by an earlier search is
         # skipped here (one cheap indexed lookup per round) instead of being
-        # fully classified first â€” previously it reached DeepSeek before being
+        # fully classified first - previously it reached DeepSeek before being
         # skipped (audit Â§6: dup_owned reached 11 in one run).
         owned: set[str] = set()
         if round_unique:
@@ -289,12 +289,12 @@ def run_search(
             if not verdict.keep:
                 pref_dropped += 1
                 continue
-            # CONTENT-DIRECTION GATE (cheap â€” NO LLM call). When a content_filter
+            # CONTENT-DIRECTION GATE (cheap - NO LLM call). When a content_filter
             # is wired (it mirrors the save-time store gate), a post whose text
             # clearly contradicts the requested buyer direction is dropped here.
             # Only posts that survive this gate can ever be accepted, so the
             # exact-count loop never stops early on posts it would later discard
-            # at save time â€” engine "accepted" == rows actually persisted â€” and
+            # at save time - engine "accepted" == rows actually persisted - and
             # no DeepSeek call is spent classifying a guaranteed discard.
             if content_filter is not None:
                 try:
@@ -325,7 +325,7 @@ def run_search(
         except Exception as exc:  # noqa: BLE001 - classifier unavailable == fail-closed
             msg = f"classifier unavailable: {exc}"
             errors.append(msg)
-            log.exception("Classifier batch failed (search %s) â€” fail-closed", search_id)
+            log.exception("Classifier batch failed (search %s) - fail-closed", search_id)
             store.update_search(search_id, status="failed", error=msg, finished_at=datetime.now(UTC))
             progress("failed", raw_found, len(accepted), scanned, msg)
             return _summary(search_id, "failed", raw_found, len(accepted), scanned, iterations, msg)
@@ -379,7 +379,7 @@ def run_search(
         if len(accepted) >= leads_needed:
             stop_reason = "target_reached"
             break
-        # CREDIT SAFETY: stop as soon as several rounds added NO new lead â€”
+        # CREDIT SAFETY: stop as soon as several rounds added NO new lead -
         # whether that round had zero posts or posts that all got rejected.
         # Prevents a 0-lead niche from burning 200+ Serper calls.
         if zero_yield_rounds >= settings.engine_early_stop_empty_rounds and iteration > 0:
@@ -408,7 +408,7 @@ def run_search(
 
     if not top and not raw_found and not errors and not deadline_hit:
         detail = detail or (
-            "no candidate posts returned by Google for this window/query set â€” "
+            "no candidate posts returned by Google for this window/query set - "
             + CRAWL_LAG_NOTE
         )
 

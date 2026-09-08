@@ -1,8 +1,8 @@
 """Persistence layer.
 
 Two interchangeable stores behind one protocol:
-  * SupabaseStore  â€” production (Postgres via supabase-py, service-role key)
-  * MemoryStore    â€” offline runs / demo mode / tests
+  * SupabaseStore  - production (Postgres via supabase-py, service-role key)
+  * MemoryStore    - offline runs / demo mode / tests
 The engine and the API only ever talk to the protocol below.
 """
 from __future__ import annotations

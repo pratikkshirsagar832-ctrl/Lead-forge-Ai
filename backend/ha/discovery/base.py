@@ -1,7 +1,7 @@
-﻿"""DiscoveryClient interface â€” the single seam every provider plugs into.
+﻿"""DiscoveryClient interface - the single seam every provider plugs into.
 
 Â§0: discovery = Google search over LinkedIn posts via a SERP API (Serper.dev
-style), i.e. "<query> site:linkedin.com/posts after:YYYY-MM-DD" â€” not
+style), i.e. "<query> site:linkedin.com/posts after:YYYY-MM-DD" - not
 LinkedIn-native scraping. Coverage is partial and lags 1-3 days (a tight
 query/window legitimately returns zero hits); every candidate still goes
 through DeepSeek classification upstream. The rest of the codebase only talks
@@ -89,7 +89,7 @@ class DiscoveryClient(ABC):
 
         Implementations dedupe internally by canonical_post_url. A provider
         that returns nothing it can attribute to the task (as opposed to a
-        genuinely empty result) must raise DiscoveryError â€” never silently
+        genuinely empty result) must raise DiscoveryError - never silently
         return [] and let callers believe "no leads exist".
 
         `pages` lets a provider fetch more than one page of results per query
@@ -119,7 +119,7 @@ def field_value(item: dict[str, Any], candidates: list[str]) -> Any:
 
     Handles flat scalars and nested payloads ({"author": {...}}). When the
     candidates are URL-ish, nested lookups prefer url keys; otherwise they
-    prefer name keys â€” so a row with only {"author": {"name": ...}} does not
+    prefer name keys - so a row with only {"author": {"name": ...}} does not
     masquerade as an author-profile URL.
     """
     want_url = any("url" in c.lower() for c in candidates)

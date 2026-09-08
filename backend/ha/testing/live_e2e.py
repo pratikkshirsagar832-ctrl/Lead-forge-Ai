@@ -1,8 +1,8 @@
 ﻿"""LIVE end-to-end smoke: real Supabase + real DeepSeek + full engine.
 
 Discovery is the offline corpus (real Google-SERP discovery needs a
-SERPER_API_KEY); everything else â€” engine, gates, DeepSeek structured
-classification, Supabase CRUD â€” runs against the real services configured in
+SERPER_API_KEY); everything else - engine, gates, DeepSeek structured
+classification, Supabase CRUD - runs against the real services configured in
 backend/.env. Run:  python testing/live_e2e.py
 """
 from __future__ import annotations
@@ -59,7 +59,7 @@ def main() -> int:
         # (corpus post, expect_reject)
         (find("looking for a freelance video editor to help cut our case studies"), False),  # genuine buyer
         (find("Our company needs a video editing agency or freelancer for a rebrand"), False),  # genuine hiring buyer
-        (find("We offer video editing services â€” book a call"), True),   # seller/offering
+        (find("We offer video editing services - book a call"), True),   # seller/offering
         (find("Our agency specializes in video editing for B2B"), True),  # agency self-promotion
         (find("open to work, portfolio in comments"), True),              # job seeker
         (find("5 video editing tips that will double your retention"), True),  # thought leadership
@@ -83,7 +83,7 @@ def main() -> int:
         log.info("[%s] %s -> type=%s qualified=%s | %s", flag, post.url[-12:],
                  cl.lead_type, cl.is_qualified, cl.reason)
     if mismatches:
-        log.error("%d classifier mismatches â€” investigate before trusting live prompts", mismatches)
+        log.error("%d classifier mismatches - investigate before trusting live prompts", mismatches)
         return 1
 
     # 2) Full engine run -> real Supabase persistence.
@@ -119,7 +119,7 @@ def main() -> int:
     from discovery.base import canonical_post_url
     store.patch_lead(leads[0]["id"], status="new", notes=None)
     # delete via management REST is out of scope here; rows are tiny and labeled.
-    log.info("LIVE E2E OK â€” rows persisted in project %s (search %s)",
+    log.info("LIVE E2E OK - rows persisted in project %s (search %s)",
              settings.supabase_url, row["id"])
     return 0
 

@@ -427,7 +427,10 @@ def _sync_main_search_row(search_id: str, summary, user_id: str,
     if summary is not None and status != "cancelled":
         payload.update({
             "message": _friendly_summary_message(summary, leads_needed=leads_needed),
-            "total_results": int(summary.found),
+            # total_results must be the DELIVERED leads (never the raw found
+            # count — that made history/dashboard show 194 "leads" for a search
+            # that delivered 3).
+            "total_results": int(summary.accepted),
             "hot_leads": int(summary.accepted),
             "warm_leads": int(summary.scanned),
             "skipped": max(0, int(summary.scanned) - int(summary.accepted)),
@@ -453,6 +456,7 @@ def _sync_main_search_row(search_id: str, summary, user_id: str,
             _t.sleep(1.0)
     if saved is not None and saved >= 0 and status != "cancelled":
         payload["hot_leads"] = saved
+        payload["total_results"] = saved
         if summary is not None:
             payload["message"] = _friendly_summary_message(
                 summary, leads_needed=leads_needed, actual_accepted=saved)

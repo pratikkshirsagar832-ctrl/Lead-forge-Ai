@@ -1,6 +1,7 @@
 import Link from 'next/link';
 import Image from 'next/image';
 import { Target, Zap, Shield, Mail } from 'lucide-react';
+import { AnimatedFooter } from './AnimatedFooter';
 
 export function Footer() {
   return (
@@ -86,6 +87,19 @@ export function Footer() {
           </p>
         </div>
       </div>
+
+      {/* Cinematic animated footer band */}
+      <AnimatedFooter
+        headingLines={['HYPERCLIENTS']}
+        leftImage="/animated-footer/hand-left.png"
+        rightImage="/animated-footer/hand-right.png"
+        background="#070b16"
+        textColor="#e2e8f0"
+        charColor="#0ea5e9"
+        hoverColor="#22d3ee"
+        hoverCharColor="#070b16"
+        className="h-[440px] border-t border-steel/15"
+      />
     </footer>
   );
 }

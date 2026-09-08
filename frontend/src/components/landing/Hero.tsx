@@ -4,23 +4,20 @@ import { motion } from 'framer-motion';
 import { ArrowRight, Zap, Target, Sparkles, BarChart3, Globe } from 'lucide-react';
 import Link from 'next/link';
 import { staggerContainer, fadeInUp } from '@/lib/animations';
+import { PerspectiveGrid } from './PerspectiveGrid';
 
 export function Hero() {
   return (
     <div className="relative overflow-hidden bg-navy min-h-screen pt-[120px]">
+      {/* Perspective grid background — branded to Hyperclients (navy + steel) */}
+      <div className="absolute inset-0 z-0 pointer-events-none opacity-60">
+        <PerspectiveGrid gridSize={44} fadeRadius={85} />
+      </div>
+
       {/* Premium ambient light effects */}
       <div className="absolute top-1/4 -left-32 w-[500px] h-[500px] bg-violet/8 rounded-full blur-[120px] pointer-events-none animate-breathing" />
       <div className="absolute bottom-1/4 -right-32 w-[500px] h-[500px] bg-teal/6 rounded-full blur-[120px] pointer-events-none animate-float-delayed" />
       <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[800px] h-[800px] bg-steel/4 rounded-full blur-[150px] pointer-events-none" />
-
-      {/* Grid overlay */}
-      <div
-        className="absolute inset-0 opacity-[0.03] pointer-events-none"
-        style={{
-          backgroundImage: `linear-gradient(rgba(59, 130, 196, 0.3) 1px, transparent 1px), linear-gradient(90deg, rgba(59, 130, 196, 0.3) 1px, transparent 1px)`,
-          backgroundSize: '60px 60px',
-        }}
-      />
 
       <div className="container relative z-10 mx-auto px-6 lg:px-8">
         <motion.div

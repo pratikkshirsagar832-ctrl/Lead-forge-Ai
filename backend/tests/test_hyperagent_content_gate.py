@@ -80,6 +80,8 @@ def test_empty_text_never_cheap_dropped():
     "Need a video editor? Our agency specializes in it — get a free consultation.",
     "Hiring a design agency — apply now at our careers page.",
     "Open to work — experienced video editor seeking new clients.",
+    "I'm a freelance video editor available for projects, DM me.",
+    "Freelance video editor available for hire, open to work.",
 ])
 def test_need_freelancer_drops_seller_bait_without_genuine_ask(text: str):
     assert _content_matches_requested_type(text, "need_freelancer") is False

@@ -323,8 +323,12 @@ def _content_matches_requested_type(text: str, lead_type: str) -> bool:
             return False
         if emp_hiring and not freelance:
             return False
-        # Seller/job-ad/job-seeker with no genuine ask and no freelance wording.
-        if neg and not freelance and not need:
+        # Seller/job-ad/job-seeker with no genuine buyer ask. Note: we do NOT
+        # spare posts just because they mention the word "freelance" — job-seekers
+        # ("I'm a freelance video editor available") and sellers also say it, so
+        # the genuine buyer-ask check is what decides. That was letting ~70
+        # posts/search through to be classified and rejected.
+        if neg and not need:
             return False
         return True
     if lead_type == "our_agency":

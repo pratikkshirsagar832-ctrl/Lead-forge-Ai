@@ -73,6 +73,34 @@ def test_empty_text_never_cheap_dropped():
     assert _content_matches_requested_type("   ", "need_freelancer") is True
 
 
+# ---- credit-saving: drop clear sellers/job-ads before the LLM call ----------
+
+@pytest.mark.parametrize("text", [
+    "Looking for video editing? We offer professional editing, book a call.",
+    "Need a video editor? Our agency specializes in it — get a free consultation.",
+    "Hiring a design agency — apply now at our careers page.",
+    "Open to work — experienced video editor seeking new clients.",
+])
+def test_need_freelancer_drops_seller_bait_without_genuine_ask(text: str):
+    assert _content_matches_requested_type(text, "need_freelancer") is False
+
+
+@pytest.mark.parametrize("text", [
+    "Anyone recommend a video editor for our campaign? DM me.",
+    "We need a freelance video editor for 20 shorts, budget ready.",
+])
+def test_need_freelancer_keeps_genuine_ask_even_with_seller_tone(text: str):
+    assert _content_matches_requested_type(text, "need_freelancer") is True
+
+
+@pytest.mark.parametrize("text", [
+    "Our agency specializes in video editing, book a call.",
+    "We provide full-service video production — link in bio.",
+])
+def test_our_agency_drops_agency_self_promotion(text: str):
+    assert _content_matches_requested_type(text, "our_agency") is False
+
+
 # ---- store wrapper applies the same predicate -------------------------------
 
 def test_force_type_store_drops_exactly_what_predicate_rejects():

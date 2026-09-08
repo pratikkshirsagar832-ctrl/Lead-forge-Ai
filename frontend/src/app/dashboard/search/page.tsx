@@ -20,7 +20,7 @@ import { LEAD_CATEGORIES } from '@/lib/constants';
 
 const mapsSchema = z.object({
   niche: z.string().min(2, 'Niche must be at least 2 characters'),
-  location: z.string().optional(),
+  location: z.string().min(2, 'Location must be at least 2 characters'),
 });
 
 const linkedinSchema = z.object({
@@ -292,7 +292,7 @@ export default function SearchPage() {
       if (source === 'linkedin') {
         await startSearch(data.niche, data.location ?? '', { source: 'linkedin', enrichEmails: false, maxResults, leadTypes: [linkedinLeadType] });
       } else {
-        await startSearch(data.niche, data.location ?? '', { source: 'google_maps', enrichEmails: false, maxResults });
+        await startSearch(data.niche, data.location ?? '', { source: 'google_maps', enrichEmails: false });
       }
     } catch (e: any) {
       if (e.response?.status === 429) setShowUpgradeModal(true);
@@ -394,21 +394,23 @@ export default function SearchPage() {
                   {source === 'google_maps' && (
                   <div>
                     <label className="block text-sm font-medium text-ice/70 mb-2 flex items-center gap-2">
-                      <Users className="w-4 h-4 text-steel" />
-                      Leads Needed
+                      <MapPin className="w-4 h-4 text-steel" />
+                      Location
                     </label>
-                    <select
-                      value={maxResults}
-                      onChange={(e) => setMaxResults(Number(e.target.value))}
-                      className="w-full px-3 py-3 rounded-xl border border-ocean/30 bg-navy/60 text-offwhite outline-none focus:ring-2 focus:ring-steel/40"
-                    >
-                      {[3, 5, 10, 15, 25].map(n => (
-                        <option key={n} value={n}>{n} leads</option>
-                      ))}
-                    </select>
-                    <p className="text-[11px] text-ice/40 mt-1.5">
-                      We search Google Maps and deliver up to this many qualified leads, newest first.
-                    </p>
+                    <div className="relative group">
+                      <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                        <Globe className="h-5 w-5 text-steel/60 group-focus-within:text-steel transition-colors" />
+                      </div>
+                      <input
+                        {...mapsForm.register('location')}
+                        type="text"
+                        placeholder="e.g. Dallas TX, London UK, Mumbai"
+                        className="w-full pl-10 pr-4 py-3 rounded-xl border border-ocean/30 bg-navy/60 focus:bg-navy/80 focus:ring-2 focus:ring-steel/40 focus:border-steel/50 transition-all text-offwhite text-lg placeholder-ice/30 outline-none"
+                      />
+                    </div>
+                    {mapsForm.formState.errors.location && (
+                      <p className="text-red-400 text-sm mt-1.5">{mapsForm.formState.errors.location.message}</p>
+                    )}
                   </div>
                   )}
                   {source === 'linkedin' && (

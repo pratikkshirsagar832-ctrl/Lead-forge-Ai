@@ -181,10 +181,11 @@ def _need_freelancer(svc: str, naked: str, phrase: str | None) -> list[str]:
         role = variants[0]
         A_role = _article_phrase(role) or role
         qs = [
-            f"looking for {A_role}",
-            f"need {A_role}",
-            f"anyone know a good {role}",
-            f"need someone to help with {svc}",
+            f"looking for a freelance {role} for a project",
+            f"we need a {role} for",
+            f"need a freelance {role} for our team",
+            f"anyone recommend a {role} for our company",
+            f"hiring a freelance {role} for a project",
         ]
     return [q for q in qs if q]
 

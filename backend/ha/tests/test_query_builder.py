@@ -25,14 +25,21 @@ def test_base_set_is_multiple_queries_per_type(service):
 @pytest.mark.parametrize("service", GENERIC_SERVICES)
 def test_service_words_survive_phrasing(service):
     plan = build_plan(service, LeadType.NEED_FREELANCER)
+    # Precision-first base still carries both a "looking for" and a "need" verb
+    # so the multi-query set covers individual + company buyers.
     assert any("looking for" in q for q in plan.base)
     assert any("need" in q for q in plan.base)
 
 
 def test_typed_article_is_not_doubled():
     plan = build_plan("a video editor", LeadType.NEED_FREELANCER)
-    assert plan.base[0].startswith("looking for a video editor")
+    assert plan.base[0].startswith("looking for a ")
+    assert any("video editor" in q for q in plan.base)
     assert not any("a a video" in q or "for a a " in q for q in plan.base)
+    # Precision contract: the generic seller-bait "looking for a video editor"
+    # must NOT lead the base (that is what surfaced job-seekers/sellers).
+    assert not plan.base[0].endswith("looking for a video editor")
+    assert "for a project" in plan.base[0] or "for our" in plan.base[0]
 
 
 @pytest.mark.parametrize("service", GENERIC_SERVICES)

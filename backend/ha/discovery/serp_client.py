@@ -1,4 +1,4 @@
-﻿"""Google SERP discovery client (Serper.dev-style) - the discovery engine.
+"""Google SERP discovery client (Serper.dev-style) - the discovery engine.
 
 Discovery = Google search over LinkedIn posts, not LinkedIn-native scraping:
 
@@ -204,6 +204,11 @@ class SerperDiscoveryClient(DiscoveryClient):
         if not author:
             author = _author_from_url(link)
         profile_url = _profile_from_url(link)
+
+        # Clean the snippet so the saved post_text reads like a real post: drop
+        # a "| LinkedIn" suffix and Google's trailing-ellipsis truncation.
+        body = re.sub(r"\s*[-|]\s*LinkedIn\s*$", "", (body or "").strip())
+        body = re.sub(r"\s*\.{2,}\s*$", "", body).strip()
 
         return RawPost(
             post_url=link,

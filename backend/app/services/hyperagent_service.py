@@ -113,6 +113,7 @@ def _ha_settings() -> HaSettings:
     os.environ["SUPABASE_SERVICE_ROLE_KEY"] = main.supabase_service_role_key
     os.environ["SERPER_API_KEY"] = main.serper_api_key or os.environ.get("SERPER_API_KEY", "")
     os.environ.setdefault("SERPER_RESULTS_PER_QUERY", str(main.serper_results_per_query))
+    os.environ.setdefault("SERPER_PAGES_PER_QUERY", str(main.serper_pages_per_query))
     os.environ.setdefault("LLM_PROVIDER", "deepseek")
     os.environ.setdefault("DEEPSEEK_MODEL", main.deepseek_model)
     # GLOBAL SEARCH: no country filter at all. STRICT_COUNTRY stays off so
@@ -122,10 +123,12 @@ def _ha_settings() -> HaSettings:
     os.environ["MIN_SERVICE_MATCH"] = "45"
     os.environ["MIN_INTENT_STRENGTH"] = "recommendation"
     # Credit safety: cap iterations/deadline/empty rounds so one search can
-    # never burn 200+ Serper calls on a niche with no leads.
-    os.environ["ENGINE_MAX_ITERATIONS"] = "8"
-    os.environ["ENGINE_DEADLINE_SECONDS"] = "420"
-    os.environ["ENGINE_EARLY_STOP_EMPTY_ROUNDS"] = "3"
+    # never burn unbounded Serper calls on a niche with no leads. Pagination
+    # now returns 3-4x more candidates per query, so give the engine a few
+    # more iterations and slack to scan them before declaring it exhausted.
+    os.environ["ENGINE_MAX_ITERATIONS"] = "12"
+    os.environ["ENGINE_DEADLINE_SECONDS"] = "540"
+    os.environ["ENGINE_EARLY_STOP_EMPTY_ROUNDS"] = "4"
     # Model gate OFF: referral/recommendation posts (very common for agency
     # seekers) often hedge is_qualified=false despite real buying intent — the
     # score/intent/content gates already protect precision.
@@ -156,6 +159,7 @@ def build_discovery(settings: HaSettings, country_code: str = "") -> DiscoveryCl
             base_url=settings.serper_base_url,
             site_restriction=settings.serper_site_restriction,
             results_per_query=settings.serper_results_per_query,
+            pages_per_query=settings.serper_pages_per_query,
             gl=gl,
             hl=settings.serper_hl,
             timeout_seconds=settings.serper_timeout_seconds,

@@ -83,6 +83,7 @@ class DiscoveryClient(ABC):
         since: datetime,
         *,
         results_per_query: int = 25,
+        pages: int = 1,
     ) -> SearchBatchResult:
         """Run the small query set together, return deduplicated raw posts.
 
@@ -90,6 +91,10 @@ class DiscoveryClient(ABC):
         that returns nothing it can attribute to the task (as opposed to a
         genuinely empty result) must raise DiscoveryError — never silently
         return [] and let callers believe "no leads exist".
+
+        `pages` lets a provider fetch more than one page of results per query
+        (e.g. Google SERP pagination), which is the single biggest recall lever
+        for low-yield queries.
         """
 
     @property

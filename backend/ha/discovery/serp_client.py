@@ -99,19 +99,24 @@ class SerperDiscoveryClient(DiscoveryClient):
         base_url: str = "https://google.serper.dev",
         site_restriction: str = "linkedin.com/posts",
         results_per_query: int = 10,
+        pages_per_query: int = 3,
         gl: str = "",
         hl: str = "en",
         timeout_seconds: float = 30.0,
     ) -> None:
         """`results_per_query` maps to Serper's `num`. Serper's FREE tier caps
         `num` at 10 and rejects larger values with HTTP 400 — the default is
-        10 for that reason; raise it only on a paid Serper plan."""
+        10 for that reason; raise it only on a paid Serper plan.
+
+        `pages_per_query` fetches extra result pages for each query (bounded),
+        which multiplies how many candidates Google returns per keyword."""
         if not api_key:
             raise DiscoveryConfigError("SERPER_API_KEY is required")
         self.api_key = api_key
         self.base_url = base_url.rstrip("/")
         self.site_restriction = (site_restriction or "").strip()
         self.default_results_per_query = results_per_query
+        self.default_pages_per_query = max(1, min(int(pages_per_query or 1), 5))
         self.gl = (gl or "").strip().lower()
         self.hl = (hl or "").strip()
         self.timeout_seconds = timeout_seconds
@@ -131,8 +136,10 @@ class SerperDiscoveryClient(DiscoveryClient):
         return " ".join(parts)
 
     # ------------------------------------------------------------------ http
-    def _search(self, full_query: str, num: int) -> list[dict[str, Any]]:
+    def _search(self, full_query: str, num: int, page: int = 1) -> list[dict[str, Any]]:
         payload: dict[str, Any] = {"q": full_query, "num": max(1, min(num, 100))}
+        if page > 1:
+            payload["page"] = page
         if self.gl:
             payload["gl"] = self.gl
         if self.hl:
@@ -215,6 +222,7 @@ class SerperDiscoveryClient(DiscoveryClient):
         since: datetime,
         *,
         results_per_query: int | None = None,
+        pages: int = 1,
     ) -> SearchBatchResult:
         queries = [q for q in (queries or []) if q.strip()]
         if not queries:
@@ -222,24 +230,35 @@ class SerperDiscoveryClient(DiscoveryClient):
         if since.tzinfo is None:
             since = since.replace(tzinfo=UTC)
         per_q = results_per_query or self.default_results_per_query
+        # Pagination is the biggest recall lever: Google only returns ~10
+        # posts per page, but paging to 3-4 surfaces 3-4x more candidates
+        # (verified: 10 -> 39 unique posts for one query). Keep it bounded so a
+        # single query can never burn unbounded credits.
+        if pages is None or pages <= 1:
+            pages = getattr(self, "default_pages_per_query", 1)
+        pages = max(1, min(int(pages), 5))
 
         posts: list[RawPost] = []
         errors: list[str] = []
         for query in queries:
-            self.calls += 1
-            full = self._full_query(query, since)
-            try:
-                organic = self._search(full, per_q)
-                for item in organic:
-                    post = self._map_organic(item, query)
-                    if post:
-                        posts.append(post)
-                log.info("Serper %r -> %d organic results", full[:160], len(organic))
-            except DiscoveryConfigError:
-                raise
-            except Exception as exc:  # noqa: BLE001 - one query must not kill the round
-                errors.append(f"query {query!r} failed: {exc}")
-                log.warning("Serper query %r failed: %s", query, exc)
+            query_batch: list[RawPost] = []
+            for page in range(1, pages + 1):
+                self.calls += 1
+                full = self._full_query(query, since)
+                try:
+                    organic = self._search(full, per_q, page=page)
+                except DiscoveryConfigError:
+                    raise
+                except Exception as exc:  # noqa: BLE001 - one query must not kill the round
+                    errors.append(f"query {query!r} page {page} failed: {exc}")
+                    log.warning("Serper query %r page %d failed: %s", query, page, exc)
+                    break
+                page_posts = [p for p in (self._map_organic(i, query) for i in organic) if p is not None]
+                query_batch.extend(page_posts)
+                log.info("Serper %r page %d -> %d organic results", full[:160], page, len(organic))
+                if len(organic) < per_q:
+                    break  # last page reached — stop paging this query
+            posts.extend(query_batch)
 
         # Dedupe by canonical post URL (same post found under several phrasings).
         seen: set[str] = set()

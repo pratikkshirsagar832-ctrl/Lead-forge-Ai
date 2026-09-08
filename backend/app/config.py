@@ -61,6 +61,7 @@ class Settings(BaseSettings):
     serper_base_url: str = "https://google.serper.dev"
     serper_site_restriction: str = "linkedin.com/posts"
     serper_results_per_query: int = 10
+    serper_pages_per_query: int = 3
     serper_gl: str = ""
     serper_hl: str = "en"
     serper_timeout_seconds: float = 30.0

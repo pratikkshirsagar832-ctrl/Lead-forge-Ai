@@ -132,3 +132,63 @@ def test_http_exception_recorded_per_query(monkeypatch):
     monkeypatch.setattr(serp_mod.httpx, "post", boom)
     batch = _client().search_posts(["q"], datetime(2025, 1, 1, tzinfo=UTC))
     assert batch.provider_errors and "connection reset" in batch.provider_errors[0]
+
+
+def test_pagination_fetches_multiple_pages_and_dedupes(monkeypatch):
+    """Pagination is the recall lever: one query should fetch `pages` result
+    pages and return the union of unique posts (deduped by canonical URL)."""
+    url_seen = []
+
+    def fake_post(url, headers, json, timeout):
+        url_seen.append(json.get("page", 1))
+        page = json.get("page", 1)
+        # Full pages (>= per_q) so paging continues; empty page 3 stops it.
+        bucket = {
+            1: [
+                {"link": "https://www.linkedin.com/posts/p1", "title": "t", "snippet": "looking for a video editor"},
+                {"link": "https://www.linkedin.com/posts/p2", "title": "t", "snippet": "need a plumber"},
+                {"link": "https://www.linkedin.com/posts/p1e1", "title": "t", "snippet": "e"},
+                {"link": "https://www.linkedin.com/posts/p1e2", "title": "t", "snippet": "e"},
+                {"link": "https://www.linkedin.com/posts/p1e3", "title": "t", "snippet": "e"},
+            ],
+            2: [
+                {"link": "https://www.linkedin.com/posts/p1?trk=share", "title": "dup", "snippet": "dup of p1"},
+                {"link": "https://www.linkedin.com/posts/p3", "title": "t", "snippet": "anyone know a good designer"},
+                {"link": "https://www.linkedin.com/posts/p2e1", "title": "t", "snippet": "e"},
+                {"link": "https://www.linkedin.com/posts/p2e2", "title": "t", "snippet": "e"},
+                {"link": "https://www.linkedin.com/posts/p2e3", "title": "t", "snippet": "e"},
+            ],
+            3: [],
+        }
+        return FakeResp(payload={"organic": bucket.get(page, [])})
+
+    monkeypatch.setattr(serp_mod.httpx, "post", fake_post)
+    since = datetime(2025, 1, 1, tzinfo=UTC)
+    client = SerperDiscoveryClient("test-serper-key", results_per_query=5, pages_per_query=3)
+    batch = client.search_posts(["q1"], since)
+    # 10 raw posts across pages 1-2, deduped to 9 unique (p1?trk=share == p1).
+    assert len(batch.posts) == 9
+    assert url_seen == [1, 2, 3]  # requested pages 1,2,3; broke after empty page 3
+    assert len({p.post_url for p in batch.posts}) == 9
+
+
+def test_pagination_stops_early_when_page_is_short(monkeypatch):
+    """Once a page returns fewer than `per_q` results, stop paging that query
+    (Google signals the last page). No wasted credits on empty pages."""
+    pages_requested = []
+
+    def fake_post(url, headers, json, timeout):
+        page = json.get("page", 1)
+        pages_requested.append(page)
+        items = [
+            {"link": f"https://www.linkedin.com/posts/{page}-1", "title": "t", "snippet": "looking for a dev"}
+        ] if page in (1, 2) else []
+        return FakeResp(payload={"organic": items})
+
+    monkeypatch.setattr(serp_mod.httpx, "post", fake_post)
+    since = datetime(2025, 1, 1, tzinfo=UTC)
+    client = SerperDiscoveryClient("test-serper-key", results_per_query=5, pages_per_query=5)
+    batch = client.search_posts(["q"], since)
+    # page1 (5/per_q => 1 result < per_q => stop). So only page 1 is fetched.
+    assert pages_requested == [1]
+    assert len(batch.posts) == 1

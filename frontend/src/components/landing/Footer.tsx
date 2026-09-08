@@ -93,11 +93,15 @@ export function Footer() {
         headingLines={['HYPERCLIENTS']}
         leftImage="/animated-footer/hand-left.png"
         rightImage="/animated-footer/hand-right.png"
-        background="#070b16"
-        textColor="#e2e8f0"
-        charColor="#0ea5e9"
+        background="#06231F"
+        textColor="#F1F5F9"
+        charColor="#4FD8C3"
         hoverColor="#22d3ee"
-        hoverCharColor="#070b16"
+        hoverCharColor="#06231F"
+        columns={64}
+        cellSize={22}
+        fontSize={17}
+        parallaxStrength={15}
         className="h-[440px] border-t border-steel/15"
       />
     </footer>

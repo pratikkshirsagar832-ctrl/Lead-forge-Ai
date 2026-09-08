@@ -21,15 +21,24 @@
 --      posts above the ceiling as low-competition candidates.
 -- ═══════════════════════════════════════════════════════════════
 
--- ── 1. ha_searches.lead_type constraint --------------------------------
-ALTER TABLE public.ha_searches DROP CONSTRAINT IF EXISTS ha_searches_lead_type_check;
-ALTER TABLE public.ha_searches ADD CONSTRAINT ha_searches_lead_type_check
-  CHECK (lead_type IN ('need_freelancer', 'our_agency'));
+-- ── 1. Retag legacy rows on BOTH ha tables first (the existing CHECK
+--       constraints still allow 'hiring_buyer', so this runs cleanly) ─────
+--       ha_searches.lead_type is the search's requested type; a legacy
+--       hiring_buyer request is semantically a freelancer/contractor need.
+UPDATE public.ha_searches
+SET lead_type = 'need_freelancer'
+WHERE lead_type = 'hiring_buyer';
 
--- ── 2. ha_leads.lead_type constraint + retag existing rows ---------------
 UPDATE public.ha_leads
 SET lead_type = 'need_freelancer'
 WHERE lead_type = 'hiring_buyer';
+
+-- ── 2. Recreate the lead_type CHECK constraints with only the two live
+--       values. The UPDATEs above guarantee no row violates the new CHECK
+--       (NULL lead_type rows are allowed by the CHECK and stay NULL).
+ALTER TABLE public.ha_searches DROP CONSTRAINT IF EXISTS ha_searches_lead_type_check;
+ALTER TABLE public.ha_searches ADD CONSTRAINT ha_searches_lead_type_check
+  CHECK (lead_type IN ('need_freelancer', 'our_agency'));
 
 ALTER TABLE public.ha_leads DROP CONSTRAINT IF EXISTS ha_leads_lead_type_check;
 ALTER TABLE public.ha_leads ADD CONSTRAINT ha_leads_lead_type_check

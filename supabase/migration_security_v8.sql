@@ -29,33 +29,62 @@
 -- 1. REVOKE public execution of every SECURITY DEFINER function.
 --    Only service_role may execute these (backend client). The frontend
 --    never calls any RPC (verified: Supabase usage is auth-only).
+--
+--    NOTE: each function is guarded by an existence check. On databases where
+--    migration_production_v5's reserve/settle trio was never created (the
+--    live DB added only the v5 columns), those statements are skipped instead
+--    of failing the whole migration.
 -- ─────────────────────────────────────────────────────────────
-REVOKE ALL ON FUNCTION public.get_remaining_searches(uuid) FROM PUBLIC, anon, authenticated;
-REVOKE ALL ON FUNCTION public.get_remaining_leads(uuid) FROM PUBLIC, anon, authenticated;
-REVOKE ALL ON FUNCTION public.get_user_subscription(uuid) FROM PUBLIC, anon, authenticated;
-REVOKE ALL ON FUNCTION public.increment_daily_usage(uuid, integer, integer, integer) FROM PUBLIC, anon, authenticated;
-REVOKE ALL ON FUNCTION public.upsert_daily_usage(uuid, date, integer, integer, integer) FROM PUBLIC, anon, authenticated;
-REVOKE ALL ON FUNCTION public.create_search(uuid, text, text) FROM PUBLIC, anon, authenticated;
-REVOKE ALL ON FUNCTION public.save_lead(jsonb) FROM PUBLIC, anon, authenticated;
-REVOKE ALL ON FUNCTION public.get_dashboard_stats(uuid) FROM PUBLIC, anon, authenticated;
-REVOKE ALL ON FUNCTION public.reserve_monthly_leads(uuid, text, text, integer) FROM PUBLIC, anon, authenticated;
-REVOKE ALL ON FUNCTION public.settle_monthly_leads(uuid, text, integer, integer) FROM PUBLIC, anon, authenticated;
-REVOKE ALL ON FUNCTION public.settle_search_monthly_leads(uuid, uuid, integer) FROM PUBLIC, anon, authenticated;
-REVOKE ALL ON FUNCTION public.handle_new_user() FROM PUBLIC, anon, authenticated;
-REVOKE ALL ON FUNCTION public.handle_lead_insert() FROM PUBLIC, anon, authenticated;
-REVOKE ALL ON FUNCTION public.update_subscription_timestamp() FROM PUBLIC, anon, authenticated;
+DO $$
+DECLARE
+  fns text[] := ARRAY[
+    'public.get_remaining_searches(uuid)',
+    'public.get_remaining_leads(uuid)',
+    'public.get_user_subscription(uuid)',
+    'public.increment_daily_usage(uuid,integer,integer,integer)',
+    'public.upsert_daily_usage(uuid,date,integer,integer,integer)',
+    'public.create_search(uuid,text,text)',
+    'public.save_lead(jsonb)',
+    'public.get_dashboard_stats(uuid)',
+    'public.reserve_monthly_leads(uuid,text,text,integer)',
+    'public.settle_monthly_leads(uuid,text,integer,integer)',
+    'public.settle_search_monthly_leads(uuid,uuid,integer)',
+    'public.handle_new_user()',
+    'public.handle_lead_insert()',
+    'public.update_subscription_timestamp()'
+  ];
+  sig text;
+BEGIN
+  FOREACH sig IN ARRAY fns LOOP
+    IF to_regprocedure(sig) IS NOT NULL THEN
+      EXECUTE format('REVOKE ALL ON FUNCTION %s FROM PUBLIC, anon, authenticated', sig);
+    END IF;
+  END LOOP;
+END $$;
 
-GRANT EXECUTE ON FUNCTION public.get_remaining_searches(uuid) TO service_role;
-GRANT EXECUTE ON FUNCTION public.get_remaining_leads(uuid) TO service_role;
-GRANT EXECUTE ON FUNCTION public.get_user_subscription(uuid) TO service_role;
-GRANT EXECUTE ON FUNCTION public.increment_daily_usage(uuid, integer, integer, integer) TO service_role;
-GRANT EXECUTE ON FUNCTION public.upsert_daily_usage(uuid, date, integer, integer, integer) TO service_role;
-GRANT EXECUTE ON FUNCTION public.create_search(uuid, text, text) TO service_role;
-GRANT EXECUTE ON FUNCTION public.save_lead(jsonb) TO service_role;
-GRANT EXECUTE ON FUNCTION public.get_dashboard_stats(uuid) TO service_role;
-GRANT EXECUTE ON FUNCTION public.reserve_monthly_leads(uuid, text, text, integer) TO service_role;
-GRANT EXECUTE ON FUNCTION public.settle_monthly_leads(uuid, text, integer, integer) TO service_role;
-GRANT EXECUTE ON FUNCTION public.settle_search_monthly_leads(uuid, uuid, integer) TO service_role;
+DO $$
+DECLARE
+  fns text[] := ARRAY[
+    'public.get_remaining_searches(uuid)',
+    'public.get_remaining_leads(uuid)',
+    'public.get_user_subscription(uuid)',
+    'public.increment_daily_usage(uuid,integer,integer,integer)',
+    'public.upsert_daily_usage(uuid,date,integer,integer,integer)',
+    'public.create_search(uuid,text,text)',
+    'public.save_lead(jsonb)',
+    'public.get_dashboard_stats(uuid)',
+    'public.reserve_monthly_leads(uuid,text,text,integer)',
+    'public.settle_monthly_leads(uuid,text,integer,integer)',
+    'public.settle_search_monthly_leads(uuid,uuid,integer)'
+  ];
+  sig text;
+BEGIN
+  FOREACH sig IN ARRAY fns LOOP
+    IF to_regprocedure(sig) IS NOT NULL THEN
+      EXECUTE format('GRANT EXECUTE ON FUNCTION %s TO service_role', sig);
+    END IF;
+  END LOOP;
+END $$;
 
 -- ─────────────────────────────────────────────────────────────
 -- 2. Hardened SECURITY DEFINER bodies: SET search_path + schema-qualified
@@ -347,11 +376,14 @@ SET user_id = s.user_id
 FROM public.searches s
 WHERE s.id = hs.id AND hs.user_id IS NULL;
 
+-- NOTE: comma-join syntax (not JOIN ... ON) — an UPDATE target may only be
+-- referenced in WHERE/qualifications, never inside a JOIN in its own FROM.
 UPDATE public.ha_leads hl
 SET user_id = s.user_id
-FROM public.searches s
-JOIN public.ha_searches h ON h.id = hl.search_id
-WHERE s.id = h.id AND hl.user_id IS NULL;
+FROM public.searches s, public.ha_searches h
+WHERE h.id = hl.search_id
+  AND s.id = h.id
+  AND hl.user_id IS NULL;
 
 DROP POLICY IF EXISTS ha_searches_own ON public.ha_searches;
 CREATE POLICY ha_searches_own ON public.ha_searches

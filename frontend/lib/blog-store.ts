@@ -127,7 +127,7 @@ export function createBlog(input: Partial<BlogPost>): { post?: BlogPost; error?:
   if (!input.title || !input.title.trim()) return { error: 'Title is required' };
   if (!input.content || !input.content.trim()) return { error: 'Content is required' };
   const posts = readAll();
-  let slug = slugify(input.slug || (input.title as string));
+  const slug = slugify(input.slug || (input.title as string));
   const existing = posts.some((p) => p.slug === slug);
   if (existing) return { error: `Slug "${slug}" already exists` };
   const post: BlogPost = {

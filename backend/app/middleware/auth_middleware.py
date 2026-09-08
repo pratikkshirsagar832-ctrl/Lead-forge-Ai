@@ -54,13 +54,22 @@ async def get_current_user(
             if not sub_exists.data or len(sub_exists.data) == 0:
                 from datetime import datetime, timedelta, timezone
                 now = datetime.now(timezone.utc)
+                # Keep in sync with the DB signup trigger
+                # (supabase/migration_production_v5.sql handle_new_user: 1 day).
+                trial_days = 1
+                try:
+                    plan_row = supabase.table("plans").select("trial_days").eq("id", "free").limit(1).execute()
+                    if plan_row.data and plan_row.data[0].get("trial_days") is not None:
+                        trial_days = max(1, int(plan_row.data[0]["trial_days"]))
+                except Exception:
+                    pass
                 try:
                     supabase.table("user_subscriptions").insert({
                         "user_id": user.id,
                         "plan_id": "free",
                         "status": "trial",
-                        "trial_end": (now + timedelta(days=3)).isoformat(),
-                        "current_period_end": (now + timedelta(days=3)).isoformat(),
+                        "trial_end": (now + timedelta(days=trial_days)).isoformat(),
+                        "current_period_end": (now + timedelta(days=trial_days)).isoformat(),
                     }).execute()
                     logger.info(f"Created free trial subscription for user {user.id}")
                 except Exception:

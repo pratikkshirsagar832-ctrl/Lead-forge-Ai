@@ -31,7 +31,17 @@ function isPrivateIp(ip: string): boolean {
   if (ip === '::1' || ip === '0.0.0.0') return true;
   if (ip.includes(':')) {
     const lower = ip.toLowerCase();
-    return lower.startsWith('fc') || lower.startsWith('fd') || lower.startsWith('fe8') || lower.startsWith('fe9') || lower.startsWith('fea') || lower.startsWith('feb');
+    // IPv6 loopback / link-local / unique-local / unspecified
+    return (
+      lower === '::' ||
+      lower.startsWith('fc') ||
+      lower.startsWith('fd') ||
+      lower.startsWith('fe8') ||
+      lower.startsWith('fe9') ||
+      lower.startsWith('fea') ||
+      lower.startsWith('feb') ||
+      lower === '::1'
+    );
   }
   const parts = ip.split('.').map(Number);
   if (parts.length !== 4) return true;
@@ -43,15 +53,51 @@ function isPrivateIp(ip: string): boolean {
     a === 127 ||
     a === 169 || // 169.254 link-local
     a === 0 ||
-    a === 100 && b >= 64 && b <= 127 // CGNAT
+    (a === 100 && b >= 64 && b <= 127) // CGNAT
   );
 }
 
+/** Resolve ALL A/AAAA records and reject when ANY resolves to a private/
+ * loopback/link-local address. Checking one record is not enough: dual-stack
+ * hosts can pin a public address first then answer internal via the other. */
 async function assertPublicHost(hostname: string): Promise<void> {
-  const { address } = await dns.lookup(hostname, { verbatim: true });
-  if (isPrivateIp(address)) {
-    throw new Error(`Blocked: ${hostname} resolves to a private address (${address})`);
+  let addresses: string[] = [];
+  try {
+    const lookup = await dns.lookup(hostname, { all: true, verbatim: true });
+    addresses = (Array.isArray(lookup) ? lookup : [lookup]).map((x) => x.address);
+  } catch {
+    // Fall back to the resolver's single result so behavior stays consistent.
+    const { address } = await dns.lookup(hostname, { verbatim: true });
+    addresses = [address];
   }
+  if (addresses.length === 0) {
+    throw new Error(`Blocked: could not resolve ${hostname}`);
+  }
+  for (const address of addresses) {
+    if (isPrivateIp(address)) {
+      throw new Error(`Blocked: ${hostname} resolves to a private address (${address})`);
+    }
+  }
+}
+
+/** Validate a URL string is public http(s) and its hostname is not private.
+ * Throws on anything else. */
+async function assertPublicUrl(rawUrl: string): Promise<URL> {
+  let url: URL;
+  try {
+    url = new URL(rawUrl);
+  } catch {
+    throw new Error('Invalid URL format');
+  }
+  if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+    throw new Error('Only http/https URLs are supported');
+  }
+  const hostname = url.hostname.toLowerCase();
+  if (hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '0.0.0.0' || hostname === '::1') {
+    throw new Error(`Blocked: ${hostname} is not a public host`);
+  }
+  await assertPublicHost(hostname);
+  return url;
 }
 
 function decodeEntities(s: string): string {
@@ -82,37 +128,68 @@ function countOccurrences(html: string, tag: string): number {
   return (html.match(re) || []).length;
 }
 
-async function fetchText(url: string, timeoutMs: number): Promise<{ text: string; finalUrl: string }> {
-  const res = await fetch(url, {
-    redirect: 'follow',
-    signal: AbortSignal.timeout(timeoutMs),
-    headers: { 'User-Agent': 'Mozilla/5.0 (compatible; HyperclientsSeoBot/1.0)' },
-  });
-  const text = await res.text();
-  return { text: text.slice(0, 600000), finalUrl: res.url || url };
+/**
+ * Fetch with SSRF-safe redirect handling. Every hop (including the initial
+ * URL and each redirect target) is re-validated against private-IP ranges, so
+ * a redirect to 127.0.0.1, cloud metadata, or an internal host is refused.
+ * fetch()'s `redirect: 'follow'` trusts the server's Location header, which is
+ * exactly the attack: attacker URL 302 -> http://169.254.169.254/...
+ */
+async function fetchText(url: string, timeoutMs: number, maxRedirects = 4): Promise<{ text: string; finalUrl: string }> {
+  let current = await assertPublicUrl(url); // validates scheme + host + DNS
+  let text = '';
+  for (let hop = 0; hop <= maxRedirects; hop++) {
+    const res = await fetch(current.toString(), {
+      redirect: 'manual',
+      signal: AbortSignal.timeout(timeoutMs),
+      headers: { 'User-Agent': 'Mozilla/5.0 (compatible; HyperclientsSeoBot/1.0)' },
+    });
+    if (res.status >= 300 && res.status < 400) {
+      const location = res.headers.get('location');
+      if (!location) {
+        // No Location header: treat as final (some servers do this).
+        text = await res.text();
+        return { text: text.slice(0, 600000), finalUrl: res.url || current.toString() };
+      }
+      // Validate the redirect target BEFORE following it.
+      const next = new URL(location, current);
+      current = await assertPublicUrl(next.toString());
+      continue;
+    }
+    text = await res.text();
+    return { text: text.slice(0, 600000), finalUrl: res.url || current.toString() };
+  }
+  throw new Error('Too many redirects');
+}
+
+// Simple in-memory rate limit (per-process): this route is public and runs
+// arbitrary fetches, so it must not become a free port-scanner / DoS vector.
+const RATE_WINDOW_MS = 60_000;
+const RATE_MAX_PER_WINDOW = 20;
+const hitTimes: number[] = [];
+function rateLimited(): boolean {
+  const now = Date.now();
+  while (hitTimes.length && hitTimes[0] < now - RATE_WINDOW_MS) hitTimes.shift();
+  if (hitTimes.length >= RATE_MAX_PER_WINDOW) return true;
+  hitTimes.push(now);
+  return false;
 }
 
 export async function POST(req: NextRequest) {
+  if (rateLimited()) {
+    return NextResponse.json({ error: 'Too many requests. Try again shortly.' }, { status: 429 });
+  }
   const body = await req.json().catch(() => null);
   let rawUrl = (body?.url as string | undefined)?.trim();
   if (!rawUrl) {
     return NextResponse.json({ error: 'URL is required' }, { status: 400 });
   }
   if (!/^https?:\/\//i.test(rawUrl)) rawUrl = `https://${rawUrl}`;
-  let url: URL;
-  try {
-    url = new URL(rawUrl);
-  } catch {
-    return NextResponse.json({ error: 'Invalid URL format' }, { status: 400 });
-  }
-  if (!['http:', 'https:'].includes(url.protocol)) {
-    return NextResponse.json({ error: 'Only http/https URLs are supported' }, { status: 400 });
-  }
 
   try {
-    await assertPublicHost(url.hostname);
+    const validated = await assertPublicUrl(rawUrl);
 
-    const { text: html, finalUrl } = await fetchText(url.toString(), 15000);
+    const { text: html, finalUrl } = await fetchText(validated.toString(), 15000);
     const final = new URL(finalUrl);
     const origin = `${final.protocol}//${final.host}`;
     const lower = html.toLowerCase();
@@ -188,7 +265,7 @@ export async function POST(req: NextRequest) {
     // 2. Meta description (10)
     {
       let pts = 0;
-      let detail = metaLen ? `"${metaDescription.slice(0, 80)}${metaLen > 80 ? '…' : ''}" (${metaLen} chars)` : 'No meta description found';
+      const detail = metaLen ? `"${metaDescription.slice(0, 80)}${metaLen > 80 ? '…' : ''}" (${metaLen} chars)` : 'No meta description found';
       if (metaLen > 0) {
         pts += 5;
         if (metaLen >= 70 && metaLen <= 160) pts += 5;

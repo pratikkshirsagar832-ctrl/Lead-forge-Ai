@@ -56,6 +56,24 @@ class Settings(BaseSettings):
     deepseek_base_url: str = "https://api.deepseek.com"
     deepseek_model: str = "deepseek-v4-flash"
 
+    # Serper.dev (Google SERP discovery for Hyperagent LinkedIn engine)
+    serper_api_key: str = ""
+    serper_base_url: str = "https://google.serper.dev"
+    serper_site_restriction: str = "linkedin.com/posts"
+    serper_results_per_query: int = 10
+    serper_gl: str = ""
+    serper_hl: str = "en"
+    serper_timeout_seconds: float = 30.0
+
+    # Hyperagent engine settings
+    hyperagent_max_iterations: int = 30
+    hyperagent_deadline_seconds: int = 1800
+    hyperagent_early_stop_rounds: int = 3
+    hyperagent_classifier_concurrency: int = 8
+    hyperagent_min_overall_score: float = 60.0
+    hyperagent_min_service_match: float = 50.0
+    hyperagent_min_intent_strength: str = "recommendation"
+
     razorpay_key_id: str = ""
     razorpay_key_secret: str = ""
     razorpay_solo_amount_inr: int = 0
@@ -73,6 +91,17 @@ class Settings(BaseSettings):
     site_url: str = "http://localhost:3000"
 
     environment: Literal["development", "staging", "production"] = "development"
+
+    # Explicit off-by-default switch for debug/dev-only endpoints. These run a
+    # scraper subprocess and reveal host information, so they must NEVER be
+    # reachable merely because ENVIRONMENT is not "production" (a staging
+    # deployment is still a shared, reachable surface).
+    enable_debug_routes: bool = False
+
+    @property
+    def debug_routes_enabled(self) -> bool:
+        """Debug routes are only live when EXPLICITLY enabled AND not production."""
+        return bool(self.enable_debug_routes) and not self.is_production
 
     @model_validator(mode="after")
     def _collect_apify_keys(self):

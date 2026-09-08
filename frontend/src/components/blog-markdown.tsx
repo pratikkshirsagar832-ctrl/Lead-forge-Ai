@@ -2,12 +2,42 @@ import { Fragment, ReactNode } from 'react';
 
 const INLINE_PATTERN = /(\[[^\]]+\]\([^)\s]+(?:\s+"[^"]*")?\)|!\[[^\]]*\]\([^)\s]+(?:\s+"[^"]*")?\))/g;
 
+/** Only allow safe URL schemes in rendered links/images. Blocking javascript:/
+ * data:/vbscript: (and HTML-entity/whitespace obfuscations) prevents stored
+ * XSS from admin-authored markdown from turning into executable links. */
+function safeUrl(href: string): string | null {
+  if (!href) return null;
+  const candidate = href.trim();
+  if (candidate.startsWith('/')) return candidate; // same-site relative
+  const m = /^([a-zA-Z][a-zA-Z0-9+.-]*):/.exec(candidate);
+  if (!m) return null; // no scheme → treat as relative? Safer: allow as-is only for /… handled above
+  const scheme = m[1].toLowerCase();
+  if (scheme === 'http' || scheme === 'https' || scheme === 'mailto' || scheme === 'tel') {
+    return candidate;
+  }
+  return null;
+}
+
+function safeImageSrc(src: string): string | null {
+  if (!src) return null;
+  const candidate = src.trim();
+  if (candidate.startsWith('/')) return candidate;
+  const m = /^([a-zA-Z][a-zA-Z0-9+.-]*):/.exec(candidate);
+  if (!m) return null;
+  return ['http', 'https'].includes(m[1].toLowerCase()) ? candidate : null;
+}
+
 function renderInline(text: string): ReactNode[] {
   const parts = text.split(INLINE_PATTERN);
   return parts.map((part, i) => {
     const linkMatch = part.match(/^\[([^\]]+)\]\(([^)\s]+)(?:\s+"[^"]*")?\)$/);
     if (linkMatch) {
-      const href = linkMatch[2];
+      const href = safeUrl(linkMatch[2]);
+      if (href === null) {
+        // Unsafe scheme (javascript:, data:, …) — render inert plain text so
+        // the author intent is visible without making it clickable.
+        return <Fragment key={i}>{linkMatch[1]}</Fragment>;
+      }
       const internal = href.startsWith('/');
       return (
         <a
@@ -23,11 +53,13 @@ function renderInline(text: string): ReactNode[] {
     }
     const imgMatch = part.match(/^!\[([^\]]*)\]\(([^)\s]+)(?:\s+"([^"]*)")?\)$/);
     if (imgMatch) {
+      const imgSrc = safeImageSrc(imgMatch[2]);
+      if (imgSrc === null) return null; // drop unsafe image sources entirely
       return (
         // eslint-disable-next-line @next/next/no-img-element
         <img
           key={i}
-          src={imgMatch[2]}
+          src={imgSrc}
           alt={imgMatch[1] || ''}
           title={imgMatch[3]}
           loading="lazy"
@@ -83,12 +115,17 @@ export function renderMarkdown(content: string): ReactNode[] {
     }
     const imgMatch = line.trim().match(/^!\[([^\]]*)\]\(([^)\s]+)(?:\s+"([^"]*)")?\)$/);
     if (imgMatch) {
+      const imgSrc = safeImageSrc(imgMatch[2]);
+      if (imgSrc === null) {
+        // Unsafe image source (javascript:/data: etc.) — skip the figure.
+        continue;
+      }
       flushList();
       nodes.push(
         <figure key={key++} className="my-6">
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img
-            src={imgMatch[2]}
+            src={imgSrc}
             alt={imgMatch[1] || ''}
             title={imgMatch[3]}
             className="w-full rounded-xl border border-steel/15"

@@ -46,13 +46,19 @@ function LiveResultCard({ lead, index }: { lead: any; index: number }) {
   const catKey = lead.lead_category || 'warm';
   const catCfg = LEAD_CATEGORIES[catKey as keyof typeof LEAD_CATEGORIES] || { label: catKey, color: '#94a3b8', bg: '#f1f5f9' };
 
+  // LinkedIn leads live in the ha_leads table and don't have a detail page —
+  // clicking the card opens the real LinkedIn post instead.
+  const isLinkedIn = lead.source === 'linkedin';
+  const cardHref = isLinkedIn ? (lead.post_url || '#') : `/dashboard/leads/${lead.id}`;
+  const cardTarget = isLinkedIn ? '_blank' : undefined;
+
   return (
     <motion.div
       initial={{ opacity: 0, y: 20, scale: 0.95 }}
       animate={{ opacity: 1, y: 0, scale: 1 }}
       transition={{ duration: 0.4, delay: index * 0.08, ease: 'easeOut' }}
     >
-      <Link href={`/dashboard/leads/${lead.id}`} className="block group">
+      <Link href={cardHref} target={cardTarget} rel={isLinkedIn ? 'noopener noreferrer' : undefined} className="block group">
         <div className="glass-card-premium rounded-xl hover:border-steel/30 transition-colors duration-300">
           <div className="p-4">
               <div className="flex items-start justify-between mb-2">
@@ -162,7 +168,7 @@ function LiveResultCard({ lead, index }: { lead: any; index: number }) {
             </div>
           </div>
           <div className="px-4 py-2 border-t border-white/5 flex items-center justify-between text-[10px] font-semibold text-steel/60 group-hover:text-steel transition-colors">
-            <span>View Profile</span>
+            <span>{isLinkedIn ? 'Open LinkedIn Post' : 'View Profile'}</span>
             <ChevronRight className="w-3 h-3 transition-transform group-hover:translate-x-0.5" />
           </div>
         </div>
@@ -183,6 +189,7 @@ export default function SearchPage() {
     cancelSearch,
     resumePollingIfActive,
     clearActiveSearch,
+    fetchAllResults,
   } = useSearch();
 
   const [subscription, setSubscription] = useState<SubscriptionInfo | null>(null);
@@ -192,10 +199,10 @@ export default function SearchPage() {
   const [source, setSource] = useState<'google_maps' | 'linkedin'>('google_maps');
   const sourceRef = useRef<'google_maps' | 'linkedin'>('google_maps');
   const [maxResults, setMaxResults] = useState(10);
-  // LinkedIn discovery always targets genuine service buyers: freelancer-needed
-  // (buyer) + agency-wanted. Hiring/job-seeker intent is intentionally never
-  // requested, and the UI deliberately shows no lead-type selector.
-  const LINKEDIN_LEAD_TYPES = ['buyer', 'agency_wanted'] as const;
+  // LinkedIn discovery targets genuine service buyers — the user picks between
+  // freelancer-needed (buyer) and agency-wanted. Hiring/job-ads are excluded.
+  type LinkedInLeadType = 'buyer' | 'agency_wanted';
+  const [linkedinLeadType, setLinkedinLeadType] = useState<LinkedInLeadType>('buyer');
   const requestedCount = useSearchStore((s) => s.requestedCount);
   const isUnlocked = useSearchStore((s) => s.unlocked);
   const unlockResults = useSearchStore((s) => s.unlockResults);
@@ -247,8 +254,14 @@ export default function SearchPage() {
 
   useEffect(() => {
     resumePollingIfActive();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Refresh quota/subscription once when this page mounts (moved out of the
+  // resume effect so status ticks never re-fetch it).
+  useEffect(() => {
     api.get('/api/auth/me').then(r => setSubscription(r.data?.subscription)).catch(() => {});
-  }, [resumePollingIfActive]);
+  }, []);
 
   useEffect(() => {
     if (typeof window !== 'undefined' && window.location.search.includes('source=linkedin')) {
@@ -265,7 +278,7 @@ export default function SearchPage() {
     if (isAtLimit) { setShowUpgradeModal(true); return; }
     try {
       if (source === 'linkedin') {
-        await startSearch(data.niche, data.location ?? '', { source: 'linkedin', enrichEmails: false, maxResults, leadTypes: [...LINKEDIN_LEAD_TYPES] });
+        await startSearch(data.niche, data.location ?? '', { source: 'linkedin', enrichEmails: false, maxResults, leadTypes: [linkedinLeadType] });
       } else {
         await startSearch(data.niche, data.location ?? '');
       }
@@ -280,10 +293,9 @@ export default function SearchPage() {
     try {
       const { data } = await api.post(API_ROUTES.searches.loadMore(activeSearchId), {});
       if (data.new_leads > 0) {
-        const { data: newResults } = await api.get(`${API_ROUTES.searches.detail(activeSearchId)}/results?page=1&per_page=50`);
-        if (newResults.items) {
-          useSearchStore.getState().appendResults(newResults.items);
-        }
+        // Reload the full (paginated) result set so leads beyond the first 50
+        // remain visible after a load-more.
+        await fetchAllResults(activeSearchId);
       }
     } catch (e: any) {
       console.error('Load more failed:', e);
@@ -303,7 +315,7 @@ export default function SearchPage() {
           </h1>
           <p className="text-ice/50 mt-2 text-sm">
             {source === 'linkedin'
-              ? 'Find people on LinkedIn who are asking for your service.'
+              ? 'Find the latest people worldwide who are asking for your service on LinkedIn.'
               : 'Find and qualify leads from Google Maps in seconds.'}
           </p>
         </div>
@@ -346,8 +358,8 @@ export default function SearchPage() {
                 </button>
               </div>
               <form onSubmit={mapsForm.handleSubmit(onSubmitMaps)} className="space-y-6">
-                <div className={source === 'linkedin' ? '' : 'grid grid-cols-1 md:grid-cols-2 gap-6'}>
-                  <div>
+                <div className={source === 'linkedin' ? 'grid grid-cols-1 sm:grid-cols-2 gap-6' : 'grid grid-cols-1 md:grid-cols-2 gap-6'}>
+                  <div className={source === 'linkedin' ? 'sm:col-span-2' : ''}>
                     <label className="block text-sm font-medium text-ice/70 mb-2 flex items-center gap-2">
                       <TargetIcon className="w-4 h-4 text-steel" />
                       {source === 'linkedin' ? 'What are people asking for?' : 'Target Niche'}
@@ -359,7 +371,7 @@ export default function SearchPage() {
                       <input
                         {...mapsForm.register('niche')}
                         type="text"
-                        placeholder={source === 'linkedin' ? 'e.g. I need website help' : 'e.g. Plumbers, Dentists'}
+                        placeholder={source === 'linkedin' ? 'e.g. video editing, website development, logo design' : 'e.g. Plumbers, Dentists'}
                         className="w-full pl-10 pr-4 py-3 rounded-xl border border-ocean/30 bg-navy/60 focus:bg-navy/80 focus:ring-2 focus:ring-steel/40 focus:border-steel/50 transition-all text-offwhite text-lg placeholder-ice/30 outline-none"
                       />
                     </div>
@@ -393,23 +405,6 @@ export default function SearchPage() {
                   <>
                   <div>
                     <label className="block text-sm font-medium text-ice/70 mb-2 flex items-center gap-2">
-                      <MapPin className="w-4 h-4 text-steel" />
-                      Country / Location
-                    </label>
-                    <div className="relative group">
-                      <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
-                        <Globe className="h-5 w-5 text-steel/60 group-focus-within:text-steel transition-colors" />
-                      </div>
-                      <input
-                        {...mapsForm.register('location')}
-                        type="text"
-                        placeholder="e.g. India, US, UK, Europe, Mumbai"
-                        className="w-full pl-10 pr-4 py-3 rounded-xl border border-ocean/30 bg-navy/60 focus:bg-navy/80 focus:ring-2 focus:ring-steel/40 focus:border-steel/50 transition-all text-offwhite text-lg placeholder-ice/30 outline-none"
-                      />
-                    </div>
-                  </div>
-                  <div>
-                    <label className="block text-sm font-medium text-ice/70 mb-2 flex items-center gap-2">
                       <Users className="w-4 h-4 text-steel" />
                       Leads Needed
                     </label>
@@ -423,11 +418,45 @@ export default function SearchPage() {
                       ))}
                     </select>
                   </div>
-                  <div className="md:col-span-2">
+                  <div>
+                    <label className="block text-sm font-medium text-ice/70 mb-2 flex items-center gap-2">
+                      <Briefcase className="w-4 h-4 text-steel" />
+                      Lead Type
+                    </label>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setLinkedinLeadType('buyer')}
+                        className={`px-3 py-2.5 rounded-xl border text-sm font-semibold transition-all ${
+                          linkedinLeadType === 'buyer'
+                            ? 'bg-emerald-500/15 border-emerald-500/40 text-emerald-300'
+                            : 'bg-navy/60 border-ocean/25 text-ice/60 hover:text-offwhite hover:border-ocean/40'
+                        }`}
+                      >
+                        Freelancer Needed
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setLinkedinLeadType('agency_wanted')}
+                        className={`px-3 py-2.5 rounded-xl border text-sm font-semibold transition-all ${
+                          linkedinLeadType === 'agency_wanted'
+                            ? 'bg-violet-500/15 border-violet-500/40 text-violet-300'
+                            : 'bg-navy/60 border-ocean/25 text-ice/60 hover:text-offwhite hover:border-ocean/40'
+                        }`}
+                      >
+                        Agency Wanted
+                      </button>
+                    </div>
+                    <p className="text-[11px] text-ice/40 mt-1.5">
+                      {linkedinLeadType === 'buyer'
+                        ? 'People posting they need to hire a freelancer for this.'
+                        : 'People posting they are looking for an agency to handle this.'}
+                    </p>
+                  </div>
+                  <div className="sm:col-span-2">
                     <p className="text-xs text-ice/60 leading-relaxed">
-                      We search LinkedIn for genuine buyers of your service — freelancers and agencies actively
-                      looking for help (seller & job-seeker posts are always excluded) — filtered to your country,
-                      and we deliver exactly the number of leads you ask for — no more, no less.
+                      We scan LinkedIn worldwide for the latest genuine buyers of your service — {linkedinLeadType === 'buyer' ? 'freelancer-needed' : 'agency-wanted'} posts
+                      only (sellers, hiring ads & job-seeker posts are always excluded) — and deliver exactly the number of leads you ask for, newest first.
                     </p>
                   </div>
                   </>

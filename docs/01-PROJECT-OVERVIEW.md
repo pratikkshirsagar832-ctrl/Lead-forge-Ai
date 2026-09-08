@@ -236,7 +236,7 @@ SITE_URL=http://localhost:3001
 NEXT_PUBLIC_SUPABASE_URL=https://gzxmgdkpsdqkxrnpplyh.supabase.co
 NEXT_PUBLIC_SUPABASE_ANON_KEY=eyJ...
 NEXT_PUBLIC_API_URL=http://localhost:8000
-ADMIN_PASSWORD=@PatilHyperclients@1234
+ADMIN_PASSWORD=REPLACE_WITH_STRONG_ADMIN_PASSWORD
 ```
 
 ---
@@ -268,4 +268,4 @@ docker compose up -d --build
 - **Host:** Contabo VPS (`178.16.138.221`)
 - **Containers:** `leadforge-backend-1`, `leadforge-frontend-1`, `leadforge-postgres-1`
 - **Deploy:** SFTP upload + `docker compose up -d --build`
-- **Admin:** `/admin/login` with password `@PatilHyperclients@1234`
+- **Admin:** `/admin/login` with password `REPLACE_WITH_STRONG_ADMIN_PASSWORD`

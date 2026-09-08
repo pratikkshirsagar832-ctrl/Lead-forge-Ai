@@ -20,7 +20,7 @@ class SearchCreateRequest(BaseModel):
     max_results: int = Field(10, ge=1, le=50, description="Number of leads to return")
     lead_types: list[Literal["buyer", "agency_wanted"]] = Field(
         default=["buyer", "agency_wanted"],
-        description="Filter lead types (linkedin only): buyer=needs freelancer, agency_wanted=seeking an agency. Hiring is never requested."
+        description="Filter lead types (linkedin only): buyer=needs freelancer, agency_wanted=seeking an agency."
     )
 
 

@@ -5,7 +5,7 @@ Hyperclients — Profile Posts Schemas (post-scraper output)
 from datetime import datetime
 from typing import Any, Optional
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 LINKEDIN_HOST_HINTS = ("linkedin.com", "lnkd.in")
 
@@ -39,12 +39,20 @@ class ProfilePostRow(BaseModel):
 
 class ScrapeProfilePostsRequest(BaseModel):
     """Body for POST /api/posts/scrape."""
-    profile_urls: list[str] = Field(default_factory=list, description="LinkedIn profile URLs (person or company).")
-    post_urls: list[str] = Field(default_factory=list, description="Optional direct LinkedIn post URLs to verify/extract.")
+    profile_urls: list[str] = Field(default_factory=list, max_length=10, description="LinkedIn profile URLs (person or company).")
+    post_urls: list[str] = Field(default_factory=list, max_length=20, description="Optional direct LinkedIn post URLs to verify/extract.")
     max_posts_per_profile: int = Field(10, ge=1, le=50, description="Upper bound on posts per profile.")
     include_engagement: bool = True
     include_author: bool = True
     lead_id: Optional[str] = Field(None, description="Optional owning lead for the detail-page flow.")
+
+    @model_validator(mode="after")
+    def _not_empty(self) -> "ScrapeProfilePostsRequest":
+        if not self.profile_urls and not self.post_urls:
+            raise ValueError("Provide at least one profile_url or post_url")
+        if len(self.profile_urls) + len(self.post_urls) > 25:
+            raise ValueError("Too many URLs in one request (max 25 total)")
+        return self
 
     @field_validator("profile_urls", "post_urls")
     @classmethod

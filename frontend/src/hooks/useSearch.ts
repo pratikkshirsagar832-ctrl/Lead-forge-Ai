@@ -4,8 +4,19 @@ import { API_ROUTES, POLLING_INTERVAL } from '@/lib/constants';
 import { useSearchStore } from '@/stores/searchStore';
 import { useToast } from './useToast';
 
+const TERMINAL = new Set(['completed', 'failed', 'cancelled']);
+
 export function useSearch() {
-  const { activeSearchId, progress, setActiveSearch, setProgress, clearActiveSearch, setHistory, appendResults, setResults, results, resultsTotal } = useSearchStore();
+  const activeSearchId = useSearchStore((s) => s.activeSearchId);
+  const progress = useSearchStore((s) => s.progress);
+  const results = useSearchStore((s) => s.results);
+  const resultsTotal = useSearchStore((s) => s.resultsTotal);
+  const setActiveSearch = useSearchStore((s) => s.setActiveSearch);
+  const setProgress = useSearchStore((s) => s.setProgress);
+  const clearActiveSearch = useSearchStore((s) => s.clearActiveSearch);
+  const setHistory = useSearchStore((s) => s.setHistory);
+  const appendResults = useSearchStore((s) => s.appendResults);
+  const setResults = useSearchStore((s) => s.setResults);
   const setRequestedCount = useSearchStore((s) => s.setRequestedCount);
   const setLimitHit = useSearchStore((s) => s.setLimitHit);
   const { showToast } = useToast();
@@ -23,6 +34,10 @@ export function useSearch() {
   const statusAbortRef = useRef<AbortController | null>(null);
   const resultsAbortRef = useRef<AbortController | null>(null);
   const isStartingRef = useRef(false);
+  // Guards against the effect-cascade bug where a new `progress` object every
+  // status tick re-created resumePollingIfActive, killing in-flight polls,
+  // resetting the results page counter, and re-firing /auth/me every 2s.
+  const pollingStartedForRef = useRef<string | null>(null);
 
   const clearPolling = useCallback(() => {
     if (pollTimerRef.current) {
@@ -43,7 +58,33 @@ export function useSearch() {
     }
     statusRetryRef.current = 0;
     resultsRetryRef.current = 0;
+    pollingStartedForRef.current = null;
   }, []);
+
+  const fetchAllResults = useCallback(async (id: string) => {
+    // The /results endpoint caps per_page at 50; page through it until we have
+    // everything so searches with >50 leads (e.g. after load-more) stay visible.
+    const collected: any[] = [];
+    let total = 0;
+    let page = 1;
+    for (let guard = 0; guard < 20; guard++) {
+      const abort = new AbortController();
+      resultsAbortRef.current = abort;
+      const { data } = await api.get(
+        `${API_ROUTES.searches.detail(id)}/results?page=${page}&per_page=50`,
+        { signal: abort.signal }
+      );
+      if (data.items?.length) collected.push(...data.items);
+      total = data.total ?? 0;
+      if (page * 50 >= total || !data.items?.length) break;
+      page += 1;
+    }
+    if (collected.length) {
+      appendResults(collected);
+      if (total > 0) setResults(useSearchStore.getState().results, total);
+    }
+    return total;
+  }, [appendResults, setResults]);
 
   const pollResults = useCallback(async (id: string) => {
     resultsAbortRef.current?.abort();
@@ -73,7 +114,7 @@ export function useSearch() {
       }
       resultsPollTimerRef.current = setTimeout(() => pollResultsRef.current?.(id), 4000);
     }
-  }, [appendResults, clearPolling]);
+  }, [appendResults, clearPolling, setResults]);
 
   const pollStatus = useCallback(async (id: string) => {
     statusAbortRef.current?.abort();
@@ -90,21 +131,18 @@ export function useSearch() {
           setLimitHit(true);
         }
         try {
-          resultsAbortRef.current?.abort();
-          const resultsAbort = new AbortController();
-          resultsAbortRef.current = resultsAbort;
-          const { data: finalResults } = await api.get(`${API_ROUTES.searches.detail(id)}/results?page=1&per_page=50`, { signal: resultsAbort.signal });
-          if (finalResults.items) {
-            appendResults(finalResults.items);
-          }
-          if (finalResults.total && finalResults.total > 0) {
-            setResults(useSearchStore.getState().results, finalResults.total);
+          const total = await fetchAllResults(id);
+          // If the server says a final total but pagination found nothing (edge
+          // case: results landed between polls), force one more paged pass.
+          if (data.total_results > 0 && total === 0) {
+            await fetchAllResults(id);
           }
         } catch (e) {
           console.warn('Failed to fetch final results:', e);
         }
         if (data.status === 'completed') {
-          showToast(`Search completed: ${data.total_results || 0} leads found.`, 'success');
+          const delivered = data.source === 'linkedin' ? (data.hot_leads ?? data.returned_count ?? 0) : (data.total_results || 0);
+          showToast(`Search completed: ${delivered} qualified leads found.`, 'success');
         } else if (data.status === 'failed') {
           showToast(`Search failed: ${data.message || 'Unknown error'}`, 'error');
         } else {
@@ -135,7 +173,7 @@ export function useSearch() {
       }
       pollTimerRef.current = setTimeout(() => pollStatusRef.current?.(id), POLLING_INTERVAL);
     }
-  }, [setProgress, showToast, clearActiveSearch, appendResults, clearPolling, setError]);
+  }, [setProgress, showToast, clearActiveSearch, appendResults, clearPolling, setError, setLimitHit, fetchAllResults]);
 
   useEffect(() => {
     pollStatusRef.current = pollStatus;
@@ -145,7 +183,7 @@ export function useSearch() {
     };
   }, [pollStatus, pollResults, clearPolling]);
 
-  const startSearch = async (niche: string, location: string, options?: { source?: 'google_maps' | 'linkedin'; enrichEmails?: boolean; maxResults?: number; leadTypes?: ('buyer' | 'hiring' | 'agency_wanted')[] }) => {
+  const startSearch = async (niche: string, location: string, options?: { source?: 'google_maps' | 'linkedin'; enrichEmails?: boolean; maxResults?: number; leadTypes?: ('buyer' | 'agency_wanted')[] }) => {
     if (isStartingRef.current) return;
     try {
       isStartingRef.current = true;
@@ -177,7 +215,8 @@ export function useSearch() {
       setActiveSearch(data.id);
       setProgress({ status: 'queued', elapsed_seconds: 0 });
       showToast('Search started successfully', 'success');
-      
+
+      pollingStartedForRef.current = data.id;
       pollStatus(data.id);
       pollResults(data.id);
       return data;
@@ -225,15 +264,24 @@ export function useSearch() {
   };
 
   const resumePollingIfActive = useCallback(() => {
-    if (activeSearchId && progress && !['completed', 'failed', 'cancelled'].includes(progress.status ?? '')) {
-      clearPolling();
-      resultsPageRef.current = 1;
-      statusRetryRef.current = 0;
-      resultsRetryRef.current = 0;
-      pollStatus(activeSearchId);
-      pollResults(activeSearchId);
+    const state = useSearchStore.getState();
+    const id = state.activeSearchId;
+    const status = state.progress?.status;
+    if (!id || !status || TERMINAL.has(status)) {
+      pollingStartedForRef.current = null;
+      return;
     }
-  }, [activeSearchId, progress, clearPolling, pollStatus, pollResults]);
+    // Already polling this search — do not restart (a fresh `progress` object
+    // per tick must not cascade into abort/restart cycles).
+    if (pollingStartedForRef.current === id) return;
+    clearPolling();
+    resultsPageRef.current = 1;
+    statusRetryRef.current = 0;
+    resultsRetryRef.current = 0;
+    pollingStartedForRef.current = id;
+    pollStatus(id);
+    pollResults(id);
+  }, [clearPolling, pollStatus, pollResults]);
 
   return {
     activeSearchId,
@@ -247,6 +295,7 @@ export function useSearch() {
     startSearch,
     cancelSearch,
     fetchHistory,
+    fetchAllResults,
     clearActiveSearch,
     resumePollingIfActive,
   };

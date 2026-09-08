@@ -43,7 +43,14 @@ api.interceptors.response.use(
           return api(error.config);
         }
       }
-      window.location.href = '/login';
+      // Guest mode (shown when auth is unavailable) has no session by design —
+      // do not bounce the user back to /login in a redirect loop; the backend
+      // still enforces auth on every real data call, so guests only see the
+      // shell and empty/errored states.
+      const isGuest = typeof window !== 'undefined' && localStorage.getItem('hyperclients_guest') === 'true';
+      if (!isGuest) {
+        window.location.href = '/login';
+      }
     }
     return Promise.reject(error);
   }

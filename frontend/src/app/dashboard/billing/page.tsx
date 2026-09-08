@@ -73,7 +73,9 @@ function BillingContent() {
     error?: { description?: string };
   }
 
-  const handleUpgrade = async (plan: Plan) => {
+  // Function declaration (hoisted) so the upgrade URL effect above can call
+  // it — avoids the temporal-dead-zone hazard of a const used before init.
+  async function handleUpgrade(plan: Plan) {
     if (plan.price_monthly <= 0) return;
     const Razorpay = (window as any).Razorpay as { new(options: Record<string, unknown>): { on: (event: string, handler: (response: unknown) => void) => void; open: () => void } } | undefined;
     if (!Razorpay) {
@@ -130,7 +132,7 @@ function BillingContent() {
       setError(typeof detail === 'string' ? detail : 'Failed to start upgrade');
       setIsProcessing(false);
     }
-  };
+  }
 
   if (isLoading) {
     return (

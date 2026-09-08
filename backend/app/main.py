@@ -35,6 +35,20 @@ async def lifespan(app: FastAPI):
             "created_at", stale_cutoff
         ).execute()
 
+        # Hyperagent engine rows run in worker threads with their own status
+        # vocabulary; a restart strands them as 'running' forever, which the
+        # status endpoint then resurrects as 'scraping'. Close stale rows too.
+        try:
+            supabase.table("ha_searches").update({
+                "status": "failed",
+                "error": "Server restarted while search was running",
+                "finished_at": datetime.now(timezone.utc).isoformat(),
+            }).in_("status", ["queued", "running"]).lt(
+                "created_at", stale_cutoff
+            ).execute()
+        except Exception as ha_err:
+            logger.warning(f"Stale ha_searches cleanup failed (non-critical): {ha_err}")
+
         logger.info("Stale search cleanup completed")
     except Exception as e:
         logger.warning(f"Stale search cleanup failed (non-critical): {e}", exc_info=True)

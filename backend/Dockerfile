@@ -68,6 +68,9 @@ RUN mkdir -p /app/sessions
 # Copy application code
 COPY app/ /app/app/
 
+# Original standalone Hyperagent engine (imported as-is by hyperagent_service)
+COPY ha/ /app/ha/
+
 # Set environment defaults
 ENV GMAPS_SCRAPER_PATH=/app/google-maps-scraper/google-maps-scraper
 ENV PLAYWRIGHT_DRIVER_PATH=/opt/ms-playwright/1.52.0

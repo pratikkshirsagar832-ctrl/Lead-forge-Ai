@@ -95,8 +95,9 @@ async def list_leads(
         if search:
             data_query = data_query.ilike("business_name", f"%{search}%")
 
-        # Sort
-        ALLOWED_SORT_FIELDS = {"created_at", "updated_at", "ai_confidence_score", "business_name", "lead_category", "user_status"}
+        # Sort (updated_at is not a column on the live `leads` table, so it is
+        # intentionally excluded — including it would 500 every request).
+        ALLOWED_SORT_FIELDS = {"created_at", "ai_confidence_score", "business_name", "lead_category", "user_status"}
         if sort_by not in ALLOWED_SORT_FIELDS:
             sort_by = "created_at"
         desc = sort_order.lower() == "desc"
@@ -183,8 +184,20 @@ async def export_leads_csv(
         ]
         writer = csv.DictWriter(output, fieldnames=fieldnames, extrasaction="ignore")
         writer.writeheader()
+
+        # CSV formula-injection guard: spreadsheet apps execute cells that
+        # start with = + - @ (and tab/CR variants). Escape a leading special
+        # character so exporter data can never become a formula.
+        def _sanitize_cell(value):
+            if value is None:
+                return ""
+            s = str(value)
+            if s and s.lstrip()[0] in ("=", "+", "-", "@", "\t", "\r"):
+                return "'" + s
+            return s
+
         for lead in leads:
-            writer.writerow(lead)
+            writer.writerow({k: _sanitize_cell(v) for k, v in lead.items()})
 
         output.seek(0)
         return StreamingResponse(
@@ -205,6 +218,11 @@ async def analyze_lead_website(
     """On-demand website analysis for a warm lead."""
     supabase = get_supabase_admin()
 
+    # Cost guard: each call pays a Scrapling crawl + OpenAI run. Cap it per user.
+    from app.utils.rate_limit import check_rate_limit
+    if not check_rate_limit(f"analyze:{current_user['id']}", limit=10, window_seconds=60):
+        raise HTTPException(status_code=429, detail="Too many website analyses. Wait a minute and try again.")
+
     try:
         lead_resp = (
             supabase.table("leads")
@@ -224,6 +242,20 @@ async def analyze_lead_website(
 
         result = await analyze_website(url)
 
+        # On a genuine analyzer failure the result carries raw_analysis.error
+        # with placeholder score 0 / category hot — surface the failure to the
+        # user and do NOT overwrite a stored score/category with that placeholder.
+        raw = result.get("raw_analysis", {}) or {}
+        if raw.get("error"):
+            logger.warning(f"Analyzer failed for {url}; keeping existing lead score/category")
+            raise HTTPException(status_code=502, detail=raw["error"][:300])
+
+        # The DB CHECK only allows 'hot'/'warm'. The analyzer may return
+        # 'skip' (good site, low opportunity) — fold it into warm rather than
+        # failing the UPDATE with a constraint violation.
+        ai_category = result.get("category", "warm")
+        category = "warm" if ai_category in ("skip", "warm") else ai_category
+
         analysis_data = {
             "lead_id": lead_id,
             "website_url": url,
@@ -237,7 +269,7 @@ async def analyze_lead_website(
 
         update_data = {
             "website_health_score": result.get("overall_score", 0),
-            "lead_category": result.get("category", "warm"),
+            "lead_category": category,
         }
         emails = result.get("emails_found", [])
         if emails and not lead.get("email_found"):

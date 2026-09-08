@@ -384,7 +384,7 @@ services:
       - ./frontend/.env.local
     environment:
       - NEXT_PUBLIC_API_URL=http://localhost:8000
-      - ADMIN_PASSWORD=@PatilHyperclients@1234
+      - ADMIN_PASSWORD=REPLACE_WITH_STRONG_ADMIN_PASSWORD
     volumes:
       - ./frontend/data:/app/data
     depends_on:

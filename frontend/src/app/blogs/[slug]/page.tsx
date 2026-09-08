@@ -73,6 +73,14 @@ export default async function BlogPostPage({ params }: PageProps) {
     ],
   };
 
+  // JSON-LD inside <script> — JSON.stringify does NOT escape '</script>'.
+  // Escape HTML-significant chars so an admin-authored string can never break
+  // out of the script element (stored-XSS on the public blog page).
+  const jsonLdHtml = JSON.stringify(jsonLd)
+    .replace(/</g, '\\u003c')
+    .replace(/\u2028/g, '\\u2028')
+    .replace(/\u2029/g, '\\u2029');
+
   const displayDate = new Date(post.date).toLocaleDateString('en-IN', {
     day: 'numeric',
     month: 'long',
@@ -82,7 +90,7 @@ export default async function BlogPostPage({ params }: PageProps) {
 
   return (
     <div className="relative min-h-screen bg-navy text-ice font-sans overflow-hidden">
-      <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: JSON.stringify(jsonLd) }} />
+      <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: jsonLdHtml }} />
       <BlogBackground />
       <Header />
 

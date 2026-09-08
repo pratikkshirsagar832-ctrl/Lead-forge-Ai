@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useRef } from 'react';
 import api from '@/lib/api';
 import { API_ROUTES } from '@/lib/constants';
 import { useLeadStore } from '@/stores/leadStore';
@@ -11,8 +11,13 @@ export function useLeads() {
   const [isExporting, setIsExporting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [isUpdating, setIsUpdating] = useState<Record<string, boolean>>({});
+  // Guard against stale-response overwrites: filters change debounced, but a
+  // slow in-flight response for an OLD filter set must never clobber results
+  // for the CURRENT filters. Only the latest issued request may apply.
+  const requestSeqRef = useRef(0);
 
   const fetchLeads = useCallback(async () => {
+    const seq = ++requestSeqRef.current;
     try {
       setIsLoading(true);
       setError(null);
@@ -28,14 +33,17 @@ export function useLeads() {
       params.append('per_page', String(filters.limit));
 
       const { data } = await api.get(`${API_ROUTES.leads.list}?${params.toString()}`);
+      // A newer request has already been issued — drop this stale result.
+      if (seq !== requestSeqRef.current) return;
       setLeads(data.items, data.total);
     } catch (error) {
+      if (seq !== requestSeqRef.current) return; // superseded; not our error to surface
       const msg = 'Failed to load leads';
       setError(msg);
       showToast(msg, 'error');
       console.error(error);
     } finally {
-      setIsLoading(false);
+      if (seq === requestSeqRef.current) setIsLoading(false);
     }
   }, [filters, setLeads, showToast]);
 

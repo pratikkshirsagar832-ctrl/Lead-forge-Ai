@@ -223,6 +223,27 @@ async def verify_payment(
         plan_id = notes.get("plan_id")
         if notes.get("user_id") != current_user["id"] or not plan_id:
             raise HTTPException(status_code=400, detail="Invalid payment order metadata")
+
+        # Server-side capture + amount verification. The HMAC proves Razorpay
+        # produced the payload, but only a live payment fetch proves the money
+        # actually moved and equals the plan price — never trust the client.
+        try:
+            payment = client.payment.fetch(razorpay_payment_id)
+        except Exception as pay_exc:
+            logger.error(f"Razorpay payment fetch failed for {razorpay_payment_id}: {pay_exc}")
+            raise HTTPException(status_code=502, detail="Could not verify payment with Razorpay")
+        pay_status = (payment or {}).get("status", "")
+        if pay_status != "captured":
+            logger.warning(f"Payment {razorpay_payment_id} not captured (status={pay_status})")
+            raise HTTPException(status_code=400, detail="Payment has not been captured yet")
+        pay_amount = int((payment or {}).get("amount", 0) or 0)
+        expected_amount = _razorpay_amount_for_plan(settings, plan_id)
+        if pay_amount != expected_amount:
+            logger.warning(
+                f"Payment amount mismatch: got {pay_amount}, expected {expected_amount} for {plan_id}"
+            )
+            raise HTTPException(status_code=400, detail="Payment amount does not match plan price")
+
         plan_resp = supabase.table("plans").select("*").eq("id", plan_id).limit(1).execute()
         if not plan_resp.data or len(plan_resp.data) == 0:
             raise HTTPException(status_code=404, detail="Plan not found")
@@ -288,24 +309,67 @@ async def razorpay_webhook(request: Request):
         event = json.loads(body)
         event_type = event.get("event", "")
         payload = event.get("payload", {})
+        event_id = event.get("id", "")
 
-        logger.info(f"Razorpay webhook: {event_type}")
+        logger.info(f"Razorpay webhook: {event_type} (event_id={event_id[:24] or 'unknown'})")
 
         supabase = get_supabase_admin()
+
+        # Idempotency: never process the same Razorpay event twice. Best-effort
+        # — if the payment_events table does not exist yet (migration pending),
+        # log and continue rather than failing the whole webhook.
+        event_recorded = False
+        if event_id:
+            try:
+                seen = supabase.table("payment_events").select("id").eq("event_id", event_id).limit(1).execute()
+                if seen.data and len(seen.data) > 0:
+                    return {"status": "ok", "duplicate": True}
+                try:
+                    supabase.table("payment_events").insert({"event_id": event_id, "event_type": event_type}).execute()
+                    event_recorded = True
+                except Exception as e:
+                    logger.warning(f"Could not record payment event {event_id}: {e}")
+            except Exception as e:
+                logger.warning(f"payment_events table unavailable (idempotency disabled): {e}")
 
         if event_type == "payment.captured":
             order_id = payload.get("payment", {}).get("entity", {}).get("order_id", "")
             payment_id = payload.get("payment", {}).get("entity", {}).get("id", "")
+            payment_status = payload.get("payment", {}).get("entity", {}).get("status", "")
             if order_id and payment_id:
-                # Idempotency check: skip if payment already processed
+                if payment_status and payment_status != "captured":
+                    logger.warning(f"Ignoring payment {payment_id}: status={payment_status} (not captured)")
+                    return {"status": "ok", "ignored": "not captured"}
                 existing = supabase.table("user_subscriptions").select("id, user_id, plan_id").eq("razorpay_order_id", order_id).limit(1).execute()
                 sub_data = existing.data[0] if existing.data and len(existing.data) > 0 else None
                 if sub_data:
                     order = _get_razorpay_client(settings).order.fetch(order_id)
-                    plan_id = (order.get("notes") or {}).get("plan_id")
+                    notes = order.get("notes") or {}
+                    plan_id = notes.get("plan_id")
                     if not plan_id:
                         logger.warning("Ignoring payment without plan metadata: %s", order_id)
                         return {"status": "ok"}
+                    # Amount + capture verification: never activate a plan unless
+                    # the captured amount matches the configured price and the
+                    # payment actually succeeded with Razorpay.
+                    try:
+                        payment = _get_razorpay_client(settings).payment.fetch(payment_id)
+                        pay_status = (payment or {}).get("status", "")
+                        pay_amount = int((payment or {}).get("amount", 0) or 0)
+                        if pay_status != "captured":
+                            logger.warning("Payment %s not captured (status=%s) — plan NOT activated", payment_id, pay_status)
+                            return {"status": "ok", "ignored": "payment not captured"}
+                        expected_amount = _razorpay_amount_for_plan(settings, plan_id)
+                        if pay_amount != expected_amount:
+                            logger.warning(
+                                "Payment %s amount mismatch: got %s expected %s — plan NOT activated",
+                                payment_id, pay_amount, expected_amount,
+                            )
+                            return {"status": "ok", "ignored": "amount mismatch"}
+                    except Exception as amt_exc:
+                        logger.error(f"Could not verify payment {payment_id} via Razorpay: {amt_exc}")
+                        return {"status": "error", "message": "Payment verification failed"}
+
                     # Look up plan to get billing cycle for period dates
                     now = datetime.now(timezone.utc)
                     update_fields = {
@@ -313,8 +377,6 @@ async def razorpay_webhook(request: Request):
                         "razorpay_payment_id": payment_id,
                         "plan_id": plan_id,
                     }
-                    # Webhooks must independently establish dates; duplicate
-                    # events only write the same payment identifier.
                     if not sub_data.get("razorpay_payment_id"):
                         plan_resp = supabase.table("plans").select("billing_cycle_days").eq("id", plan_id).limit(1).execute()
                         cycle_days = 30
@@ -326,23 +388,9 @@ async def razorpay_webhook(request: Request):
                     supabase.table("user_subscriptions").update(update_fields).eq("id", sub_data["id"]).execute()
 
         elif event_type == "subscription.charged":
-            sub_id = payload.get("subscription", {}).get("entity", {}).get("id", "")
-            if sub_id:
-                existing = supabase.table("user_subscriptions").select("id, user_id, plan_id, current_period_end").eq("razorpay_subscription_id", sub_id).limit(1).execute()
-                if existing.data and len(existing.data) > 0:
-                    sub_row = existing.data[0]
-                    now = datetime.now(timezone.utc)
-                    # Extend current_period_end from now (renewal)
-                    plan_resp = supabase.table("plans").select("billing_cycle_days").eq("id", sub_row.get("plan_id", "solo")).limit(1).execute()
-                    cycle_days = 30
-                    if plan_resp.data and len(plan_resp.data) > 0:
-                        cycle_days = plan_resp.data[0].get("billing_cycle_days", 30)
-                    supabase.table("user_subscriptions").update({
-                        "status": "active",
-                        "current_period_start": now.isoformat(),
-                        "current_period_end": (now + timedelta(days=cycle_days)).isoformat(),
-                    }).eq("id", sub_row["id"]).execute()
-
+            # Not used by the current one-time-order payment flow; logged for
+            # visibility rather than acting on data this integration never sets.
+            logger.info(f"Ignoring subscription.charged: recurring subscriptions are not in use")
 
         return {"status": "ok"}
     except HTTPException:

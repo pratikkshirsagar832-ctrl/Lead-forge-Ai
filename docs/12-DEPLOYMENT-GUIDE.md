@@ -55,7 +55,7 @@ ENVIRONMENT=development
 NEXT_PUBLIC_SUPABASE_URL=https://gzxmgdkpsdqkxrnpplyh.supabase.co
 NEXT_PUBLIC_SUPABASE_ANON_KEY=eyJ...
 NEXT_PUBLIC_API_URL=http://localhost:8000
-ADMIN_PASSWORD=@PatilHyperclients@1234
+ADMIN_PASSWORD=REPLACE_WITH_STRONG_ADMIN_PASSWORD
 ```
 
 ### Start Local

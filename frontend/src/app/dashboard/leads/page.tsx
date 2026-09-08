@@ -25,11 +25,20 @@ function LeadsContent() {
   } = useLeads();
 
   useEffect(() => {
+    // Deep-link support: /dashboard/leads?category=hot, ?status=new,
+    // ?source=google_maps etc. (dashboard CTA cards link here).
     const urlSearchId = searchParams.get('search_id');
-    if (urlSearchId && urlSearchId !== filters.searchId) {
-      setFilters({ searchId: urlSearchId });
-    }
-  }, [searchParams, filters.searchId, setFilters]);
+    const urlCategory = searchParams.get('category') ?? searchParams.get('lead_category');
+    const urlStatus = searchParams.get('status') ?? searchParams.get('user_status');
+    const urlSource = searchParams.get('source');
+    const patch: Record<string, unknown> = {};
+    if (urlSearchId && urlSearchId !== filters.searchId) patch.searchId = urlSearchId;
+    if (urlCategory && urlCategory !== filters.category) patch.category = urlCategory;
+    if (urlStatus && urlStatus !== filters.status) patch.status = urlStatus;
+    if (urlSource && urlSource !== filters.source) patch.source = urlSource;
+    if (Object.keys(patch).length) setFilters(patch);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchParams]);
 
   useEffect(() => {
     const timer = setTimeout(() => fetchLeads(), 300);

@@ -167,9 +167,15 @@ async def analyze_website(url: str) -> dict[str, Any]:
         if is_spa:
             logger.info(f"[Analyzer] SPA detected for {url}, retrying with DynamicFetcher")
             try:
+                # The headless browser must only ever see a URL that already
+                # survived the public-host redirect validation (never re-issue
+                # the raw user URL through a browser).
                 from scrapling import DynamicFetcher
+                spa_target = await _resolve_public_redirect_chain(url, timeout=15)
+                if not spa_target:
+                    raise RuntimeError(f"SPA target failed SSRF validation: {url}")
                 dynamic_resp = await DynamicFetcher.async_fetch(
-                    url, headless=True, load_dom=True,
+                    spa_target, headless=True, load_dom=True,
                     network_idle=True, timeout=30000,
                     disable_resources=True,
                 )
@@ -181,7 +187,7 @@ async def analyze_website(url: str) -> dict[str, Any]:
                     )
                     home_text = str(dynamic_resp.get_all_text(separator=" ", strip=True) or "")
                     home_response = dynamic_resp
-                    final_url = str(getattr(dynamic_resp, 'url', url))
+                    final_url = str(getattr(dynamic_resp, 'url', spa_target))
                     parsed = urlparse(final_url)
                     base_domain = parsed.netloc
                     base_url = f"{parsed.scheme}://{parsed.netloc}"
@@ -581,13 +587,65 @@ async def analyze_website(url: str) -> dict[str, Any]:
 
 
 async def _fetch_page(url: str, timeout: int = 20) -> Any:
+    """Fetch a page with SSRF-safe redirect handling.
+
+    A pre-fetch hostname check is not enough: `follow_redirects=True` lets a
+    malicious/poisoned origin bounce the request to an internal host
+    (127.0.0.1, cloud metadata, LAN IPs). We therefore walk the redirect chain
+    manually — re-running _is_safe_url on EVERY hop — and only then fetch the
+    final URL with redirects disabled.
+    """
     try:
+        final_url = await _resolve_public_redirect_chain(url, timeout=timeout)
+        if not final_url:
+            return None
         return await AsyncFetcher.get(
-            url, timeout=timeout, follow_redirects=True, stealthy_headers=True,
+            final_url, timeout=timeout, follow_redirects=False, stealthy_headers=True,
         )
     except Exception as e:
         logger.debug(f"Failed to fetch {url}: {e}")
         return None
+
+
+async def _resolve_public_redirect_chain(url: str, timeout: int = 15, max_hops: int = 5) -> str | None:
+    """Follow an HTTP redirect chain, validating every hop is a public http(s)
+    host. Returns the final URL (still needs a plain fetch), or None when the
+    chain is unsafe / invalid / exceeds the hop limit."""
+    import httpx
+    from urllib.parse import urljoin
+
+    current = (url or "").strip()
+    safe, reason = _is_safe_url(current)
+    if not safe:
+        logger.warning(f"[Analyzer] SSRF blocked at chain start for {current}: {reason}")
+        return None
+    for _hop in range(max_hops + 1):
+        try:
+            # Stream so we only read status+headers; the body is fetched later
+            # by the real fetcher. Redirect targets are validated below.
+            async with httpx.AsyncClient(
+                timeout=timeout,
+                follow_redirects=False,
+                headers={"User-Agent": "Mozilla/5.0 (compatible; HyperclientsAnalyzer/1.0)"},
+            ) as client:
+                async with client.stream("GET", current) as resp:
+                    status = resp.status_code
+                    location = resp.headers.get("location")
+        except Exception as exc:
+            logger.debug(f"[Analyzer] redirect probe failed for {current}: {exc}")
+            return None
+
+        if status in (301, 302, 303, 307, 308) and location:
+            next_url = urljoin(current, location)
+            safe2, reason2 = _is_safe_url(next_url)
+            if not safe2:
+                logger.warning(f"[Analyzer] SSRF blocked redirect hop {current} -> {next_url}: {reason2}")
+                return None
+            current = next_url
+            continue
+        return current  # not a redirect (or a redirect without Location) — use it
+    logger.warning(f"[Analyzer] redirect chain exceeded {max_hops} hops from {url}")
+    return None
 
 
 def _is_likely_spa(html: str, content_empty: bool) -> bool:

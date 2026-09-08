@@ -135,11 +135,11 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
         <div className="p-4 border-t border-steel/15 space-y-3">
           <div className="flex items-center gap-3 px-2">
             <div className="w-8 h-8 rounded-full bg-gradient-to-br from-violet to-steel flex items-center justify-center text-xs font-bold text-offwhite shrink-0 overflow-hidden shadow-lg shadow-violet/10">
-              <img
-                src={`https://ui-avatars.com/api/?name=${encodeURIComponent(user?.email || 'U')}&background=7C5CFC&color=fff&size=32&bold=true`}
-                alt=""
-                className="w-full h-full object-cover"
-              />
+              {/* Local initial avatar — never send the account email to a third
+                  party (ui-avatars.com) on every dashboard load. */}
+              <span className="select-none">
+                {(user?.name || user?.email || 'U').trim().charAt(0).toUpperCase()}
+              </span>
             </div>
             <div className="min-w-0 flex-1">
               <p className="text-xs font-semibold text-offwhite truncate">{user?.email || 'User'}</p>

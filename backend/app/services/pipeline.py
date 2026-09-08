@@ -10,6 +10,7 @@ Orchestrates the full search lifecycle:
 
 import asyncio
 import logging
+import threading
 import time
 from datetime import date, datetime, timezone
 
@@ -20,17 +21,32 @@ from app.services.usage import settle_search_quota
 logger = logging.getLogger(__name__)
 
 _search_semaphore = asyncio.Semaphore(3)
-_active_searches: dict[str, bool] = {}
+_cancel_lock = threading.Lock()
+_cancelled_searches: set[str] = set()
 MAX_SEARCH_TIME_SECONDS = 600
 MAX_RESULTS = 25
 
+TERMINAL_STATUSES = ("completed", "failed", "cancelled")
+# Hard per-search cap for load-more batches (avoids unbounded paid scraper runs).
+MAX_SEARCH_LEADS_CAP = 100
+
 
 def is_search_cancelled(search_id: str) -> bool:
-    return _active_searches.get(search_id, False)
+    with _cancel_lock:
+        return search_id in _cancelled_searches
 
 
 def cancel_search(search_id: str) -> None:
-    _active_searches[search_id] = True
+    """Request cancellation. Persists until the worker clears it — a cancel
+    issued while the job is queued behind the semaphore is honored when the
+    worker eventually starts (previously it was clobbered at task start)."""
+    with _cancel_lock:
+        _cancelled_searches.add(search_id)
+
+
+def _clear_cancel(search_id: str) -> None:
+    with _cancel_lock:
+        _cancelled_searches.discard(search_id)
 
 
 async def run_search_pipeline(
@@ -41,23 +57,33 @@ async def run_search_pipeline(
 ) -> None:
     supabase = get_supabase_admin()
     start_time = time.time()
-    _active_searches[search_id] = False
 
     try:
         async with _search_semaphore:
+            # Re-check both the in-memory cancel AND the DB row: a cancel issued
+            # while this job queued must not start a charged scrape.
+            if is_search_cancelled(search_id) or await _db_status_is(supabase, search_id, "cancelled"):
+                await _mark_cancelled(supabase, search_id)
+                return
+
             await _update_search(supabase, search_id, {
                 "status": "scraping",
                 "progress_percent": 5,
                 "message": f"Starting search...",
             })
 
-            if is_search_cancelled(search_id):
-                await _mark_cancelled(supabase, search_id)
-                return
+            outcome, limit_hit = await _run_maps_search(supabase, search_id, user_id, niche, location, start_time)
 
-            limit_hit = await _run_maps_search(supabase, search_id, user_id, niche, location, start_time)
-
-            await _finalize_search(supabase, search_id, limit_hit=limit_hit)
+            # Only a genuinely-running outcome may be finalized as completed.
+            # Terminal outcomes already wrote their own status.
+            if outcome == "failed":
+                logger.info(f"[Pipeline:{search_id}] Skipping finalize: scraper failed")
+            elif outcome == "cancelled":
+                logger.info(f"[Pipeline:{search_id}] Skipping finalize: cancelled")
+            elif outcome == "no_results":
+                logger.info(f"[Pipeline:{search_id}] Skipping finalize: no results (completed already written)")
+            else:
+                await _finalize_search(supabase, search_id, limit_hit=limit_hit)
 
     except Exception as e:
         logger.error(f"[Pipeline:{search_id}] Unexpected error: {e}", exc_info=True)
@@ -70,7 +96,18 @@ async def run_search_pipeline(
         except Exception as update_err:
             logger.error(f"[Pipeline:{search_id}] Failed to update search status after error: {update_err}")
     finally:
-        _active_searches.pop(search_id, None)
+        _clear_cancel(search_id)
+
+
+async def _db_status_is(supabase, search_id: str, status: str) -> bool:
+    """True when the DB row is already in `status` (authoritative cancel state)."""
+    try:
+        row = await asyncio.to_thread(
+            lambda: supabase.table("searches").select("status").eq("id", search_id).limit(1).execute()
+        )
+        return bool(row.data and row.data[0].get("status") == status)
+    except Exception:
+        return False
 
 
 async def load_more_maps_search(
@@ -79,9 +116,47 @@ async def load_more_maps_search(
     niche: str,
     location: str,
 ) -> int:
-    """Load 10 more results for an existing search."""
+    """Load up to 10 more results for an existing completed search.
+
+    Extra leads are charged against the user's remaining monthly quota; the
+    method returns 0 (no work done / nothing new) when quota is exhausted or
+    the search is not load-more eligible.
+    """
     supabase = get_supabase_admin()
-    query = f"{niche} in {location}"
+
+    # Enforce a sane total cap per search so the endpoint cannot be used to
+    # trigger unlimited paid scraper runs on a single row.
+    existing_rows = await asyncio.to_thread(
+        lambda: supabase.table("leads").select("id", count="exact").eq("search_id", search_id).execute()
+    )
+    already_saved = int((existing_rows.count if existing_rows and existing_rows.count else 0) or 0)
+    if already_saved >= MAX_SEARCH_LEADS_CAP:
+        logger.info(f"[Pipeline:{search_id}] Load-more refused: cap {MAX_SEARCH_LEADS_CAP} reached")
+        return 0
+
+    # Monthly quota gate for the extra batch (google_maps source).
+    from app.services.plans import get_plan_row, resolve_effective_subscription
+    eff = resolve_effective_subscription(supabase, user_id)
+    plan = get_plan_row(supabase, eff["plan_id"])
+    plan_limit = int(plan.get("gmb_leads_monthly", 0) or 0)
+    month_str = datetime.now(timezone.utc).replace(day=1).date().isoformat()
+    try:
+        usage = await asyncio.to_thread(
+            lambda: supabase.table("monthly_usage")
+            .select("gmb_generated,gmb_reserved")
+            .eq("user_id", user_id).eq("usage_month", month_str).limit(1).execute()
+        )
+        u = (usage.data or [{}])[0] if usage.data else {}
+        used = int(u.get("gmb_generated", 0) or 0) + int(u.get("gmb_reserved", 0) or 0)
+    except Exception:
+        used = 0
+    remaining = max(0, plan_limit - used)
+    if remaining <= 0:
+        logger.info(f"[Pipeline:{search_id}] Load-more refused: monthly gmb quota exhausted")
+        return 0
+    batch_cap = min(10, remaining, MAX_SEARCH_LEADS_CAP - already_saved)
+    if batch_cap <= 0:
+        return 0
 
     # Get already-saved business names to avoid duplicates
     existing = await asyncio.to_thread(
@@ -98,7 +173,7 @@ async def load_more_maps_search(
 
     try:
         raw_results = await run_maps_scraper(
-            query=query,
+            query=f"{niche} in {location}",
             max_results=20,
             timeout_seconds=120,
             depth=2,
@@ -114,7 +189,7 @@ async def load_more_maps_search(
         if name and name not in existing_names:
             existing_names.add(name)
             new_results.append(r)
-            if len(new_results) >= 10:
+            if len(new_results) >= batch_cap:
                 break
 
     if not new_results:
@@ -124,6 +199,12 @@ async def load_more_maps_search(
     lead_ids, _ = await _save_maps_leads(supabase, search_id, user_id, new_results)
     logger.info(f"[Pipeline:{search_id}] Load-more saved {len(lead_ids)} new leads")
 
+    # Account the extra batch against the monthly quota (this search's original
+    # reservation was already settled at first completion).
+    if lead_ids:
+        from app.services.usage import record_monthly_generated
+        await record_monthly_generated(supabase, user_id, "google_maps", len(lead_ids))
+
     # Update search totals
     await _finalize_search(supabase, search_id)
     return len(lead_ids)
@@ -131,7 +212,15 @@ async def load_more_maps_search(
 
 async def _run_maps_search(
     supabase, search_id: str, user_id: str, niche: str, location: str, start_time: float
-) -> bool:
+) -> tuple[str, bool]:
+    """Run the scraper and save leads.
+
+    Returns (outcome, limit_hit):
+      outcome "ok"        -> leads saved (caller finalizes as completed)
+      outcome "failed"    -> scraper failed (terminal 'failed' already written)
+      outcome "cancelled" -> cancelled (terminal 'cancelled' already written)
+      outcome "no_results"-> completed with zero leads (already written)
+    """
     query = f"{niche} in {location}"
     elapsed = time.time() - start_time
     remaining_timeout = max(60, int(MAX_SEARCH_TIME_SECONDS - elapsed - 60))
@@ -154,11 +243,11 @@ async def _run_maps_search(
             "status": "failed", "message": "Scraper failed",
             "error_message": str(e), "progress_percent": 0,
         })
-        return
+        return "failed", False
 
-    if is_search_cancelled(search_id):
+    if is_search_cancelled(search_id) or await _db_status_is(supabase, search_id, "cancelled"):
         await _mark_cancelled(supabase, search_id)
-        return
+        return "cancelled", False
 
     if not raw_results:
         await _update_search(supabase, search_id, {
@@ -167,7 +256,7 @@ async def _run_maps_search(
             "total_results": 0,
             "completed_at": datetime.now(timezone.utc).isoformat(),
         })
-        return
+        return "no_results", False
 
     await _update_search(supabase, search_id, {
         "progress_percent": 40,
@@ -176,7 +265,7 @@ async def _run_maps_search(
 
     lead_ids, maps_limit_hit = await _save_maps_leads(supabase, search_id, user_id, raw_results)
     logger.info(f"[Pipeline:{search_id}] Saved {len(lead_ids)} maps leads (limit_hit={maps_limit_hit})")
-    return maps_limit_hit
+    return "ok", maps_limit_hit
 
 
 async def _save_maps_leads(

@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
+import Link from 'next/link';
 import { Plus, Trash2, Pencil, X, LogOut, ExternalLink, CheckCircle2, Bold, Link2, List, Quote, Image as ImageIcon, Eye, PenLine, UploadCloud, Loader2 } from 'lucide-react';
 import { renderMarkdown } from '../../components/blog-markdown';
 
@@ -322,9 +323,9 @@ export default function AdminPanel() {
             </h1>
             <p className="text-text-secondary text-sm mt-1">
               Add, edit, and delete blog posts. Changes go live instantly at{' '}
-              <a className="text-brand-accent-light hover:underline" href="/blogs">
+              <Link className="text-brand-accent-light hover:underline" href="/blogs">
                 /blogs
-              </a>
+              </Link>
               .
             </p>
           </div>

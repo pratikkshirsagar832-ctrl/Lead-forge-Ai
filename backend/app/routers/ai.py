@@ -37,6 +37,15 @@ def _get_ai_daily_limit(plan_id: str) -> int:
 def _increment_ai_usage(user_id: str) -> None:
     supabase = get_supabase_admin()
     today = datetime.now(timezone.utc).date().isoformat()
+    # Atomic DB-side increment (avoids check-then-increment races under load);
+    # fall back to read-modify-write if the RPC is not present on this schema.
+    try:
+        supabase.rpc("increment_daily_usage", {
+            "p_user_id": user_id, "p_leads": 0, "p_searches": 0, "p_ai_calls": 1,
+        }).execute()
+        return
+    except Exception as e:
+        logger.debug(f"RPC increment_daily_usage unavailable, falling back: {e}")
     try:
         existing = supabase.table("daily_usage").select("id, ai_calls").eq("user_id", user_id).eq("date", today).execute()
         if existing.data and len(existing.data) > 0:

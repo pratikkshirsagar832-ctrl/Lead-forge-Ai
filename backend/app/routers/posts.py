@@ -42,6 +42,12 @@ async def scrape_profile_posts(
     user_id = current_user["id"]
     supabase = get_supabase_admin()
 
+    # Cost guard: each run fires a paid Apify actor. Per-user sliding window —
+    # the free tier also has no business firing dozens of paid runs an hour.
+    from app.utils.rate_limit import check_rate_limit
+    if not check_rate_limit(f"posts_scrape:{user_id}", limit=6, window_seconds=3600):
+        raise HTTPException(status_code=429, detail="Scrape rate limit reached. Try again in about an hour.")
+
     # Optional lead must belong to this user and must have a linkedin_url.
     lead_id = body.lead_id
     if lead_id:

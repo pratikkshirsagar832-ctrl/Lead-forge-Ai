@@ -342,3 +342,82 @@ def test_exact_count_skips_already_owned_posts_and_keeps_scanning():
     leads = store.list_leads(search_id=sid)
     assert len(leads) == 18
     assert drip[0].url not in {l["post_url"] for l in leads}  # owned post not re-delivered
+
+
+def test_content_filter_drops_wrong_direction_before_llm_and_keeps_count_honest():
+    """A cheap pre-LLM content-direction gate must (a) never reach the
+    classifier with a post whose text it would reject, and (b) keep the
+    engine's accepted count exactly equal to what is actually saved (accepted
+    == saved), so an N-lead search really stores N leads."""
+    from testing.mock_providers import _now, _service_words
+
+    def _gated_qualified(window: str, gate) -> int:
+        service_words = _service_words("video editor")
+        cutoff = TimeWindow(window).cutoff(datetime.now(UTC))
+        n = 0
+        for p in CORPUS:
+            if p.lead_type == LeadType.NEED_FREELANCER:
+                if (_now(p.days_ago) >= cutoff and any(w in p.text.lower() for w in service_words)
+                        and gate(p.text)):
+                    n += 1
+        return n
+
+    # Direction gate: a freelancer-direction search should not even consider
+    # posts that talk about an agency as the counterparty (mirrors the store's
+    # save-time rule — e.g. "Our company needs a video editing AGENCY ...").
+    def gate(text: str) -> bool:
+        return "agency" not in (text or "").lower()
+
+    class RecordingClassifier(MockClassifier):
+        def __init__(self, *a, **kw):
+            super().__init__(*a, **kw)
+            self.seen_texts: list[str] = []
+
+        def classify_batch(self, candidates, **kwargs):  # type: ignore[no-untyped-def]
+            self.seen_texts.extend((c.text or "").lower() for c in candidates)
+            return super().classify_batch(candidates, **kwargs)
+
+    expected = _gated_qualified("7d", gate)
+    assert expected > 0
+
+    store = MemoryStore()
+    clf = RecordingClassifier()
+    sid = _mk_search(store, needed=100, window="7d")
+    summary = run_search(
+        sid, store=store, discovery=MockDiscoveryClient(),
+        classifier=clf, settings=_settings(),
+        content_filter=gate,
+    )
+    assert summary.status == "completed"
+    assert summary.accepted == expected          # only gate-passing posts counted
+    assert summary.accepted == len(store.list_leads(search_id=sid))  # accepted == saved
+    leads = store.list_leads(search_id=sid)
+    assert all(gate(l.get("post_text") or "") for l in leads)
+    # The classifier never saw a text the gate rejects (zero LLM spend on them).
+    assert all(gate(t) or not t for t in clf.seen_texts)
+
+
+def test_content_filter_rejecting_everything_yields_zero_and_no_llm_calls():
+    """If the gate rejects every candidate, the engine must stop with a clean
+    zero-lead shortage and must not have spent a single classifier call."""
+    class NoopClassifier(MockClassifier):
+        def __init__(self, *a, **kw):
+            super().__init__(*a, **kw)
+            self.calls = 0
+
+        def classify_batch(self, candidates, **kwargs):  # type: ignore[no-untyped-def]
+            self.calls += 1
+            return super().classify_batch(candidates, **kwargs)
+
+    store = MemoryStore()
+    clf = NoopClassifier()
+    sid = _mk_search(store, needed=5)
+    summary = run_search(
+        sid, store=store, discovery=MockDiscoveryClient(),
+        classifier=clf, settings=_settings(),
+        content_filter=lambda text: False,
+    )
+    assert summary.status == "completed"
+    assert summary.accepted == 0
+    assert len(store.list_leads(search_id=sid)) == 0
+    assert clf.calls == 0  # zero DeepSeek spend on a direction-mismatched pool

@@ -54,14 +54,17 @@ class Settings(BaseSettings):
 
     deepseek_api_key: str = ""
     deepseek_base_url: str = "https://api.deepseek.com"
-    deepseek_model: str = "deepseek-v4-flash"
+    # DeepSeek's chat model (deepseek-chat, DeepSeek-V3) — the classifier model.
+    deepseek_model: str = "deepseek-chat"
 
     # Serper.dev (Google SERP discovery for Hyperagent LinkedIn engine)
     serper_api_key: str = ""
     serper_base_url: str = "https://google.serper.dev"
     serper_site_restriction: str = "linkedin.com/posts"
     serper_results_per_query: int = 10
-    serper_pages_per_query: int = 3
+    # Credit control: 2 pages (~20 results/query) balances recall against
+    # Serper spend; each extra page is a separate paid API call.
+    serper_pages_per_query: int = 2
     serper_gl: str = ""
     serper_hl: str = "en"
     serper_timeout_seconds: float = 30.0

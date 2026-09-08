@@ -243,39 +243,51 @@ class _ForceTypeStore:
             item = dict(r)
             item["lead_type"] = self._lead_type
             text = (item.get("post_text") or "").lower()
-            if text:
-                lt = self._lead_type
-                emp_hiring = any(m in text for m in _ForceTypeStore._EMPLOYEE_HIRING)
-                freelance = any(m in text for m in _ForceTypeStore._FREELANCER_WORDS)
-                agency = any(m in text for m in _ForceTypeStore._AGENCY_WORDS)
-                agency_sourcing = any(m in text for m in _ForceTypeStore._AGENCY_SOURCING)
-
-                if lt == "need_freelancer":
-                    # Drop agency-sourcing posts first — an agency recruiting
-                    # freelancers for its clients is NOT a freelancer-needed ask,
-                    # even when the word "freelancers" appears.
-                    if agency_sourcing:
-                        log.info("Type mismatch dropped (freelancer←agency-sourcing): %s",
-                                 text[:60].replace("\n", " "))
-                        continue
-                    # Drop employee job-ads (no freelance wording). A post that
-                    # says "hiring a freelance video editor" stays — genuine ask.
-                    if emp_hiring and not freelance:
-                        log.info("Type mismatch dropped (freelancer←employee-job): %s",
-                                 text[:60].replace("\n", " "))
-                        continue
-                elif lt == "our_agency":
-                    # Agency mode: accept when the post references an agency /
-                    # outside team OR shows company/team-sourcing language
-                    # ("we need editors and writers for our channel"). Drop only
-                    # pure individual freelance asks.
-                    team_ctx = any(m in text for m in _ForceTypeStore._AGENCY_TEAM_CONTEXT)
-                    if not agency and not team_ctx:
-                        log.info("Type mismatch dropped (agency←no-agency-content): %s",
-                                 text[:60].replace("\n", " "))
-                        continue
+            if text and not _content_matches_requested_type(text, self._lead_type):
+                log.info("Type mismatch dropped (%s): %s",
+                         self._lead_type, text[:60].replace("\n", " "))
+                continue
             forced.append(item)
         return self._inner.insert_leads_many(forced)
+
+
+def _content_matches_requested_type(text: str, lead_type: str) -> bool:
+    """Pure text gate: is this post's content compatible with the REQUESTED
+    buyer direction?
+
+    This is the single source of truth used BOTH by the save-time store gate
+    (drop mismatches before persistence) AND by the engine BEFORE any DeepSeek
+    call (a cheap pre-LLM `content_filter`). Because the engine only counts
+    posts that survive the exact same predicate the store applies, an accepted
+    post is never discarded at save time — a search that claims N leads really
+    saves N — and no LLM credit is spent on a post the store would drop anyway.
+
+    need_freelancer  -> someone needs an independent freelancer/contractor.
+                       Agency-sourcing posts (an agency recruiting freelancers
+                       for its clients) and employee job-ads (no freelance
+                       wording) are the wrong direction.
+    our_agency       -> an agency / outside team is being sourced. Posts that
+                       reference an agency or company/team-sourcing context are
+                       kept; pure individual freelance asks are dropped.
+    Empty text is never cheap-dropped (no text = classifier owns it).
+    """
+    low = (text or "").lower()
+    if not low:
+        return True
+    emp_hiring = any(m in low for m in _ForceTypeStore._EMPLOYEE_HIRING)
+    freelance = any(m in low for m in _ForceTypeStore._FREELANCER_WORDS)
+    agency = any(m in low for m in _ForceTypeStore._AGENCY_WORDS)
+    agency_sourcing = any(m in low for m in _ForceTypeStore._AGENCY_SOURCING)
+    if lead_type == "need_freelancer":
+        if agency_sourcing:
+            return False
+        if emp_hiring and not freelance:
+            return False
+        return True
+    if lead_type == "our_agency":
+        team_ctx = any(m in low for m in _ForceTypeStore._AGENCY_TEAM_CONTEXT)
+        return bool(agency or team_ctx)
+    return True
 
 
 # Max concurrently-running Hyperagent engines. Each burns paid Serper +
@@ -323,8 +335,16 @@ def _run_search_worker_body(search_id: str, user_id: str, settings: HaSettings, 
         # that a freelancer search returns freelancer-needed leads and an
         # agency search returns agency-sourcing leads — so the STORED type is
         # forced to the requested wire type before persistence.
+        content_filter = None
         if force_lead_type:
             store = _ForceTypeStore(store, force_lead_type)
+            # Pre-LLM direction gate (cheap, no DeepSeek spend): drop posts the
+            # store would discard at save time BEFORE they are classified. The
+            # engine therefore only counts posts that will really be saved —
+            # requested N leads => N saved (when the pool has them) — and the
+            # ~70% of LLM-classified candidates that were obvious non-matches
+            # never burn a DeepSeek call.
+            content_filter = lambda text: _content_matches_requested_type(text, force_lead_type)  # noqa: E731
         summary = ha_run_search(
             search_id,
             store=store,
@@ -333,6 +353,7 @@ def _run_search_worker_body(search_id: str, user_id: str, settings: HaSettings, 
             settings=settings,
             progress=cb,
             should_stop=should_stop,
+            content_filter=content_filter,
         )
         _progress_push(search_id, summary.status, summary.found, summary.accepted, summary.scanned,
                        summary.detail or summary.status)

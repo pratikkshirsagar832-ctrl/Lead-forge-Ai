@@ -76,8 +76,18 @@ def run_search(
     settings: Settings,
     progress: ProgressFn | None = None,
     should_stop: Callable[[], bool] | None = None,
+    content_filter: Callable[[str], bool] | None = None,
 ) -> EngineSummary:
-    """Synchronous orchestrator. Runs inside a background task/thread."""
+    """Synchronous orchestrator. Runs inside a background task/thread.
+
+    `content_filter` (optional) is a cheap text test applied BEFORE any LLM
+    call: return False to drop a candidate whose text clearly contradicts the
+    requested content direction (e.g. an advice/seller post that merely
+    contains the keywords). Dropping here saves the DeepSeek call AND keeps the
+    engine's exact-count loop honest — it only counts posts that survive the
+    content gate, so it keeps scanning until it genuinely finds N matching
+    leads instead of stopping early on posts it later discards at save time.
+    """
     progress = progress or _noop_progress
     row = store.get_search(search_id)
     if row is None:
@@ -126,6 +136,7 @@ def run_search(
     pref_dropped = 0
     dup_existing = 0
     type_mismatch = 0
+    dir_dropped = 0  # content-direction gate drops (cheap, zero LLM spend)
     reject_reasons: dict[str, int] = {}
     errors: list[str] = []
     accepted: list[EngineResult] = []  # NEW leads only (not already in the DB)
@@ -205,10 +216,24 @@ def run_search(
                 max_comments=settings.max_comments_allowed,
                 num_comments=post.num_comments,
             )
-            if verdict.keep:
-                candidates.append(post)
-            else:
+            if not verdict.keep:
                 pref_dropped += 1
+                continue
+            # CONTENT-DIRECTION GATE (cheap — NO LLM call). When a content_filter
+            # is wired (it mirrors the save-time store gate), a post whose text
+            # clearly contradicts the requested buyer direction is dropped here.
+            # Only posts that survive this gate can ever be accepted, so the
+            # exact-count loop never stops early on posts it would later discard
+            # at save time — engine "accepted" == rows actually persisted — and
+            # no DeepSeek call is spent classifying a guaranteed discard.
+            if content_filter is not None:
+                try:
+                    if not content_filter(post.text or ""):
+                        dir_dropped += 1
+                        continue
+                except Exception:  # noqa: BLE001 - a broken gate must never kill a search
+                    log.debug("content_filter raised for a candidate (kept for classifier)", exc_info=True)
+            candidates.append(post)
 
         if not candidates:
             zero_yield_rounds += 1
@@ -283,7 +308,8 @@ def run_search(
         )
         progress("running", raw_found, len(accepted), scanned,
                  f"accepted {len(accepted)}/{leads_needed} {lead_type} leads (scanned {scanned}, pref-dropped {pref_dropped}, "
-                 f"classify-dropped {classify_failed}, type-mismatch {type_mismatch}, already-owned {dup_existing})")
+                 f"content-dropped {dir_dropped}, classify-dropped {classify_failed}, type-mismatch {type_mismatch}, "
+                 f"already-owned {dup_existing})")
         if len(accepted) >= leads_needed:
             break
         # CREDIT SAFETY: stop as soon as several rounds added NO new lead —
@@ -367,9 +393,9 @@ def run_search(
         log.info("Search %s reject breakdown: %s", search_id,
                  ", ".join(f"{k}={v}" for k, v in sorted(reject_reasons.items())))
     log.info("Search %s done: status=%s found=%d accepted=%d scanned=%d (iterations=%d) "
-             "pref_dropped=%d classify_failed=%d type_mismatch=%d dup_owned=%d",
+             "pref_dropped=%d content_dropped=%d classify_failed=%d type_mismatch=%d dup_owned=%d",
              search_id, status, raw_found, len(top), scanned, iterations,
-             pref_dropped, classify_failed, type_mismatch, dup_existing)
+             pref_dropped, dir_dropped, classify_failed, type_mismatch, dup_existing)
     progress(status, raw_found, len(top), scanned, final_detail or "search finished")
     return _summary(search_id, status, raw_found, len(top), scanned, iterations, final_detail)
 

@@ -519,7 +519,7 @@ export default function PipelinePage() {
       <div className="space-y-6 animate-in fade-in duration-500 max-w-7xl mx-auto">
         <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-6">
           <div>
-            <h1 className="text-3xl font-extrabold text-offwhite tracking-tight">Lead Manager</h1>
+            <h1 className="text-3xl font-extrabold text-offwhite tracking-tight">Sales Manager</h1>
             <p className="text-ice/60 mt-2 text-sm font-medium">Drag leads between stages to track your sales pipeline.</p>
           </div>
         </div>
@@ -546,7 +546,7 @@ export default function PipelinePage() {
       <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-6 relative">
         <div>
           <h1 className="text-3xl font-extrabold text-offwhite tracking-tight flex items-center gap-3">
-            Lead Manager
+            Sales Manager
           </h1>
           <p className="text-ice/60 mt-2 text-sm font-medium">
             Drag leads between stages to track your sales pipeline.

@@ -30,7 +30,7 @@ const navItems = [
   { name: 'Dashboard', href: '/dashboard', icon: LayoutDashboard },
   { name: 'New Search', href: '/dashboard/search', icon: Search },
   { name: 'Leads', href: '/dashboard/leads', icon: Users },
-  { name: 'Lead Manager', href: '/dashboard/pipeline', icon: Kanban },
+  { name: 'Sales Manager', href: '/dashboard/pipeline', icon: Kanban },
   { name: 'Team', href: '/dashboard/team', icon: UsersRound },
   { name: 'History', href: '/dashboard/history', icon: History },
   { name: 'Export', href: '/dashboard/export', icon: Download },

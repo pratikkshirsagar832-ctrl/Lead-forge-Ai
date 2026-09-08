@@ -251,46 +251,6 @@ class _ForceTypeStore:
         return self._inner.insert_leads_many(forced)
 
 
-# Near-certain non-buyers: a post carrying one of these AND showing NO genuine
-# buyer ask is a seller / job-ad / self-promo, not a lead. The engine was
-# classifying ~70-90 such posts per search only to reject them as `irrelevant`,
-# burning DeepSeek credits. Dropping them BEFORE the LLM call is the biggest
-# single credit saver that does not reduce the genuine accepts.
-_STRONG_NEGATIVES: tuple[str, ...] = (
-    # employee job ads
-    "apply now", "apply here", "vacancy", "open position", "send your resume",
-    "careers page", "full-time position", "benefits package", "salary range",
-    "job opening", "joining our team", "we are hiring a", "we're hiring a",
-    # sellers / self-promotion
-    "we offer", "we provide", "our agency can help", "book a call", "get a quote",
-    "free consultation", "get started today", "sign up now", "limited spots",
-    "link in bio", "we specialize", "our services include", "shoot me a dm",
-    "we are a full-service", "we're a full-service", "we deliver", "dm me for",
-    "dm to book", "contact us", "we are a leading", "we're a leading",
-    "helping brands", "we help brands", "i provide", "my services include",
-    "taking new clients", "available for work",
-    # job seekers
-    "open to work", "available for projects", "seeking new clients",
-    "available for hire", "freelance for hire", "hire me",
-    # talent marketplaces / recruiting-sellers
-    "join our network", "we connect brands", "staffing agency", "we place",
-    "submit your portfolio", "talent pool", "register as a freelancer",
-    # thought leadership / engagement bait
-    "save this for later", "pro tip", "top 10", "lessons learned", "why your",
-)
-
-# Strong buyer-ask phrases. When present, the post stays for the classifier even
-# if it also mixes in seller/self-promo wording (genuine ask, ambiguous framing).
-# Deliberately excludes bait like "need a X?" — that is how sellers open posts.
-_STRONG_NEED: tuple[str, ...] = (
-    "we need", "our company needs", "our team needs", "anyone know", "anyone recommend",
-    "in need of", "seeking a ", "seeking an ", "hiring a freelance", "freelancer needed",
-    "freelancers needed", "we want to", "help us build", "for our brand", "for our company",
-    "for our channel", "for our startup", "for our business", "recommendations for",
-    "on the hunt for", "who can handle", "who can help", "dm if you know",
-)
-
-
 def _content_matches_requested_type(text: str, lead_type: str) -> bool:
     """Pure text gate: is this post's content compatible with the REQUESTED
     buyer direction?
@@ -300,13 +260,16 @@ def _content_matches_requested_type(text: str, lead_type: str) -> bool:
     call (a cheap pre-LLM `content_filter`). Because the engine only counts
     posts that survive the exact same predicate the store applies, an accepted
     post is never discarded at save time — a search that claims N leads really
-    saves N.
+    saves N — and no LLM credit is spent on a post the store would drop anyway.
 
     need_freelancer  -> someone needs an independent freelancer/contractor.
-    our_agency       -> an agency / outside team is being sourced.
-    Clear seller / job-ad / job-seeker / marketplace content with NO genuine
-    buyer ask is dropped here for free (biggest credit saver) rather than being
-    classified only to be rejected. Empty text is never cheap-dropped.
+                       Agency-sourcing posts (an agency recruiting freelancers
+                       for its clients) and employee job-ads (no freelance
+                       wording) are the wrong direction.
+    our_agency       -> an agency / outside team is being sourced. Posts that
+                       reference an agency or company/team-sourcing context are
+                       kept; pure individual freelance asks are dropped.
+    Empty text is never cheap-dropped (no text = classifier owns it).
     """
     low = (text or "").lower()
     if not low:
@@ -315,28 +278,15 @@ def _content_matches_requested_type(text: str, lead_type: str) -> bool:
     freelance = any(m in low for m in _ForceTypeStore._FREELANCER_WORDS)
     agency = any(m in low for m in _ForceTypeStore._AGENCY_WORDS)
     agency_sourcing = any(m in low for m in _ForceTypeStore._AGENCY_SOURCING)
-    team_ctx = any(m in low for m in _ForceTypeStore._AGENCY_TEAM_CONTEXT)
-    neg = any(m in low for m in _STRONG_NEGATIVES)
-    need = any(m in low for m in _STRONG_NEED)
     if lead_type == "need_freelancer":
         if agency_sourcing:
             return False
         if emp_hiring and not freelance:
             return False
-        # Seller/job-ad/job-seeker with no genuine buyer ask. Note: we do NOT
-        # spare posts just because they mention the word "freelance" — job-seekers
-        # ("I'm a freelance video editor available") and sellers also say it, so
-        # the genuine buyer-ask check is what decides. That was letting ~70
-        # posts/search through to be classified and rejected.
-        if neg and not need:
-            return False
         return True
     if lead_type == "our_agency":
-        if not (agency or team_ctx):
-            return False
-        if neg and not need and not team_ctx:
-            return False
-        return True
+        team_ctx = any(m in low for m in _ForceTypeStore._AGENCY_TEAM_CONTEXT)
+        return bool(agency or team_ctx)
     return True
 
 

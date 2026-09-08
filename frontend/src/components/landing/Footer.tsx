@@ -5,6 +5,7 @@ import { AnimatedFooter } from './AnimatedFooter';
 
 export function Footer() {
   return (
+    <>
     <footer className="bg-navy py-16 text-ice/50 border-t border-steel/15 relative overflow-hidden">
       {/* Subtle top glow */}
       <div className="absolute top-0 left-1/2 -translate-x-1/2 w-96 h-px bg-gradient-to-r from-transparent via-steel/30 to-transparent pointer-events-none" />
@@ -87,23 +88,25 @@ export function Footer() {
           </p>
         </div>
       </div>
-
-      {/* Cinematic animated footer band */}
-      <AnimatedFooter
-        headingLines={['HYPERCLIENTS']}
-        leftImage="/animated-footer/hand-left.png"
-        rightImage="/animated-footer/hand-right.png"
-        background="#06231F"
-        textColor="#F1F5F9"
-        charColor="#4FD8C3"
-        hoverColor="#22d3ee"
-        hoverCharColor="#06231F"
-        columns={64}
-        cellSize={22}
-        fontSize={17}
-        parallaxStrength={15}
-        className="h-[440px] border-t border-steel/15"
-      />
     </footer>
+
+    {/* Cinematic animated footer band — kept OUTSIDE the links footer so the
+        links + copyright stay fully readable above it (no overlap). */}
+    <AnimatedFooter
+      headingLines={['HYPERCLIENTS']}
+      leftImage="/animated-footer/hand-left.png"
+      rightImage="/animated-footer/hand-right.png"
+      background="#06231F"
+      textColor="#F1F5F9"
+      charColor="#4FD8C3"
+      hoverColor="#22d3ee"
+      hoverCharColor="#06231F"
+      columns={64}
+      cellSize={22}
+      fontSize={17}
+      parallaxStrength={15}
+      className="h-[460px] border-t border-steel/15"
+    />
+    </>
   );
 }

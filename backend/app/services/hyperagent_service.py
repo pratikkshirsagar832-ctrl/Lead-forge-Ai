@@ -301,7 +301,8 @@ _ENGINE_SLOT_WAIT_S = 30.0
 
 
 def _run_search_worker(search_id: str, user_id: str, settings: HaSettings, store, leads_needed: int = 10,
-                       force_lead_type: str | None = None, country_code: str = "") -> None:
+                       force_lead_type: str | None = None, country_code: str = "",
+                       all_types: bool = False) -> None:
     # Acquire before doing ANY paid work; other queued searches wait their turn
     # instead of running concurrently with the same user's (or others') engines.
     if not _ENGINE_SLOT.acquire(timeout=_ENGINE_SLOT_WAIT_S):
@@ -317,13 +318,14 @@ def _run_search_worker(search_id: str, user_id: str, settings: HaSettings, store
         return
     try:
         _run_search_worker_body(search_id, user_id, settings, store, leads_needed,
-                                force_lead_type, country_code)
+                                force_lead_type, country_code, all_types)
     finally:
         _ENGINE_SLOT.release()
 
 
 def _run_search_worker_body(search_id: str, user_id: str, settings: HaSettings, store, leads_needed: int = 10,
-                            force_lead_type: str | None = None, country_code: str = "") -> None:
+                            force_lead_type: str | None = None, country_code: str = "",
+                            all_types: bool = False) -> None:
     def cb(stage: str, found: int, accepted: int, scanned: int, message: str = "") -> None:
         _progress_push(search_id, stage, found, accepted, scanned, message)
 
@@ -340,7 +342,7 @@ def _run_search_worker_body(search_id: str, user_id: str, settings: HaSettings, 
         # agency search returns agency-sourcing leads — so the STORED type is
         # forced to the requested wire type before persistence.
         content_filter = None
-        if force_lead_type:
+        if force_lead_type and not all_types:
             store = _ForceTypeStore(store, force_lead_type)
             # Pre-LLM direction gate (cheap, no DeepSeek spend): drop posts the
             # store would discard at save time BEFORE they are classified. The
@@ -523,6 +525,7 @@ def run_hyperagent_pipeline(
     lead_type: str = "need_freelancer",
     time_window: str = "7d",
     leads_needed: int = 10,
+    all_types: bool = False,
 ) -> None:
     """Entry point called from the search router. Spawns a background thread."""
     settings = _ha_settings()
@@ -545,10 +548,10 @@ def run_hyperagent_pipeline(
 
     thread = threading.Thread(
         target=_run_search_worker,
-        args=(search_id, user_id, settings, store, leads_needed, lead_type, country),
+        args=(search_id, user_id, settings, store, leads_needed, lead_type, country, all_types),
         daemon=True,
         name=f"hyperagent-{search_id[:8]}",
     )
     thread.start()
-    log.info("Hyperagent search %s started (queued or running): service=%r country=%r type=%s window=%s need=%d",
-             search_id, service, country, lead_type, time_window, leads_needed)
+    log.info("Hyperagent search %s started (queued or running): service=%r country=%r type=%s window=%s need=%d all_types=%s",
+             search_id, service, country, lead_type, time_window, leads_needed, all_types)

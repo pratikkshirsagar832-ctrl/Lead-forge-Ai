@@ -203,8 +203,8 @@ export default function SearchPage() {
   const [maxResults, setMaxResults] = useState(10);
   // LinkedIn discovery targets genuine service buyers — the user picks between
   // freelancer-needed (buyer) and agency-wanted. Hiring/job-ads are excluded.
-  type LinkedInLeadType = 'buyer' | 'agency_wanted';
-  const [linkedinLeadType, setLinkedinLeadType] = useState<LinkedInLeadType>('buyer');
+  type LinkedInLeadType = 'all' | 'buyer' | 'agency_wanted';
+  const [linkedinLeadType, setLinkedinLeadType] = useState<LinkedInLeadType>('all');
   const requestedCount = useSearchStore((s) => s.requestedCount);
   const isUnlocked = useSearchStore((s) => s.unlocked);
   const unlockResults = useSearchStore((s) => s.unlockResults);
@@ -290,7 +290,12 @@ export default function SearchPage() {
     if (isAtLimit) { setShowUpgradeModal(true); return; }
     try {
       if (source === 'linkedin') {
-        await startSearch(data.niche, data.location ?? '', { source: 'linkedin', enrichEmails: false, maxResults, leadTypes: [linkedinLeadType] });
+        await startSearch(data.niche, data.location ?? '', {
+          source: 'linkedin', enrichEmails: false, maxResults,
+          leadTypes: linkedinLeadType === 'all'
+            ? ['buyer', 'agency_wanted']
+            : [linkedinLeadType],
+        });
       } else {
         await startSearch(data.niche, data.location ?? '', { source: 'google_maps', enrichEmails: false });
       }
@@ -430,12 +435,23 @@ export default function SearchPage() {
                       ))}
                     </select>
                   </div>
-                  <div>
+                  <div className="sm:col-span-2">
                     <label className="block text-sm font-medium text-ice/70 mb-2 flex items-center gap-2">
                       <Briefcase className="w-4 h-4 text-steel" />
                       Lead Type
                     </label>
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setLinkedinLeadType('all')}
+                        className={`px-3 py-2.5 rounded-xl border text-sm font-semibold transition-all ${
+                          linkedinLeadType === 'all'
+                            ? 'bg-steel/15 border-steel/50 text-offwhite'
+                            : 'bg-navy/60 border-ocean/25 text-ice/60 hover:text-offwhite hover:border-ocean/40'
+                        }`}
+                      >
+                        All Buyers
+                      </button>
                       <button
                         type="button"
                         onClick={() => setLinkedinLeadType('buyer')}
@@ -460,15 +476,17 @@ export default function SearchPage() {
                       </button>
                     </div>
                     <p className="text-[11px] text-ice/40 mt-1.5">
-                      {linkedinLeadType === 'buyer'
-                        ? 'People posting they need to hire a freelancer for this.'
-                        : 'People posting they are looking for an agency to handle this.'}
+                      {linkedinLeadType === 'all'
+                        ? 'Everyone genuinely buying this service — freelancers needed, agencies wanted, or a team/outsourcing ask. Newest first.'
+                        : linkedinLeadType === 'buyer'
+                          ? 'People posting they need to hire a freelancer for this.'
+                          : 'People posting they are looking for an agency to handle this.'}
                     </p>
                   </div>
                   <div className="sm:col-span-2">
                     <p className="text-xs text-ice/60 leading-relaxed">
-                      We scan LinkedIn worldwide for the latest genuine buyers of your service — {linkedinLeadType === 'buyer' ? 'freelancer-needed' : 'agency-wanted'} posts
-                      only (sellers, hiring ads & job-seeker posts are always excluded) — and deliver exactly the number of leads you ask for, newest first.
+                      We scan LinkedIn worldwide for the latest genuine buyers of your service — {linkedinLeadType === 'all' ? 'every buyer situation (freelancer-needed, agency-wanted, team/outsourcing)' : linkedinLeadType === 'buyer' ? 'freelancer-needed' : 'agency-wanted'} posts
+                      only (sellers, hiring ads &amp; job-seeker posts are always excluded) — and deliver exactly the number of leads you ask for, newest first.
                     </p>
                   </div>
                   </>

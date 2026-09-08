@@ -155,10 +155,13 @@ async def create_search(
             ha_time_window_from,
         )
 
-        # Map frontend lead types to Hyperagent lead types
-        # Frontend sends ["buyer", "agency_wanted"] -> Hyperagent uses need_freelancer (primary)
+        # Map frontend lead types to Hyperagent lead types.
+        # Frontend sends ["buyer"] / ["agency_wanted"] for a single lane, or
+        # ["buyer","agency_wanted"] for "All Buyers". When BOTH are requested we
+        # run unrestricted (all genuine buyer types kept, newest first).
         ha_lead_type = ha_lead_type_from(lead_types)
         ha_time_window = ha_time_window_from()
+        all_types = len(lead_types) >= 2
 
         # GLOBAL SEARCH: location is intentionally removed for LinkedIn - the
         # engine scans posts from every country and returns the latest buyers.
@@ -206,6 +209,7 @@ async def create_search(
             lead_type=ha_lead_type,
             time_window=ha_time_window,
             leads_needed=effective_max_results,
+            all_types=all_types,
         )
 
         return search

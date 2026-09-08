@@ -455,6 +455,17 @@ def run_search(
             suffix += f". {CRAWL_LAG_NOTE}"
         final_detail = (final_detail + " | " if final_detail else "") + suffix
 
+    # Rate-limit UX: when we made many Serper calls but the source returned
+    # very few results (and few/no leads), tell the user it may be throttled
+    # instead of an unexplained 0. Never hides a genuine shortage.
+    if shortage and raw_found < 20:
+        _sr, _dc = _call_counts()
+        if _sr >= 30:
+            final_detail = (final_detail + " | " if final_detail else "") + (
+                "The search engine is returning very few results right now - it may be "
+                "rate-limiting. Try again in a little while or with a different niche."
+            )
+
     store.update_search(
         search_id,
         status=status,

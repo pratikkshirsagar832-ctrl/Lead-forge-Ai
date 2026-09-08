@@ -113,6 +113,21 @@ def get_used_today(supabase, user_id: str) -> tuple[int, int]:
     return (used.get("searches_run", 0) or 0, used.get("leads_generated", 0) or 0)
 
 
+def get_monthly_searches_used(supabase, user_id: str) -> int:
+    """Count searches created for this user in the CURRENT calendar month.
+
+    The search allowance resets on the 1st of the month (not daily), so the
+    quota is measured against `searches.created_at >= month start`.
+    """
+    month_start = datetime.now(timezone.utc).replace(day=1)
+    resp = supabase.table("searches") \
+        .select("id", count="exact") \
+        .eq("user_id", user_id) \
+        .gte("created_at", month_start.isoformat()) \
+        .execute()
+    return int(resp.count or 0)
+
+
 def remaining_leads_today(supabase, user_id: str) -> int:
     """Python-side replacement for the get_remaining_leads RPC —
     team-aware: members draw from their OWNER's plan quota scale."""

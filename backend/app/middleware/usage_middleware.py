@@ -6,7 +6,7 @@ from app.database import get_supabase_admin
 from app.middleware.auth_middleware import get_current_user
 from app.services.plans import (
     get_plan_row,
-    get_used_today,
+    get_monthly_searches_used,
     resolve_effective_subscription,
 )
 
@@ -34,14 +34,15 @@ async def check_search_limit(current_user: dict = Depends(get_current_user)) -> 
 
         plan = get_plan_row(supabase, plan_id)
         searches_per_day = int(plan.get("searches_per_day", 0) or 0)
-        used_searches, _ = get_used_today(supabase, user_id)
+        # Search allowance resets MONTHLY, not daily.
+        used_searches = get_monthly_searches_used(supabase, user_id)
         remaining = max(0, searches_per_day - used_searches)
 
         if remaining <= 0:
             raise HTTPException(
                 status_code=status.HTTP_429_TOO_MANY_REQUESTS,
                 detail={
-                    "message": "Daily search limit reached",
+                    "message": "Monthly search limit reached",
                     "remaining_searches": 0,
                     "searches_per_day": searches_per_day,
                     "plan": plan_id,

@@ -503,8 +503,9 @@ export function AnimatedFooter({
         </div>
       </div>
 
-      {/* Display headings */}
-      <div className="absolute inset-x-0 bottom-0 flex items-end justify-center gap-4 p-8">
+      {/* Display headings — vertically centered so the wordmark sits in the
+          middle of the band rather than being pinned to the very bottom. */}
+      <div className="absolute inset-0 flex items-center justify-center gap-4 p-8">
         {headingLines.map((word, wi) => (
           <h2
             key={`${word}-${wi}`}

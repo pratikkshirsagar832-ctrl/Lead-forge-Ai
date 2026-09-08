@@ -377,6 +377,20 @@ async def get_me(current_user: dict = Depends(get_current_user)):
         subscription["linkedin_hq_leads_monthly"] = li_monthly
         subscription["gmb_leads_monthly"] = gmb_monthly
 
+        # Searches are also MONTHLY now: count this month's created searches and
+        # treat searches_per_day as the monthly allowance (resets on the 1st).
+        try:
+            from app.services.plans import get_monthly_searches_used
+            used_searches_month = get_monthly_searches_used(supabase, current_user["id"])
+        except Exception:
+            used_searches_month = max(
+                0,
+                int(subscription.get("searches_per_day", 3) or 3)
+                - int(subscription.get("remaining_searches", 0) or 0),
+            )
+        _sub_limit = int(subscription.get("searches_per_day", 3) or 3)
+        subscription["remaining_searches"] = max(0, _sub_limit - used_searches_month)
+
     return {
         "id": current_user["id"],
         "email": current_user["email"],

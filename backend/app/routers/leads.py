@@ -258,6 +258,22 @@ def _map_ha_lead(row: dict) -> dict:
     }
 
 
+def _map_ha_lead_detail(row: dict, user_id: str) -> dict:
+    """Map a `ha_leads` row to the LeadDetail schema (LinkedIn lead page)."""
+    d = _coerce_lead(_map_ha_lead(row))
+    d.update({
+        "user_id": user_id,
+        "google_key": None,
+        "google_maps_link": None,
+        "photos": [],
+        "business_hours": {},
+        "description": None,
+        "estimated_deal_value": None,
+        "website_analyses": [],
+    })
+    return d
+
+
 EXPORT_MAX_ROWS = 10000
 CSV_EXPORT_PLANS = {"pro", "agency"}
 
@@ -427,7 +443,13 @@ async def get_lead_detail(
     lead_id: str,
     current_user: dict = Depends(get_current_user),
 ):
-    """Get full lead details."""
+    """Get full lead details.
+
+    Handles BOTH sources: Google-Maps leads live in `leads`, LinkedIn leads
+    live in `ha_leads` (which has no user_id — ownership is via the search row
+    it shares its id with). Without the ha_leads fallback, clicking a LinkedIn
+    lead 404'd ("lead can't load").
+    """
     supabase = get_supabase_admin()
 
     try:
@@ -439,25 +461,43 @@ async def get_lead_detail(
             .limit(1)
             .execute()
         )
-        if not response.data or len(response.data) == 0:
-            raise HTTPException(status_code=404, detail="Lead not found")
+        if response.data and len(response.data) > 0:
+            lead = response.data[0]
+            # Fetch associated website analyses
+            try:
+                analysis_resp = (
+                    supabase.table("website_analyses")
+                    .select("*")
+                    .eq("lead_id", lead_id)
+                    .execute()
+                )
+                if analysis_resp.data:
+                    lead["website_analyses"] = analysis_resp.data
+            except Exception as e:
+                logger.warning(f"Failed to fetch analysis for lead {lead_id}: {e}")
+            return lead
 
-        lead = response.data[0]
-
-        # Fetch associated website analyses
-        try:
-            analysis_resp = (
-                supabase.table("website_analyses")
-                .select("*")
-                .eq("lead_id", lead_id)
+        # Not a Google-Maps lead — fall back to LinkedIn `ha_leads`.
+        ha = (
+            supabase.table("ha_leads")
+            .select("*")
+            .eq("id", lead_id)
+            .limit(1)
+            .execute()
+        )
+        if ha.data and len(ha.data) > 0:
+            ha_row = ha.data[0]
+            srow = (
+                supabase.table("searches")
+                .select("user_id")
+                .eq("id", ha_row.get("search_id"))
+                .limit(1)
                 .execute()
             )
-            if analysis_resp.data:
-                lead["website_analyses"] = analysis_resp.data
-        except Exception as e:
-            logger.warning(f"Failed to fetch analysis for lead {lead_id}: {e}")
+            if srow.data and srow.data[0].get("user_id") == current_user["id"]:
+                return _map_ha_lead_detail(ha_row, current_user["id"])
 
-        return lead
+        raise HTTPException(status_code=404, detail="Lead not found")
     except HTTPException:
         raise
     except Exception as e:

@@ -1,4 +1,4 @@
-﻿"""Deterministic cheap rejects - run BEFORE any AI spend.
+"""Deterministic cheap rejects - run BEFORE any AI spend.
 
 Precision doctrine: a deterministic rule only drops a post when the drop is
 near-certain. Whenever a genuine buyer phrase and a negative category both
@@ -29,6 +29,10 @@ JOB_AD_STRONG: tuple[str, ...] = (
     "vacancy", "apply now", "apply here", "full-time position", "full time position",
     "open position", "job opening", "send your resume", "salary range", "benefits package",
     "apply at careers", "careers page",
+    # Empirical (live rejection telemetry): employee ads use these and genuine
+    # buyer asks essentially never do.
+    "#hiring", "now hiring", "we're hiring", "we are hiring a", "recruiting",
+    "job alert", "hiring for a", "is #hiring",
 )
 
 SELLER_MARKERS: tuple[str, ...] = (
@@ -45,6 +49,9 @@ SELLER_MARKERS: tuple[str, ...] = (
     "creating visuals", "that speak for themselves", "senior designer creating",
     "my name is", "i am a designer", "i am a developer", "i am a marketer",
     "i am a video editor", "i am a photographer", "i am an editor",
+    # Empirical (live rejection telemetry): agency self-promotion / growth bait.
+    "our mission is", "helping real businesses", "help businesses improve",
+    "become the most sought", "free quote", "we are a team of",
 )
 
 JOB_SEEKER_MARKERS: tuple[str, ...] = (
@@ -69,6 +76,12 @@ THOUGHT_LEADERSHIP_RE: tuple[re.Pattern[str], ...] = (
     re.compile(r"lessons learned", re.IGNORECASE),
     re.compile(r"here are my tips", re.IGNORECASE),
     re.compile(r"why your \w+ (is|are)", re.IGNORECASE),
+    # Empirical (live rejection telemetry): podcast/engagement + opinion bait.
+    re.compile(r"\bin this episode\b", re.IGNORECASE),
+    re.compile(r"\blisten (now|on)\b", re.IGNORECASE),
+    re.compile(r"before asking these \w+", re.IGNORECASE),
+    re.compile(r"\bone of the fastest-growing\b", re.IGNORECASE),
+    re.compile(r"\bmistakes? (to avoid|i made|you'?re making)\b", re.IGNORECASE),
 )
 
 

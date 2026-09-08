@@ -42,6 +42,12 @@ NEGATIVE_QUERY_PHRASES: tuple[str, ...] = (
     "available for hire",
     "join our talent network",
     "we are a leading",
+    # High-confidence job-seeker / employee-hiring phrasing genuine buyers never
+    # use (live rejection telemetry showed these dominate the noise).
+    "#hiring",
+    "i'm a freelance",
+    "i am a freelance",
+    "portfolio in comments",
 )
 
 # Derive natural role nouns from service phrases ("video editing" -> "video

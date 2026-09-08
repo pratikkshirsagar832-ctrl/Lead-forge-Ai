@@ -382,6 +382,26 @@ def test_engine_records_rejections_for_observability():
     assert all(r.get("accepted") is False for r in rej)
 
 
+def test_prefilter_quality_markers_drop_noise_but_keep_genuine_asks():
+    """Empirical job-ad / podcast / agency self-promo markers drop ONLY when no
+    genuine buyer phrase is present; a real ask is never dropped."""
+    from prefilter import prefilter
+
+    for text in [
+        "We're Hiring | Digital Marketing Manager with strong agency experience.",
+        "Winnrs Co is #hiring for an Account Manager - apply now at careers.",
+        "Our mission is to become the most sought after agency whilst helping businesses.",
+        "In this episode we break down why your agency growth is stalling.",
+    ]:
+        assert prefilter(text).keep is False, text
+
+    # A genuine freelance ask is kept even when it also contains hiring wording.
+    assert prefilter(
+        "We are looking for a freelance video editor for a 6-week project. "
+        "We're hiring for this now."
+    ).keep is True
+
+
 def test_content_filter_drops_wrong_direction_before_llm_and_keeps_count_honest():
     """A cheap pre-LLM content-direction gate must (a) never reach the
     classifier with a post whose text it would reject, and (b) keep the

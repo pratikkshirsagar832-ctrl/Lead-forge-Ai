@@ -172,10 +172,10 @@ def run_search(
         reject_rows.append({
             "search_id": search_id,
             "post_url": (post.post_url or "")[:400],
-            "post_text": (post.text or "")[:500],
+            "post_text": (post.text or "").replace("\ufffd", "")[:500],
             "lead_type_verdict": verdict_type,
-            "reason": (reason or "")[:500],
-            "evidence": (getattr(classification, "evidence", None) or "")[:300],
+            "reason": (reason or "").replace("\ufffd", "")[:500],
+            "evidence": (getattr(classification, "evidence", None) or "").replace("\ufffd", "")[:300],
             "accepted": False,
             "is_qualified": bool(getattr(classification, "is_qualified", False)),
         })
@@ -343,7 +343,8 @@ def run_search(
                 # DIFFERENT type (e.g. our_agency found during a
                 # need_freelancer search) is not a lead for THIS search.
                 type_mismatch += 1
-                _record_reject(post, classification, reason=classification.reason or "type mismatch")
+                _record_reject(post, classification, verdict_type=classification.lead_type,
+                               reason=classification.reason or "type mismatch")
                 continue
             qualified = compute_score(
                 classification,
@@ -420,9 +421,9 @@ def run_search(
             "lead_type": cl.lead_type,
             "time_window": time_window,
             "post_url": p.post_url,
-            "author_name": p.author_name,
+            "author_name": (p.author_name or "").replace("\ufffd", "") or None,
             "author_profile_url": p.author_profile_url,
-            "post_text": p.text,
+            "post_text": (p.text or "").replace("\ufffd", ""),
             "post_date": p.posted_at.date() if p.posted_at else None,
             "overall_quality_score": result.qualified.overall,
             "service_match_score": result.qualified.service_match,

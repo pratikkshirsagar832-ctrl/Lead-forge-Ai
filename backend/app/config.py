@@ -62,9 +62,9 @@ class Settings(BaseSettings):
     serper_base_url: str = "https://google.serper.dev"
     serper_site_restriction: str = "linkedin.com/posts"
     serper_results_per_query: int = 10
-    # Credit control: 2 pages (~20 results/query) balances recall against
-    # Serper spend; each extra page is a separate paid API call.
-    serper_pages_per_query: int = 2
+    # 3 pages (~30 results/query) raises recall so searches can hit the exact
+    # requested lead count; the per-search Serper ceiling bounds the spend.
+    serper_pages_per_query: int = 3
     serper_gl: str = ""
     serper_hl: str = "en"
     serper_timeout_seconds: float = 30.0

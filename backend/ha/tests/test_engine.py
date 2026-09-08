@@ -402,6 +402,51 @@ def test_prefilter_quality_markers_drop_noise_but_keep_genuine_asks():
     ).keep is True
 
 
+def test_slice_is_newest_first_exactly_n():
+    """Exact-N: delivers exactly `needed` leads, and recency beats quality score
+    (the newest genuine posts win even when older ones scored higher)."""
+    from datetime import timedelta  # noqa: F401
+    from discovery.base import RawPost, SearchBatchResult
+    from models import IntentStrength
+    from testing.mock_providers import FakePost, MockClassifier, _now
+
+    corpus = []
+    for i in range(6):
+        days = 0.2 + i * 0.4  # newest = lowest days_ago
+        score = 95 - i        # newest posts score LOWEST -> recency must win
+        corpus.append(FakePost(
+            url=f"https://www.linkedin.com/posts/rec-{i}",
+            text="We are looking for a video editor for a project.",
+            author=f"Author {i}", author_url=f"https://www.linkedin.com/in/a-{i}",
+            days_ago=days, lead_type=LeadType.NEED_FREELANCER,
+            intent=IntentStrength.EXPLICIT, service_match=90.0, commercial=80.0,
+            decision_maker=True, evidence="x", reason="y",
+        ))
+
+    class AllDiscovery(MockDiscoveryClient):
+        def __init__(self):
+            self._hit = False
+
+        def search_posts(self, queries, since, *, results_per_query=25):  # type: ignore[no-untyped-def]
+            if self._hit:
+                return SearchBatchResult(posts=[], queries_used=list(queries))
+            self._hit = True
+            posts = [RawPost(post_url=p.url, text=p.text, author_name=p.author,
+                             author_profile_url=p.author_url, posted_at=_now(p.days_ago))
+                     for p in corpus]
+            return SearchBatchResult(posts=posts, queries_used=list(queries))
+
+    store = MemoryStore()
+    sid = _mk_search(store, needed=3)
+    summary = run_search(sid, store=store, discovery=AllDiscovery(),
+                         classifier=MockClassifier(corpus=corpus), settings=_settings())
+    assert summary.status == "completed"
+    leads = store.list_leads(search_id=sid)
+    assert len(leads) == 3                      # exactly N — never more, never fewer
+    dates = [l["post_date"] for l in leads]
+    assert dates == sorted(dates, reverse=True)  # newest first (non-increasing)
+
+
 def test_content_filter_drops_wrong_direction_before_llm_and_keeps_count_honest():
     """A cheap pre-LLM content-direction gate must (a) never reach the
     classifier with a post whose text it would reject, and (b) keep the

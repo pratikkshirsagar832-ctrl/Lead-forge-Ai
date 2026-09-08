@@ -127,9 +127,9 @@ def _ha_settings() -> HaSettings:
     # never burn unbounded Serper calls on a niche with no leads. Pagination
     # now returns 3-4x more candidates per query, so give the engine a few
     # more iterations and slack to scan them before declaring it exhausted.
-    os.environ["ENGINE_MAX_ITERATIONS"] = "12"
+    os.environ["ENGINE_MAX_ITERATIONS"] = "20"
     os.environ["ENGINE_DEADLINE_SECONDS"] = "540"
-    os.environ["ENGINE_EARLY_STOP_EMPTY_ROUNDS"] = "4"
+    os.environ["ENGINE_EARLY_STOP_EMPTY_ROUNDS"] = "6"
     # Independent per-search spend ceilings (safety net beyond iterations).
     os.environ["MAX_SERPER_REQUESTS_PER_SEARCH"] = "60"
     os.environ["MAX_DEEPSEEK_CALLS_PER_SEARCH"] = "150"

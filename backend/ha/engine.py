@@ -396,14 +396,13 @@ def run_search(
         log.debug("record_rejections unavailable (ignored)", exc_info=True)
 
     # -------- slice to EXACTLY N (never overdeliver) -----------------------
-    # Recency-first WITHIN quality bands: a fresh post (>=80, or 65-79) is
-    # preferred over an older one of similar quality so users see the newest
-    # genuine buyers, while weak-but-new posts never crowd out strong ones.
+    # NEWEST FIRST: the user wants the LATEST genuine buyers. Recency is the
+    # primary sort key (older low-freshness posts never crowd out a newer one);
+    # quality score is only a tiebreak among posts with the same timestamp.
     def _sort_key(result: "EngineResult"):
         posted = result.post.posted_at
         ts = posted.timestamp() if posted else 0.0
-        band = 0 if result.overall >= 80 else (1 if result.overall >= 65 else 2)
-        return (band, ts)
+        return (-ts, -result.overall)
     accepted.sort(key=_sort_key)
     top = accepted[:leads_needed]
 

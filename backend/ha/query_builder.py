@@ -95,7 +95,7 @@ def role_variants(service: str) -> list[str]:
         base = f"{prefix} {role}".strip() if prefix else role
         if base not in out:
             out.append(base)
-    return out[:3]
+    return out[:5]
 
 
 _NEG_TERM = re.compile(r'\s+-\"([^\"]+)\"')
@@ -395,7 +395,7 @@ def next_queries(service: str, lead_type: LeadType, iteration: int) -> list[str]
     if iteration <= 0:
         return list(plan.base)
     # Later iterations add a fresh slice of the pool; window stays bounded.
-    window = min(3 + iteration, 6)
+    window = min(3 + iteration, 8)
     start = (iteration - 1) * 2
     extra = list(plan.pool[start : start + window])
     if not extra:

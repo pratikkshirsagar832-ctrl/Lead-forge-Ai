@@ -63,9 +63,9 @@ class Settings:
     serper_results_per_query: int = field(default_factory=lambda: _int("SERPER_RESULTS_PER_QUERY", 10))
     # Pages of results to request per query. Google only returns ~10 posts per
     # page, so paging surfaces more candidates (recall lever), but EVERY page is
-    # a separate paid Serper call — default 2 to keep credits low; bounded to
-    # avoid burning credits on zero-yield niches.
-    serper_pages_per_query: int = field(default_factory=lambda: max(1, min(_int("SERPER_PAGES_PER_QUERY", 2), 5)))
+    # a separate paid Serper call — default 3 to hit exact lead counts; the
+    # per-search ceiling bounds the spend on zero-yield niches.
+    serper_pages_per_query: int = field(default_factory=lambda: max(1, min(_int("SERPER_PAGES_PER_QUERY", 3), 5)))
     serper_gl: str = field(default_factory=lambda: _str("SERPER_GL", ""))   # optional Google country ('us', 'in', ...)
     serper_hl: str = field(default_factory=lambda: _str("SERPER_HL", "en"))  # optional Google language
     serper_timeout_seconds: float = field(default_factory=lambda: _float("SERPER_TIMEOUT_SECONDS", 30.0))

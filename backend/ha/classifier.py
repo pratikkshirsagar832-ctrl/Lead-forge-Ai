@@ -89,6 +89,12 @@ DISTINCTION RULES (precision over recall — a false positive is costly):
 - A single post can mix signals ("need a {service} — DM me if you know someone" is a BUYER asking
   for referrals; "DM me for {service}" is a SELLER). Judge the main intent.
 
+CALIBRATION: score by evidence, not phrasing generosity. The more explicit the scope, budget,
+timeline or deadline, the higher commercial_intent_score and overall_quality_score. Prefer real,
+recent asks over vague ones. When employment signals dominate (required years + "join our team" +
+open-ended ongoing duties + application funnel) mark irrelevant even if the word "freelance"/
+"contract" appears once — an employee-shaped post is never a freelance lead.
+
 DOMAIN-GENERAL REASONING (§0): apply the direction-of-intent test below to whatever service the
 user sells — plumbing in Nairobi, UX design in Toronto, wedding photography in Mumbai, anything.
 There are no per-service rules; these examples teach the PATTERN, not an allow-list. The four

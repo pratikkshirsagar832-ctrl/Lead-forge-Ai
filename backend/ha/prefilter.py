@@ -84,6 +84,14 @@ THOUGHT_LEADERSHIP_RE: tuple[re.Pattern[str], ...] = (
     re.compile(r"\bmistakes? (to avoid|i made|you'?re making)\b", re.IGNORECASE),
 )
 
+# Hashtag-spam detection: self-promotional posts decorate themselves with
+# hashtag walls ("#OffPageSEO #SEO #LinkBuilding #Freelancer #Outreach ...").
+# Genuine buyer asks are written as sentences to people, not tagged for reach.
+# 5+ hashtags is the empirical floor observed on promo posts; genuine asks
+# carry 0-2. (Empirical live telemetry: Hritik-style hashtag posts.)
+HASHTAG_WALL_RE = re.compile(r"(?:^|\s)#[A-Za-z_]\w*")
+HASHTAG_WALL_LIMIT = 5
+
 
 @dataclass(slots=True)
 class PrefilterVerdict:
@@ -120,15 +128,18 @@ def prefilter(text: str, *, service: str = "", max_comments: int | None = None,
         "job_seeker": _contains(low, JOB_SEEKER_MARKERS),
         "marketplace": _contains(low, MARKETPLACE_MARKERS),
         "thought_leadership": any(r.search(low) for r in THOUGHT_LEADERSHIP_RE),
+        "hashtag_wall": len(HASHTAG_WALL_RE.findall(text)) >= HASHTAG_WALL_LIMIT,
     }
     if max_comments and max_comments > 0 and num_comments is not None and num_comments > max_comments:
         # Heavily contested: many other providers are already pitching here.
         return PrefilterVerdict(keep=False, dropped_for=f"comments:{num_comments}", matched=matched)
-    if matched["buyer"]:
+    if matched["buyer"] and not matched["hashtag_wall"]:
         # Ambiguous with a buyer phrase present -> classifier decides.
+        # (A hashtag wall overrides even a buyer phrase: reach-bait posts
+        # mimic buyer language for impressions, not to hire.)
         return PrefilterVerdict(keep=True, matched=matched)
 
-    for category in ("job_ad", "seller", "job_seeker", "marketplace", "thought_leadership"):
+    for category in ("job_ad", "seller", "job_seeker", "marketplace", "thought_leadership", "hashtag_wall"):
         if matched[category]:
             return PrefilterVerdict(keep=False, dropped_for=category, matched=matched)
     return PrefilterVerdict(keep=True, matched=matched)

@@ -204,7 +204,16 @@ class SerperDiscoveryClient(DiscoveryClient):
         m = _TITLE_AUTHOR.match(title)
         if m:
             author = m.group("author").strip() or None
-            body = (m.group("body") or snippet or text).strip() or text
+            title_body = (m.group("body") or "").strip()
+            # Google TITLE bodies are hard-truncated (~100 chars) while the
+            # SNIPPET usually carries the real (longer) post text — including
+            # the author's headline when the title loses it. The classifier
+            # judges intent from this text, so always keep the LONGER
+            # evidence; never let a truncated title-body win.
+            if snippet and len(snippet) > len(title_body):
+                body = snippet
+            else:
+                body = title_body or snippet or text
         else:
             body = snippet or title
         # Titles often don't include the author ("Looking for X... | LinkedIn"),

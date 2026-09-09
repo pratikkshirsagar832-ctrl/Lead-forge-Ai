@@ -43,7 +43,7 @@ def test_production_settings_are_tuned():
     assert settings.accept_sibling_buyers is True
     assert settings.require_model_qualified is False
     assert settings.min_overall_score == 55.0
-    assert settings.min_service_match == 45.0
+    assert settings.min_service_match == 60.0
     assert settings.min_intent_strength == "recommendation"
     assert settings.serper_pages_per_query == 4
 

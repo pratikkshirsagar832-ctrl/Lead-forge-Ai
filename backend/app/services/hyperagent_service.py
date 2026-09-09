@@ -120,7 +120,11 @@ def _ha_settings() -> HaSettings:
     # every country's genuine buyers are accepted.
     os.environ["ACCEPT_SIBLING_BUYERS"] = "1"
     os.environ["MIN_OVERALL_SCORE"] = "55"
-    os.environ["MIN_SERVICE_MATCH"] = "45"
+    # MIN_SERVICE_MATCH=60: the earlier 45 let "adjacent craft" posts through
+    # (a social-media-agency ask delivered for a "video editing" search scored
+    # match=70). Genuine buyer posts score 70-90, so 60 drops the weakest
+    # look-alikes with margin.
+    os.environ["MIN_SERVICE_MATCH"] = "60"
     os.environ["MIN_INTENT_STRENGTH"] = "recommendation"
     # Credit safety: cap iterations/deadline/empty rounds so one search can
     # never burn unbounded Serper calls on a niche with no leads. Parallel

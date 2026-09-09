@@ -29,8 +29,11 @@ _SPACES = re.compile(r"\s+")
 
 # Paired into EVERY query as -"..." exclusions (case-insensitive on the
 # provider side; generic sell-side language, no service words). Kept SHORT:
-# a long exclusion tail tanks Google recall; the classifier + prefilter own
-# the remaining seller/job-seeker filtering.
+# - a long exclusion tail makes Google drop `site:linkedin.com/posts` and serve
+#   job/instagram results instead (verified: 14 negatives -> 1/10 LinkedIn,
+#   <=10 negatives -> 10/10 LinkedIn), and
+# - a long exclusion tail tanks Google recall; the classifier + prefilter own
+#   the remaining seller/job-seeker filtering.
 NEGATIVE_QUERY_PHRASES: tuple[str, ...] = (
     "we offer",
     "our services",
@@ -40,14 +43,6 @@ NEGATIVE_QUERY_PHRASES: tuple[str, ...] = (
     "we help",
     "open to work",
     "available for hire",
-    "join our talent network",
-    "we are a leading",
-    # High-confidence job-seeker / employee-hiring phrasing genuine buyers never
-    # use (live rejection telemetry showed these dominate the noise).
-    "#hiring",
-    "i'm a freelance",
-    "i am a freelance",
-    "portfolio in comments",
 )
 
 # Derive natural role nouns from service phrases ("video editing" -> "video

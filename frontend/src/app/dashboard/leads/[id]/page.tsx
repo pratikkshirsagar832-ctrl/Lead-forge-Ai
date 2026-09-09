@@ -356,7 +356,23 @@ export default function LeadDetailPage() {
                 </div>
                 <div>
                   <p className="text-sm font-medium text-ice/60 mb-0.5">Website</p>
-                  {lead.website_url ? (
+          {isLinkedinSource ? (
+            <GlassCard className="p-6">
+              <div className="flex items-center gap-3">
+                <div className="p-2.5 rounded-full bg-sky-500/20 text-sky-400 shrink-0">
+                  <CheckCircle2 className="w-6 h-6" />
+                </div>
+                <div>
+                  <h3 className="font-bold text-offwhite">Genuine Buyer Post</h3>
+                  <p className="text-sm text-ice/60">
+                    {lead.website_health_score != null
+                      ? `AI quality score: ${Math.round(lead.website_health_score)}/100 · ${lead.post_type === 'agency_wanted' ? 'Agency wanted' : 'Freelancer needed'}`
+                      : 'Verified genuine buying intent — reach out with your proposal.'}
+                  </p>
+                </div>
+              </div>
+            </GlassCard>
+          ) : lead.website_url ? (
                     <a href={lead.website_url} target="_blank" rel="noreferrer" className="text-steel hover:text-ice hover:underline flex items-center gap-1 group">
                       {lead.website_url.replace(/^https?:\/\/(www\.)?/, '')}
                       <ExternalLink className="w-3 h-3 opacity-0 group-hover:opacity-100 transition-opacity" />
@@ -381,8 +397,10 @@ export default function LeadDetailPage() {
                     size="sm"
                     onClick={handleGeneratePitch}
                     isLoading={isGeneratingPitch}
-                    disabled={!lead.website_url}
-                    title={!lead.website_url ? 'Website required for Pitch generation' : ''}
+                    disabled={isLinkedinSource ? false : !lead.website_url}
+                    title={isLinkedinSource
+                      ? ''
+                      : (!lead.website_url ? 'Website required for Pitch generation' : '')}
                   >
                     Generate Pitch
                   </LoadingButton>
@@ -396,10 +414,10 @@ export default function LeadDetailPage() {
                   </div>
                 ) : (
                   <div className="h-full flex flex-col items-center justify-center text-ice/50 text-center py-8">
-                    {!lead.website_url ? (
+                    {!isLinkedinSource && !lead.website_url ? (
                       <p>Cannot generate a pitch without a website to analyze.</p>
                     ) : (
-                      <p>No pitch generated yet. Click the button above to create a hyper-personalized email.</p>
+                      <p>No pitch generated yet. Click the button above to create a hyper-personalized message.</p>
                     )}
                   </div>
                 )}

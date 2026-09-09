@@ -249,7 +249,7 @@ def test_engine_keeps_looping_until_exactly_n_is_reached():
     it collects exactly N qualified leads (discovery here drips out new posts
     a couple at a time, so many rounds are required)."""
     from models import IntentStrength
-    from testing.mock_providers import FakePost
+    from testing.mock_providers import FakePost, _now
 
     n_posts = 40
     drip: list[FakePost] = [
@@ -279,7 +279,7 @@ def test_engine_keeps_looping_until_exactly_n_is_reached():
             self._pos += 2
             posts = [
                 RawPost(post_url=p.url, text=p.text, author_name=p.author,
-                        author_profile_url=p.author_url, posted_at=None)
+                        author_profile_url=p.author_url, posted_at=_now(p.days_ago))
                 for p in chunk
             ]
             return SearchBatchResult(posts=posts, queries_used=list(queries))
@@ -300,7 +300,7 @@ def test_exact_count_skips_already_owned_posts_and_keeps_scanning():
     """Leads already saved globally (post_url unique) must NOT count toward N:
     the engine skips them and keeps looping until N NEW leads are delivered."""
     from models import IntentStrength
-    from testing.mock_providers import FakePost
+    from testing.mock_providers import FakePost, _now
 
     n_posts = 40
     drip: list[FakePost] = [
@@ -324,7 +324,8 @@ def test_exact_count_skips_already_owned_posts_and_keeps_scanning():
             chunk = drip[self._pos : self._pos + 2]
             self._pos += 2
             posts = [RawPost(post_url=p.url, text=p.text, author_name=p.author,
-                             author_profile_url=p.author_url, posted_at=None) for p in chunk]
+                             author_profile_url=p.author_url, posted_at=_now(p.days_ago))
+                     for p in chunk]
             return SearchBatchResult(posts=posts, queries_used=list(queries))
 
     store = MemoryStore()
@@ -524,3 +525,160 @@ def test_content_filter_rejecting_everything_yields_zero_and_no_llm_calls():
     assert summary.accepted == 0
     assert len(store.list_leads(search_id=sid)) == 0
     assert clf.calls == 0  # zero DeepSeek spend on a direction-mismatched pool
+
+
+# ---------------------------------------------------------------------------
+# STRICT freshness gate (fail-closed): latest posts only.
+# ---------------------------------------------------------------------------
+
+def _mixed_freshness_posts():
+    """Three genuine-buyer posts: fresh, stale (older than window), undated."""
+    from models import IntentStrength
+    from testing.mock_providers import FakePost
+
+    fresh = FakePost(
+        url="https://www.linkedin.com/posts/fresh-lead",
+        text="We are looking for a video editor for our campaign. Budget ready.",
+        author="Fresh Author", author_url="https://www.linkedin.com/in/fresh",
+        days_ago=1.0, lead_type=LeadType.NEED_FREELANCER,
+        intent=IntentStrength.EXPLICIT, service_match=90.0, commercial=85.0,
+        decision_maker=True, evidence="looking for a video editor", reason="fresh",
+    )
+    stale = FakePost(
+        url="https://www.linkedin.com/posts/stale-lead",
+        text="We are looking for a video editor for our campaign. Budget ready.",
+        author="Stale Author", author_url="https://www.linkedin.com/in/stale",
+        days_ago=20.0, lead_type=LeadType.NEED_FREELANCER,
+        intent=IntentStrength.EXPLICIT, service_match=90.0, commercial=85.0,
+        decision_maker=True, evidence="looking for a video editor", reason="stale",
+    )
+    undated = FakePost(
+        url="https://www.linkedin.com/posts/undated-lead",
+        text="We are looking for a video editor for our campaign. Budget ready.",
+        author="Undated Author", author_url="https://www.linkedin.com/in/undated",
+        days_ago=0.5, lead_type=LeadType.NEED_FREELANCER,
+        intent=IntentStrength.EXPLICIT, service_match=90.0, commercial=85.0,
+        decision_maker=True, evidence="looking for a video editor", reason="undated",
+    )
+    return fresh, stale, undated
+
+
+def _freshness_discovery(fresh, stale, undated, post_dates):
+    """Discovery that returns all three posts, with per-post date control."""
+    from testing.mock_providers import _now
+
+    class FreshnessDiscovery(MockDiscoveryClient):
+        def search_posts(self, queries, since, *, results_per_query=25):  # type: ignore[no-untyped-def]
+            posts = []
+            for p, posted_at in zip((fresh, stale, undated), post_dates):
+                ts = posted_at if posted_at != "undated" else None
+                if ts == "fresh":
+                    ts = _now(p.days_ago)
+                posts.append(RawPost(post_url=p.url, text=p.text, author_name=p.author,
+                                     author_profile_url=p.author_url, posted_at=ts))
+            return SearchBatchResult(posts=posts, queries_used=list(queries))
+
+    return FreshnessDiscovery()
+
+
+def test_strict_freshness_drops_stale_and_undated_posts():
+    """Fail-closed freshness: a post with NO verifiable date and a post older
+    than the window are never delivered, and never cost a classifier call."""
+    fresh, stale, undated = _mixed_freshness_posts()
+    store = MemoryStore()
+    clf = MockClassifier(corpus=[fresh, stale, undated])
+
+    class CountingClassifier(MockClassifier):
+        def classify_batch(self, candidates, **kwargs):  # type: ignore[no-untyped-def]
+            self.classified_urls = [c.post_url for c in candidates]
+            return MockClassifier.classify_batch(self, candidates, **kwargs)
+
+    counting = CountingClassifier(corpus=[fresh, stale, undated])
+    sid = _mk_search(store, needed=10, window="7d")
+    summary = run_search(
+        sid, store=store,
+        discovery=_freshness_discovery(fresh, stale, undated,
+                                       post_dates=["fresh", "fresh", "undated"]),
+        classifier=counting, settings=_settings(),
+    )
+    assert summary.status == "completed"
+    leads = store.list_leads(search_id=sid)
+    assert [l["post_url"] for l in leads] == [fresh.url]  # ONLY the fresh lead
+    cutoff = TimeWindow.DAYS_7.cutoff()
+    assert all(l["post_date"] >= cutoff.date() for l in leads)
+    # Stale + undated never reached the classifier (zero LLM spend on them).
+    assert set(counting.classified_urls) == {fresh.url}
+
+
+def test_strict_freshness_accepts_post_exactly_inside_window():
+    """Posts dated INSIDE the 7d window are delivered (newest first); the
+    20-day-old post is excluded by the freshness gate."""
+    fresh, stale, undated = _mixed_freshness_posts()
+    store = MemoryStore()
+    sid = _mk_search(store, needed=2, window="7d")
+    summary = run_search(
+        sid, store=store,
+        discovery=_freshness_discovery(fresh, stale, undated,
+                                       post_dates=["fresh", "fresh", "fresh"]),
+        classifier=MockClassifier(corpus=[fresh, stale, undated]),
+        settings=_settings(),
+    )
+    assert summary.status == "completed"
+    leads = store.list_leads(search_id=sid)
+    assert len(leads) == 2
+    # Newest first: undated post is 0.5d old, fresh post is 1.0d old.
+    assert [l["post_url"] for l in leads] == [undated.url, fresh.url]
+    assert stale.url not in {l["post_url"] for l in leads}
+    cutoff = TimeWindow.DAYS_7.cutoff()
+    assert all(l["post_date"] >= cutoff.date() for l in leads)
+
+def test_query_expander_called_once_and_queries_used():
+    """The LLM expander runs once per search; its phrasings lead iteration 1."""
+    from testing.mock_providers import split_query as _split
+
+    calls = {"n": 0}
+
+    def expander(service: str) -> list[str]:
+        calls["n"] += 1
+        assert service == "video editor"
+        return ["urgent custom niche phrasing needed"]
+
+    seen_first_iteration_queries: list[list[str]] = []
+
+    class RecordingDiscovery(MockDiscoveryClient):
+        def search_posts(self, queries, since, *, results_per_query=25):  # type: ignore[no-untyped-def]
+            seen_first_iteration_queries.append(list(queries))
+            return super().search_posts(queries, since, results_per_query=results_per_query)
+
+    store = MemoryStore()
+    sid = _mk_search(store, needed=100)  # shortage -> engine keeps iterating
+    summary = run_search(
+        sid, store=store, discovery=RecordingDiscovery(),
+        classifier=MockClassifier(), settings=_settings(),
+        query_expander=expander,
+    )
+    assert summary.status == "completed"
+    assert calls["n"] == 1  # exactly one expansion call per search
+    # Iteration 0 is the base set; iteration 1 leads with the expanded query.
+    assert len(seen_first_iteration_queries) >= 2
+    positives = [_split(q)[0] for q in seen_first_iteration_queries[1]]
+    assert "urgent custom niche phrasing needed" == positives[0]
+
+
+def test_query_expander_failure_is_silent_and_search_still_works():
+    """A crashing expander must never break the search — deterministic pool
+    only, same accepted outcome."""
+    def bad_expander(service: str) -> list[str]:
+        raise RuntimeError("LLM provider down")
+
+    store = MemoryStore()
+    expected = _qualified_within_corpus("7d")
+    sid = _mk_search(store, needed=expected, window="7d")
+    summary = run_search(
+        sid, store=store, discovery=MockDiscoveryClient(),
+        classifier=MockClassifier(), settings=_settings(),
+        query_expander=bad_expander,
+    )
+    assert summary.status == "completed"
+    assert summary.accepted == expected
+    assert len(store.list_leads(search_id=sid)) == expected

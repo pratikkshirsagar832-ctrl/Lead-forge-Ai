@@ -77,6 +77,7 @@ def run_search(
     progress: ProgressFn | None = None,
     should_stop: Callable[[], bool] | None = None,
     content_filter: Callable[[str], bool] | None = None,
+    query_expander: Callable[[str], list[str]] | None = None,
 ) -> EngineSummary:
     """Synchronous orchestrator. Runs inside a background task/thread.
 
@@ -128,6 +129,17 @@ def run_search(
     store.update_search(search_id, status="running")
     progress("running", 0, 0, 0, f"window: last posts since {cutoff.date().isoformat()}")
 
+    # LLM query expansion (optional, fail-closed): one extra classifier-style
+    # call generates niche-aware buyer phrasings that are merged at the HEAD
+    # of the diversification pool. Any failure keeps deterministic templates.
+    expanded_queries: list[str] = []
+    if query_expander is not None:
+        try:
+            expanded_queries = query_expander(service) or []
+        except Exception:  # noqa: BLE001 - expansion must never kill a search
+            log.debug("query_expander raised (ignored)", exc_info=True)
+            expanded_queries = []
+
     used_queries: set[str] = set()
     seen_urls: set[str] = set()
     raw_found = 0
@@ -137,6 +149,8 @@ def run_search(
     dup_existing = 0
     type_mismatch = 0
     dir_dropped = 0  # content-direction gate drops (cheap, zero LLM spend)
+    undated_dropped = 0  # STRICT freshness: no verifiable post date -> no lead
+    stale_dropped = 0  # STRICT freshness: dated older than the window -> no lead
     reject_reasons: dict[str, int] = {}
     errors: list[str] = []
     accepted: list[EngineResult] = []  # NEW leads only (not already in the DB)
@@ -220,7 +234,7 @@ def run_search(
                                     iterations, "cancelled by user")
             except Exception:  # never let the cancel probe kill a search
                 log.debug("Cancel probe failed for %s (ignored)", search_id)
-        queries = [q for q in next_queries(service, lead_type, iteration) if q not in used_queries]
+        queries = [q for q in next_queries(service, lead_type, iteration, extra_pool=expanded_queries) if q not in used_queries]
         # Country bias: on the first wave (and whenever a country is known and
         # not a huge multi-country region), scope every query with the country
         # name so Google returns posts authored in that country, not the
@@ -277,6 +291,16 @@ def run_search(
                 log.debug("find_existing_post_urls failed (assuming all new)", exc_info=True)
         candidates = []
         for post in round_unique:
+            # STRICT FRESHNESS (fail-closed, zero-cost): the product promise is
+            # "latest posts only" - a post with NO verifiable date or dated
+            # older than the window can never be delivered. Dropped BEFORE the
+            # ownership lookup / prefilter / any LLM spend.
+            if post.posted_at is None:
+                undated_dropped += 1
+                continue
+            if post.posted_at < cutoff:
+                stale_dropped += 1
+                continue
             if post.post_url in owned:
                 dup_existing += 1
                 log.info("Skipping already-owned lead (from an earlier search): %s", post.post_url)
@@ -376,7 +400,7 @@ def run_search(
         progress("running", raw_found, len(accepted), scanned,
                  f"accepted {len(accepted)}/{leads_needed} {lead_type} leads (scanned {scanned}, pref-dropped {pref_dropped}, "
                  f"content-dropped {dir_dropped}, classify-dropped {classify_failed}, type-mismatch {type_mismatch}, "
-                 f"already-owned {dup_existing})")
+                 f"already-owned {dup_existing}, undated {undated_dropped}, stale {stale_dropped})")
         if len(accepted) >= leads_needed:
             stop_reason = "target_reached"
             break
@@ -482,9 +506,11 @@ def run_search(
     _s, _d = _call_counts()
     log.info("Search %s done: status=%s found=%d accepted=%d scanned=%d (iterations=%d) "
              "pref_dropped=%d content_dropped=%d classify_failed=%d type_mismatch=%d dup_owned=%d "
+             "undated_dropped=%d stale_dropped=%d "
              "serper_requests=%d deepseek_calls=%d stop_reason=%s",
              search_id, status, raw_found, len(top), scanned, iterations,
              pref_dropped, dir_dropped, classify_failed, type_mismatch, dup_existing,
+             undated_dropped, stale_dropped,
              _s, _d, stop_reason)
     progress(status, raw_found, len(top), scanned, final_detail or "search finished")
     return _summary(search_id, status, raw_found, len(top), scanned, iterations, final_detail)

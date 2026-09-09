@@ -89,6 +89,76 @@ async def generate_pitch(
         }
 
 
+async def generate_linkedin_pitch(lead: dict[str, Any]) -> dict[str, Any]:
+    """Outreach pitch for a LinkedIn (ha_leads) lead: the lead's own post is
+    the buying signal, so the pitch references it directly."""
+    client = _get_openai_client()
+    if not client:
+        return {
+            "pitch": "AI pitch generation is not configured. Please set OPENAI_API_KEY.",
+            "confidence_score": 0.0,
+        }
+
+    try:
+        score = float(lead.get("overall_quality_score") or 0)
+    except (TypeError, ValueError):
+        score = 0.0
+    if 0 < score <= 1:
+        score *= 100
+
+    parts = [
+        f"Author name: {lead.get('author_name') or 'Unknown'}",
+    ]
+    if lead.get("_search_niche"):
+        parts.append(f"Service the user sells: {lead['_search_niche']}")
+    if lead.get("lead_type"):
+        parts.append(f"Buyer situation: {lead['lead_type']}")
+    if lead.get("post_text"):
+        parts.append(f"\nTheir recent LinkedIn post:\n\"{(lead['post_text'] or '')[:900]}\"")
+
+    parts.append(
+        "\nWrite a concise, professional LinkedIn outreach message that:"
+        "\n- Opens naturally by referencing their recent post/need"
+        "\n- Offers a clear value proposition for exactly what they asked for"
+        "\n- Has a friendly but professional call to action"
+        "\n- Is under 150 words, suitable for a LinkedIn DM"
+    )
+
+    try:
+        import asyncio
+        resp = await asyncio.to_thread(
+            lambda: client.chat.completions.create(
+                model=PITCH_MODEL,
+                messages=[
+                    {
+                        "role": "system",
+                        "content": (
+                            "You are a professional sales copywriter helping freelancers and "
+                            "agencies reach genuine buyers on LinkedIn. Write concise, "
+                            "personalized LinkedIn DMs that reference the buyer's own post. "
+                            "Do NOT sound robotic or generic. Keep it under 150 words."
+                            "\n\nReturn a JSON object with key 'pitch' containing the message text."
+                        ),
+                    },
+                    {"role": "user", "content": "\n".join(parts)},
+                ],
+                response_format={"type": "json_object"},
+                temperature=0.7,
+                max_tokens=400,
+            ),
+        )
+        if not resp.choices or not resp.choices[0].message.content:
+            return {"pitch": "Unable to generate pitch at this time.", "confidence_score": 0}
+        result = json_loads(resp.choices[0].message.content)
+        pitch_text = result.get("pitch", "")
+        # Confidence: anchor on the engine's qualification score (0-100 → 0-1).
+        confidence = round(min(1.0, max(0.3, score / 100.0)), 2) if score else 0.5
+        return {"pitch": pitch_text, "confidence_score": confidence}
+    except Exception as e:
+        logger.error(f"LinkedIn pitch generation failed: {e}")
+        return {"pitch": "Pitch generation failed. Please try again.", "confidence_score": 0.0}
+
+
 async def generate_website_message(
     lead: dict[str, Any],
     analysis: Optional[dict[str, Any]] = None,

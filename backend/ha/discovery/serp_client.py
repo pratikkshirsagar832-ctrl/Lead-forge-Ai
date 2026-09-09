@@ -20,6 +20,8 @@ from __future__ import annotations
 
 import logging
 import re
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 from typing import Any
 
@@ -97,7 +99,7 @@ class SerperDiscoveryClient(DiscoveryClient):
         api_key: str,
         *,
         base_url: str = "https://google.serper.dev",
-        site_restriction: str = "linkedin.com/posts",
+        site_restriction: str = "site:linkedin.com/posts",
         results_per_query: int = 10,
         pages_per_query: int = 3,
         gl: str = "",
@@ -114,7 +116,12 @@ class SerperDiscoveryClient(DiscoveryClient):
             raise DiscoveryConfigError("SERPER_API_KEY is required")
         self.api_key = api_key
         self.base_url = base_url.rstrip("/")
-        self.site_restriction = (site_restriction or "").strip()
+        # Accept both "linkedin.com/posts" and a "site:"-prefixed value; the
+        # restriction is stored bare (the query builder adds the operator).
+        restriction = (site_restriction or "").strip()
+        if restriction.lower().startswith("site:"):
+            restriction = restriction[len("site:"):].strip()
+        self.site_restriction = restriction
         self.default_results_per_query = results_per_query
         self.default_pages_per_query = max(1, min(int(pages_per_query or 1), 5))
         self.gl = (gl or "").strip().lower()
@@ -122,6 +129,7 @@ class SerperDiscoveryClient(DiscoveryClient):
         self.timeout_seconds = timeout_seconds
         self._headers = {"X-API-KEY": api_key, "Content-Type": "application/json"}
         self.calls = 0
+        self._calls_lock = threading.Lock()
 
     @property
     def config_errors(self) -> list[str]:
@@ -221,6 +229,15 @@ class SerperDiscoveryClient(DiscoveryClient):
         )
 
     # -------------------------------------------------------------- discovery
+    def _fetch_page(self, query: str, since: datetime, page: int, per_q: int) -> list[RawPost]:
+        """Fetch one SERP page for one query (thread-safe; errors raise)."""
+        with self._calls_lock:
+            self.calls += 1
+        full = self._full_query(query, since)
+        organic = self._search(full, per_q, page=page)
+        log.info("Serper %r page %d -> %d organic results", full[:160], page, len(organic))
+        return [p for p in (self._map_organic(i, query) for i in organic) if p is not None]
+
     def search_posts(
         self,
         queries: list[str],
@@ -243,27 +260,53 @@ class SerperDiscoveryClient(DiscoveryClient):
             pages = getattr(self, "default_pages_per_query", 1)
         pages = max(1, min(int(pages), 5))
 
-        posts: list[RawPost] = []
+        # Two-phase parallel fetch: page 1 of every query fires concurrently
+        # (the latency of a round drops from sum(queries) to ~max(queries)),
+        # then pages 2..N fire concurrently only for queries whose page 1 was
+        # FULL (a short page signals the last page - paging it wastes credits).
         errors: list[str] = []
+        per_query_posts: dict[str, list[RawPost]] = {}
+        max_workers = max(1, min(8, len(queries)))
+
+        def _run(query: str, page: int) -> tuple[str, list[RawPost] | None, str | None]:
+            try:
+                return query, self._fetch_page(query, since, page, per_q), None
+            except DiscoveryConfigError:
+                raise
+            except Exception as exc:  # noqa: BLE001 - one task must not kill the round
+                return query, None, f"query {query!r} page {page} failed: {exc}"
+
+        # Phase 1: page 1 of all queries concurrently.
+        with ThreadPoolExecutor(max_workers=max_workers) as pool:
+            phase1 = list(pool.map(lambda q: _run(q, 1), queries))
+        full_queries: list[str] = []
+        for query, posts, err in phase1:
+            if err is not None:
+                errors.append(err)
+                log.warning("%s", err)
+                per_query_posts[query] = []
+                continue
+            per_query_posts[query] = posts
+            if len(posts) >= per_q:
+                full_queries.append(query)
+
+        # Phase 2: deeper pages, concurrently, only for full page-1 queries.
+        deeper: list[tuple[str, int]] = [
+            (query, page) for query in full_queries for page in range(2, pages + 1)
+        ]
+        if deeper:
+            with ThreadPoolExecutor(max_workers=max_workers) as pool:
+                phase2 = list(pool.map(lambda t: _run(t[0], t[1]), deeper))
+            for query, posts, err in phase2:
+                if err is not None:
+                    errors.append(err)
+                    log.warning("%s", err)
+                    continue
+                per_query_posts[query].extend(posts)
+
+        posts: list[RawPost] = []
         for query in queries:
-            query_batch: list[RawPost] = []
-            for page in range(1, pages + 1):
-                self.calls += 1
-                full = self._full_query(query, since)
-                try:
-                    organic = self._search(full, per_q, page=page)
-                except DiscoveryConfigError:
-                    raise
-                except Exception as exc:  # noqa: BLE001 - one query must not kill the round
-                    errors.append(f"query {query!r} page {page} failed: {exc}")
-                    log.warning("Serper query %r page %d failed: %s", query, page, exc)
-                    break
-                page_posts = [p for p in (self._map_organic(i, query) for i in organic) if p is not None]
-                query_batch.extend(page_posts)
-                log.info("Serper %r page %d -> %d organic results", full[:160], page, len(organic))
-                if len(organic) < per_q:
-                    break  # last page reached - stop paging this query
-            posts.extend(query_batch)
+            posts.extend(per_query_posts.get(query, []))
 
         # Dedupe by canonical post URL (same post found under several phrasings).
         seen: set[str] = set()
@@ -274,7 +317,7 @@ class SerperDiscoveryClient(DiscoveryClient):
                 continue
             seen.add(key)
             unique.append(p)
-        # Zero hits is EXPECTED for tight queries/windows (Â§0): report it as
+        # Zero hits is EXPECTED for tight queries/windows (§0): report it as
         # empty data, never as a broken discovery task.
         return SearchBatchResult(
             posts=unique,

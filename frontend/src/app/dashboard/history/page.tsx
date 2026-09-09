@@ -118,7 +118,9 @@ export default function HistoryPage() {
                       ) : null}
                     </div>
                     <div className="text-center sm:text-right flex-1 sm:flex-none">
-                      <p className="text-xs font-medium text-ice/60 uppercase tracking-wider mb-1">Processed</p>
+                      <p className="text-xs font-medium text-ice/60 uppercase tracking-wider mb-1">
+                        {item.source === 'linkedin' ? 'Scanned' : 'Processed'}
+                      </p>
                       <p className="text-xl font-bold text-offwhite">
                         {item.source === 'linkedin'
                           ? (item.warm_leads || 0)

@@ -62,9 +62,10 @@ class Settings(BaseSettings):
     serper_base_url: str = "https://google.serper.dev"
     serper_site_restriction: str = "linkedin.com/posts"
     serper_results_per_query: int = 10
-    # 3 pages (~30 results/query) raises recall so searches can hit the exact
-    # requested lead count; the per-search Serper ceiling bounds the spend.
-    serper_pages_per_query: int = 3
+    # 4 pages (~40 results/query) raises recall so searches hit the exact
+    # requested lead count; discovery pages run in parallel and the per-search
+    # Serper ceiling bounds the spend.
+    serper_pages_per_query: int = 4
     serper_gl: str = ""
     serper_hl: str = "en"
     serper_timeout_seconds: float = 30.0

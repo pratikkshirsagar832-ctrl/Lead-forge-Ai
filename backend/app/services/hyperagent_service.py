@@ -94,14 +94,13 @@ def ha_lead_type_from(lead_types) -> str:
 
 
 def ha_time_window_from() -> str:
-    """Freshness window — latest-first with enough pool volume.
+    """Freshness window — STRICT: latest posts only.
 
-    28d window: repeated searches on the same niche quickly drain the 14d pool
-    (Google returns the same ~10-20 posts for a phrase family once exhausted,
-    which produced 0-lead runs). A 28d window keeps older genuine posts
-    findable while recency-first ordering still shows the newest first.
+    7d window: the product promise is "the latest genuine buyers". An engine-
+    side fail-closed date gate (undated or older-than-window posts are never
+    delivered) keeps this honest even when Google's `after:` filter is loose.
     """
-    return "28d"
+    return "7d"
 
 
 def _ha_settings() -> HaSettings:
@@ -124,14 +123,16 @@ def _ha_settings() -> HaSettings:
     os.environ["MIN_SERVICE_MATCH"] = "45"
     os.environ["MIN_INTENT_STRENGTH"] = "recommendation"
     # Credit safety: cap iterations/deadline/empty rounds so one search can
-    # never burn unbounded Serper calls on a niche with no leads. Pagination
-    # now returns 3-4x more candidates per query, so give the engine a few
-    # more iterations and slack to scan them before declaring it exhausted.
+    # never burn unbounded Serper calls on a niche with no leads. Parallel
+    # discovery + 4-page paging return candidates much faster per round, so
+    # iterations stay generous while the deadline bounds total wall time.
     os.environ["ENGINE_MAX_ITERATIONS"] = "20"
     os.environ["ENGINE_DEADLINE_SECONDS"] = "540"
-    os.environ["ENGINE_EARLY_STOP_EMPTY_ROUNDS"] = "6"
+    os.environ["ENGINE_EARLY_STOP_EMPTY_ROUNDS"] = "5"
     # Independent per-search spend ceilings (safety net beyond iterations).
-    os.environ["MAX_SERPER_REQUESTS_PER_SEARCH"] = "60"
+    # 4 pages/query burns more requests per round, so the Serper ceiling rises
+    # to keep the same number of full discovery rounds.
+    os.environ["MAX_SERPER_REQUESTS_PER_SEARCH"] = "80"
     os.environ["MAX_DEEPSEEK_CALLS_PER_SEARCH"] = "150"
     # Model gate OFF: referral/recommendation posts (very common for agency
     # seekers) often hedge is_qualified=false despite real buying intent — the
@@ -336,6 +337,15 @@ def _run_search_worker_body(search_id: str, user_id: str, settings: HaSettings, 
     try:
         discovery = build_discovery(settings, country_code=country_code)
         classifier = build_classifier(settings)
+        # LLM query expansion (fail-closed): one extra DeepSeek call generates
+        # niche-aware buyer phrasings that lead the diversification pool. Any
+        # failure silently keeps the deterministic template pool.
+        query_expander = None
+        try:
+            from llm_queries import make_query_expander
+            query_expander = make_query_expander(classifier, lead_type=force_lead_type or "need_freelancer")
+        except Exception:  # noqa: BLE001 - expansion is optional, never blocking
+            log.debug("Query expander unavailable (deterministic pool only)", exc_info=True)
         # Store wrapper: the engine may classify a genuine post under either
         # buyer bucket (need_freelancer / our_agency). The product promise is
         # that a freelancer search returns freelancer-needed leads and an
@@ -360,6 +370,7 @@ def _run_search_worker_body(search_id: str, user_id: str, settings: HaSettings, 
             progress=cb,
             should_stop=should_stop,
             content_filter=content_filter,
+            query_expander=query_expander,
         )
         _progress_push(search_id, summary.status, summary.found, summary.accepted, summary.scanned,
                        summary.detail or summary.status)

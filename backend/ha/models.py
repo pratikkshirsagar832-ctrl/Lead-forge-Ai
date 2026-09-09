@@ -54,15 +54,16 @@ class TimeWindow(str, Enum):
         """Discovery-time cutoff.
 
         Computed fresh on every call from *now* - never stored/hardcoded.
-        The cutoff is rounded down to the start of the UTC day `window` days
-        ago, i.e. the widest bucket that guarantees at least one full day of
-        posts and never less than the requested freshness.
+        The cutoff is EXACTLY `window` days ago (same time of day): the
+        product rule is strict freshness - a post older than 7x24h must
+        never be delivered, so no rounding can pull the boundary older.
+        (Google's `after:` operator only has day granularity; the engine's
+        per-post gate enforces the exact boundary.)
         """
         now = now or datetime.now(UTC)
         if now.tzinfo is None:
             now = now.replace(tzinfo=UTC)
-        start = (now - timedelta(days=self.days())).replace(hour=0, minute=0, second=0, microsecond=0, tzinfo=UTC)
-        return start
+        return now - timedelta(days=self.days())
 
     def after_date(self, now: datetime | None = None) -> date:
         """Concrete `after:YYYY-MM-DD` used by discovery providers."""

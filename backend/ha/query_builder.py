@@ -380,19 +380,53 @@ def _pool(svc: str, naked: str, phrase: str | None, lead_type: LeadType) -> list
     return out
 
 
-def next_queries(service: str, lead_type: LeadType, iteration: int) -> list[str]:
+def next_queries(service: str, lead_type: LeadType, iteration: int,
+                 extra_pool: tuple[str, ...] | list[str] = ()) -> list[str]:
     """Queries to run in engine `iteration` (0 = base set only).
 
-    Per-round query count is CAPPED (never grows past ~6) so a single search
+    Later iterations consume NON-OVERLAPPING slices of a merged pool so every
+    Serper call in a round buys a genuinely fresh phrasing (the old
+    overlapping windows re-sent phrasings the engine had already run, and the
+    re-added `base[:1]` slot was always filtered out as a repeat).
+
+    `extra_pool` (optional, e.g. LLM-expanded phrasings) is merged at the HEAD
+    of the pool — deduped case-insensitively against the base set — so the
+    first diversification rounds spend calls on the niche-aware variants
+    before falling back to deterministic templates. Every emitted query pairs
+    its positive phrasing with the shared negative seller terms.
+
+    Per-round query count is CAPPED (never grows past ~8) so a single search
     cannot burn unbounded Serper credits on a niche that yields no leads.
     """
     plan = build_plan(service, lead_type)
     if iteration <= 0:
         return list(plan.base)
-    # Later iterations add a fresh slice of the pool; window stays bounded.
+    # Dedupe on the POSITIVE phrasing (base/pool entries carry the shared
+    # negative suffix, extra_pool entries do not — comparing raw strings
+    # would never match and duplicates would slip through to Serper).
+    seen: set[str] = {split_query(q)[0].lower() for q in plan.base}
+    merged: list[str] = []
+    for q in extra_pool:
+        positive, _negatives = split_query(q)
+        positive = positive.strip()
+        if not positive:
+            continue
+        key = positive.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        merged.append(_with_negatives(positive))
+    for q in plan.pool:
+        key = split_query(q)[0].lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        merged.append(q)
     window = min(3 + iteration, 8)
-    start = (iteration - 1) * 2
-    extra = list(plan.pool[start : start + window])
+    # Cumulative start: iteration i consumes the NEXT `window` entries after
+    # everything previous iterations already ran (windows grow 4,5,6,7,8,8...).
+    start = sum(min(3 + i, 8) for i in range(1, iteration))
+    extra = merged[start : start + window]
     if not extra:
         return []
-    return list(plan.base[:1]) + extra
+    return extra

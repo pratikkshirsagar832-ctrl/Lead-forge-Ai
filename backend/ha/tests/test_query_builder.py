@@ -102,3 +102,47 @@ def test_diversification_grows_pool_and_repeats_nothing():
     assert added  # iteration 1 must broaden
     assert len(it1) >= len(it0)
     assert len(plan.pool) >= 8
+
+
+def test_pool_slices_never_repeat_across_iterations():
+    """Every Serper call must buy a fresh phrasing: the merged pool slices are
+    non-overlapping, so no query ever appears in two iterations."""
+    seen: set[str] = []
+    for it in range(0, 10):
+        for q in next_queries("video editing", LeadType.NEED_FREELANCER, it):
+            assert q not in seen, f"query repeated in iteration {it}: {q}"
+            seen.append(q)
+
+
+def test_later_iterations_never_readd_base_queries():
+    plan = build_plan("video editing", LeadType.NEED_FREELANCER)
+    base = set(plan.base)
+    for it in range(1, 6):
+        qs = set(next_queries("video editing", LeadType.NEED_FREELANCER, it))
+        assert qs and qs.isdisjoint(base)
+
+
+def test_extra_pool_merges_at_head_with_negatives_and_dedupe():
+    """LLM-expanded phrasings lead the first diversification round, carry the
+    shared negative suffix, and dedupe against base positives."""
+    first_round = next_queries(
+        "video editing", LeadType.NEED_FREELANCER, 1,
+        extra_pool=("custom buyer phrase", "looking for a video editor"),
+    )
+    assert first_round, "iteration 1 must return queries"
+    # The unique expanded phrasing is merged at the HEAD with negatives.
+    assert first_round[0].startswith('custom buyer phrase -"')
+    _, negatives = split_query(first_round[0])
+    assert set(negatives) == set(NEGATIVE_QUERY_PHRASES)
+    # The duplicate-of-base phrasing ("looking for a video editor") is dropped;
+    # longer pool phrasings sharing that prefix are legitimate and remain.
+    positives = [split_query(q)[0] for q in first_round]
+    assert "looking for a video editor" not in positives
+
+
+def test_extra_pool_too_short_still_fills_from_deterministic_pool():
+    first_round = next_queries(
+        "video editing", LeadType.NEED_FREELANCER, 1, extra_pool=("custom buyer phrase",),
+    )
+    assert first_round[0].startswith('custom buyer phrase -"')
+    assert len(first_round) >= 4  # remaining slots come from the template pool

@@ -21,14 +21,14 @@ def test_time_window_days(window, days):
     assert TimeWindow(window).days() == days
 
 
-def test_cutoff_is_computed_fresh_and_rounded_down():
+def test_cutoff_is_computed_fresh_and_exact():
     now = datetime(2025, 6, 15, 14, 30, 0, tzinfo=UTC)
-    # 7 days before 15 Jun 14:30 is 8 Jun 14:30 -> rounded down to 8 Jun 00:00 UTC
-    assert TimeWindow.DAYS_7.cutoff(now) == datetime(2025, 6, 8, 0, 0, 0, tzinfo=UTC)
-    # Guarantees at least one full day of coverage and >= the window itself.
-    assert TimeWindow.DAYS_7.cutoff(now) <= now - timedelta(days=7)
-    # 24h window also lands on a UTC midnight boundary.
-    assert TimeWindow.HOURS_24.cutoff(now) == datetime(2025, 6, 14, 0, 0, 0, tzinfo=UTC)
+    # STRICT freshness: the cutoff is EXACTLY 7x24h ago (same time of day) -
+    # no rounding may pull the boundary older, or 7d23h-old posts would ship.
+    assert TimeWindow.DAYS_7.cutoff(now) == datetime(2025, 6, 8, 14, 30, 0, tzinfo=UTC)
+    assert TimeWindow.DAYS_7.cutoff(now) == now - timedelta(days=7)
+    # 24h window is exactly 24h ago.
+    assert TimeWindow.HOURS_24.cutoff(now) == datetime(2025, 6, 14, 14, 30, 0, tzinfo=UTC)
 
 
 def test_after_iso_is_never_hardcoded():

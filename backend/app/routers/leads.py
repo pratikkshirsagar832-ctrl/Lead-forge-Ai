@@ -120,7 +120,9 @@ async def list_leads(
                         if lt:
                             q = q.eq("lead_type", lt)
                     if user_status:
-                        q = q.eq("status", user_status)
+                        # user_status exists after migration v10; before it,
+                        # fall back to the engine lifecycle column.
+                        q = q.or_(f"user_status.eq.{user_status},status.eq.{user_status}")
                     li_items.extend(q.order("post_date", desc=True).limit(5000).execute().data or [])
             # Map to the LeadListItem shape the frontend expects.
             for r in li_items:
@@ -210,6 +212,31 @@ def _chunks(seq: list, size: int):
         yield seq[i:i + size]
 
 
+def _owned_ha_lead(supabase, lead_id: str, user_id: str) -> bool:
+    """True when `lead_id` is a LinkedIn ha_leads row owned by this user
+    (ownership via the parent searches row — ha_leads has no user_id)."""
+    try:
+        ha = (
+            supabase.table("ha_leads")
+            .select("id, search_id")
+            .eq("id", lead_id)
+            .limit(1)
+            .execute()
+        )
+        if not ha.data:
+            return False
+        srow = (
+            supabase.table("searches")
+            .select("user_id")
+            .eq("id", ha.data[0].get("search_id"))
+            .limit(1)
+            .execute()
+        )
+        return bool(srow.data and srow.data[0].get("user_id") == user_id)
+    except Exception:
+        return False
+
+
 def _map_ha_lead(row: dict) -> dict:
     """Map a `ha_leads` row to the LeadListItem shape the frontend renders."""
     lead_type = row.get("lead_type") or ""
@@ -232,7 +259,9 @@ def _map_ha_lead(row: dict) -> dict:
         "category": None,
         "full_address": None,
         "phone": None,
-        "email_found": row.get("notes") or "",
+        # No email enrichment in the current engine — reserved for a future
+        # column; `notes` is the USER's notes field, never an email.
+        "email_found": "",
         "website_url": None,
         "rating": None,
         "total_reviews": 0,
@@ -248,12 +277,15 @@ def _map_ha_lead(row: dict) -> dict:
         "connections_count": None,
         "posted_at": row.get("post_date") or None,
         "post_type": post_type or None,
-        "ai_confidence_score": None,
-        "ai_pitch": None,
-        "user_status": row.get("status") or "new",
-        "user_notes": row.get("notes") or "",
-        "is_favorite": False,
-        "has_pitch": False,
+        # 0-1 confidence saved by POST /api/ai/pitch (None until generated).
+        "ai_confidence_score": row.get("ai_confidence_score"),
+        "ai_pitch": row.get("ai_pitch") or None,
+        # Engine `status` is the lifecycle default; user_status mirrors it so
+        # PATCH /status + list filters read/write the same column.
+        "user_status": row.get("user_status") or row.get("status") or "new",
+        "user_notes": row.get("user_notes") or "",
+        "is_favorite": bool(row.get("is_favorite") or False),
+        "has_pitch": bool(row.get("ai_pitch")),
         "created_at": row.get("created_at") or None,
     }
 
@@ -511,7 +543,8 @@ async def update_lead_status(
     update: LeadStatusUpdate,
     current_user: dict = Depends(get_current_user),
 ):
-    """Update the user-defined status of a lead."""
+    """Update the user-defined status of a lead (Maps `leads` AND LinkedIn
+    `ha_leads` — LinkedIn ownership resolves via the parent search row)."""
     supabase = get_supabase_admin()
 
     try:
@@ -522,9 +555,22 @@ async def update_lead_status(
             .eq("user_id", current_user["id"])
             .execute()
         )
-        if not response.data:
-            raise HTTPException(status_code=404, detail="Lead not found")
-        return response.data[0]
+        if response.data:
+            return response.data[0]
+        # Not a Maps lead — LinkedIn `ha_leads` fallback (status column is the
+        # same one the list filter reads, so filters stay consistent).
+        if _owned_ha_lead(supabase, lead_id, current_user["id"]):
+            resp = (
+                supabase.table("ha_leads")
+                .update({"status": update.user_status})
+                .eq("id", lead_id)
+                .execute()
+            )
+            if resp.data:
+                row = dict(resp.data[0])
+                row["user_status"] = row.get("status")
+                return row
+        raise HTTPException(status_code=404, detail="Lead not found")
     except HTTPException:
         raise
     except Exception as e:
@@ -537,7 +583,7 @@ async def update_lead_notes(
     update: LeadNotesUpdate,
     current_user: dict = Depends(get_current_user),
 ):
-    """Update notes on a lead."""
+    """Update notes on a lead (Maps `leads` AND LinkedIn `ha_leads`)."""
     supabase = get_supabase_admin()
 
     try:
@@ -548,9 +594,20 @@ async def update_lead_notes(
             .eq("user_id", current_user["id"])
             .execute()
         )
-        if not response.data:
-            raise HTTPException(status_code=404, detail="Lead not found")
-        return response.data[0]
+        if response.data:
+            return response.data[0]
+        if _owned_ha_lead(supabase, lead_id, current_user["id"]):
+            resp = (
+                supabase.table("ha_leads")
+                .update({"user_notes": update.user_notes})
+                .eq("id", lead_id)
+                .execute()
+            )
+            if resp.data:
+                row = dict(resp.data[0])
+                row["user_notes"] = update.user_notes
+                return row
+        raise HTTPException(status_code=404, detail="Lead not found")
     except HTTPException:
         raise
     except Exception as e:
@@ -563,7 +620,8 @@ async def toggle_lead_favorite(
     update: LeadFavoriteUpdate,
     current_user: dict = Depends(get_current_user),
 ):
-    """Toggle the favorite status of a lead."""
+    """Toggle the favorite status of a lead (Maps `leads` AND LinkedIn
+    `ha_leads`)."""
     supabase = get_supabase_admin()
 
     try:
@@ -574,9 +632,30 @@ async def toggle_lead_favorite(
             .eq("user_id", current_user["id"])
             .execute()
         )
-        if not response.data:
-            raise HTTPException(status_code=404, detail="Lead not found")
-        return response.data[0]
+        if response.data:
+            return response.data[0]
+        if _owned_ha_lead(supabase, lead_id, current_user["id"]):
+            try:
+                resp = (
+                    supabase.table("ha_leads")
+                    .update({"is_favorite": update.is_favorite})
+                    .eq("id", lead_id)
+                    .execute()
+                )
+            except Exception as col_err:
+                # ha_leads.is_favorite exists only after migration v10.
+                if "is_favorite" in str(col_err) and "column" in str(col_err):
+                    raise HTTPException(
+                        status_code=503,
+                        detail="Favorites for LinkedIn leads need a database update "
+                               "(migration_ha_user_columns_v10.sql has not been applied).",
+                    )
+                raise
+            if resp.data:
+                row = dict(resp.data[0])
+                row["is_favorite"] = update.is_favorite
+                return row
+        raise HTTPException(status_code=404, detail="Lead not found")
     except HTTPException:
         raise
     except Exception as e:

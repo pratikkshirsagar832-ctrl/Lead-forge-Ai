@@ -46,8 +46,8 @@ function LiveResultCard({ lead, index }: { lead: any; index: number }) {
   const catKey = lead.lead_category || 'warm';
   const catCfg = LEAD_CATEGORIES[catKey as keyof typeof LEAD_CATEGORIES] || { label: catKey, color: '#94a3b8', bg: '#f1f5f9' };
 
-  // LinkedIn leads live in the ha_leads table and don't have a detail page —
-  // clicking the card opens the real LinkedIn post instead.
+  // LinkedIn cards open the live post directly from the search results (the
+  // internal detail page also supports LinkedIn leads for pipeline management).
   const isLinkedIn = lead.source === 'linkedin';
   const cardHref = isLinkedIn ? (lead.post_url || '#') : `/dashboard/leads/${lead.id}`;
   const cardTarget = isLinkedIn ? '_blank' : undefined;
@@ -492,7 +492,7 @@ export default function SearchPage() {
                   </>
                   )}
                 </div>
-                <SearchInfoSection isAtLimit={isAtLimit} remaining={remaining} searchesPerDay={searchesPerDay} isStarting={isStarting} />
+                <SearchInfoSection isAtLimit={isAtLimit} remaining={remaining} searchesPerDay={searchesPerDay} isStarting={isStarting} source={source} />
               </form>
             </div>
           </motion.div>
@@ -653,7 +653,8 @@ function TargetIcon({ className }: { className?: string }) {
   );
 }
 
-function SearchInfoSection({ isAtLimit, remaining, searchesPerDay, isStarting }: { isAtLimit: boolean; remaining: number; searchesPerDay: number; isStarting: boolean }) {
+function SearchInfoSection({ isAtLimit, remaining, searchesPerDay, isStarting, source }: { isAtLimit: boolean; remaining: number; searchesPerDay: number; isStarting: boolean; source: 'google_maps' | 'linkedin' }) {
+  const isLinkedIn = source === 'linkedin';
   return (
     <>
       {isAtLimit ? (
@@ -669,7 +670,9 @@ function SearchInfoSection({ isAtLimit, remaining, searchesPerDay, isStarting }:
         <div className="bg-steel/10 p-4 rounded-xl border border-steel/20 flex items-start gap-3">
           <Sparkles className="w-5 h-5 text-steel shrink-0 mt-0.5" />
           <p className="text-sm text-ice/70 leading-relaxed">
-            Hyperclients will search for targeted results, extract data, and run AI analysis. The process usually takes 2-10 minutes.
+            {isLinkedIn
+              ? 'Hyperclients will scan the latest LinkedIn posts, verify every buyer with AI, and deliver your exact lead count. Usually takes 1-5 minutes.'
+              : 'Hyperclients will search for targeted results, extract data, and run AI analysis. The process usually takes 2-10 minutes.'}
           </p>
         </div>
       )}

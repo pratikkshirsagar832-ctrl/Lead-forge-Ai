@@ -43,7 +43,7 @@ function LeadsContent() {
   useEffect(() => {
     const timer = setTimeout(() => fetchLeads(), 300);
     return () => clearTimeout(timer);
-  }, [fetchLeads, filters.status, filters.category, filters.isFavorite, filters.page, filters.search, filters.searchId]);
+  }, [fetchLeads, filters.status, filters.category, filters.isFavorite, filters.page, filters.search, filters.searchId, filters.source, filters.postType]);
 
   const totalPages = filters.limit > 0 ? Math.ceil(totalCount / filters.limit) : 1;
 

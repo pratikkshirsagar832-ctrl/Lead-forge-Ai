@@ -91,13 +91,16 @@ async def generate_lead_pitch(
     current_user: dict = Depends(get_current_user),
 ):
     """
-    Generate an AI outreach pitch for a specific lead.
-    Uses business details and website analysis (if available) as context.
+    Generate an AI outreach pitch for a specific lead (Maps AND LinkedIn).
+    Maps leads: business + website-analysis context.
+    LinkedIn leads: author + post context (the post IS the buying signal).
     """
     supabase = get_supabase_admin()
     user_id = current_user["id"]
 
-    # Fetch lead
+    # Fetch lead — Maps `leads` first, LinkedIn `ha_leads` fallback.
+    lead: dict | None = None
+    is_linkedin = False
     try:
         lead_resp = (
             supabase.table("leads")
@@ -107,33 +110,62 @@ async def generate_lead_pitch(
             .limit(1)
             .execute()
         )
-        if not lead_resp.data or len(lead_resp.data) == 0:
-            raise HTTPException(status_code=404, detail="Lead not found")
-        lead = lead_resp.data[0]
-    except HTTPException:
-        raise
+        if lead_resp.data and len(lead_resp.data) > 0:
+            lead = lead_resp.data[0]
     except Exception:
+        lead = None
+    if lead is None:
+        try:
+            ha_resp = (
+                supabase.table("ha_leads")
+                .select("*")
+                .eq("id", lead_id)
+                .limit(1)
+                .execute()
+            )
+            if ha_resp.data and len(ha_resp.data) > 0:
+                ha_row = ha_resp.data[0]
+                srow = (
+                    supabase.table("searches")
+                    .select("user_id, niche")
+                    .eq("id", ha_row.get("search_id"))
+                    .limit(1)
+                    .execute()
+                )
+                if srow.data and srow.data[0].get("user_id") == user_id:
+                    lead = ha_row
+                    lead["_search_niche"] = srow.data[0].get("niche") or ""
+                    is_linkedin = True
+        except HTTPException:
+            raise
+        except Exception:
+            lead = None
+    if lead is None:
         raise HTTPException(status_code=404, detail="Lead not found")
 
-    # Fetch website analysis if available
+    # Fetch website analysis if available (Maps leads only).
     analysis = None
-    try:
-        analysis_resp = (
-            supabase.table("website_analyses")
-            .select("*")
-            .eq("lead_id", lead_id)
-            .limit(1)
-            .execute()
-        )
-        if analysis_resp.data:
-            analysis = analysis_resp.data[0]
-    except Exception as fetch_err:
-        logger.warning(f"Failed to fetch website analysis for lead {lead_id}: {fetch_err}")
+    if not is_linkedin:
+        try:
+            analysis_resp = (
+                supabase.table("website_analyses")
+                .select("*")
+                .eq("lead_id", lead_id)
+                .limit(1)
+                .execute()
+            )
+            if analysis_resp.data:
+                analysis = analysis_resp.data[0]
+        except Exception as fetch_err:
+            logger.warning(f"Failed to fetch website analysis for lead {lead_id}: {fetch_err}")
 
     await check_ai_limit(user_id)
 
-    # Generate pitch
-    result = await generate_pitch(lead=lead, analysis=analysis)
+    # Generate pitch (post-context prompt for LinkedIn leads).
+    if is_linkedin:
+        result = await generate_linkedin_pitch(lead=lead)
+    else:
+        result = await generate_pitch(lead=lead, analysis=analysis)
 
     # Track AI usage
     try:
@@ -141,14 +173,17 @@ async def generate_lead_pitch(
     except Exception as e:
         logger.warning(f"Failed to track AI usage: {e}")
 
-    # Save pitch to lead
+    # Save pitch to the source table so it persists across reloads.
     try:
         update_data = {
             "ai_pitch": result["pitch"],
             "ai_confidence_score": result["confidence_score"],
-            "estimated_deal_value": result["estimated_deal_value"],
         }
-        supabase.table("leads").update(update_data).eq("id", lead_id).eq("user_id", user_id).execute()
+        if is_linkedin:
+            supabase.table("ha_leads").update(update_data).eq("id", lead_id).execute()
+        else:
+            update_data["estimated_deal_value"] = result["estimated_deal_value"]
+            supabase.table("leads").update(update_data).eq("id", lead_id).eq("user_id", user_id).execute()
     except Exception as e:
         logger.warning(f"Failed to save pitch for lead {lead_id}: {e}")
 
@@ -156,7 +191,7 @@ async def generate_lead_pitch(
         "lead_id": lead_id,
         "pitch": result["pitch"],
         "confidence_score": result["confidence_score"],
-        "estimated_deal_value": result["estimated_deal_value"],
+        "estimated_deal_value": result.get("estimated_deal_value", 0),
     }
 
 

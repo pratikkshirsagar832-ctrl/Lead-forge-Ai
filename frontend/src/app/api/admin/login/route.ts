@@ -58,6 +58,10 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'Invalid password' }, { status: 401 });
   }
   const res = NextResponse.json({ ok: true });
-  res.headers.set('Set-Cookie', sessionCookieHeader(60 * 60 * 24 * 30));
+  // __Host- (with Secure) over HTTPS; plain name over HTTP so the browser
+  // actually stores the session cookie on non-TLS deployments.
+  const proto = req.headers.get('x-forwarded-proto');
+  const secure = !!proto && proto.split(',')[0].trim() === 'https';
+  res.headers.set('Set-Cookie', sessionCookieHeader(60 * 60 * 24 * 30, secure));
   return res;
 }

@@ -1,10 +1,13 @@
 import { NextResponse } from 'next/server';
-import { clearCookieHeader } from '../../../../../lib/admin-auth';
+import { clearSessionCookieHeaders } from '../../../../../lib/admin-auth';
 
 export const runtime = 'nodejs';
 
 export async function POST() {
   const res = NextResponse.json({ ok: true });
-  res.headers.set('Set-Cookie', clearCookieHeader());
+  // Clear both cookie variants so a scheme change cannot strand a session.
+  for (const header of clearSessionCookieHeaders()) {
+    res.headers.append('Set-Cookie', header);
+  }
   return res;
 }

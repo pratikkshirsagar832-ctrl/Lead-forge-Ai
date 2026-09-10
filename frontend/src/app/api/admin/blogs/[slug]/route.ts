@@ -12,7 +12,13 @@ export async function PUT(
   const { slug } = await params;
   const body = await req.json().catch(() => null);
   if (!body) return NextResponse.json({ error: 'Invalid payload' }, { status: 400 });
-  const result = updateBlog(slug, body);
+  let result: { post?: unknown; error?: string };
+  try {
+    result = updateBlog(slug, body);
+  } catch (err) {
+    console.error('[admin/blogs] update failed', err);
+    return NextResponse.json({ error: 'Could not save the post (storage write failed)' }, { status: 500 });
+  }
   if (result.error) return NextResponse.json({ error: result.error }, { status: 400 });
   return NextResponse.json({ blog: result.post });
 }
@@ -23,7 +29,13 @@ export async function DELETE(
 ) {
   if (!isAuthed(req)) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   const { slug } = await params;
-  const result = deleteBlog(slug);
+  let result: { ok?: boolean; error?: string };
+  try {
+    result = deleteBlog(slug);
+  } catch (err) {
+    console.error('[admin/blogs] delete failed', err);
+    return NextResponse.json({ error: 'Could not delete the post (storage write failed)' }, { status: 500 });
+  }
   if (!result.ok) return NextResponse.json({ error: result.error || 'Post not found' }, { status: 404 });
   return NextResponse.json({ ok: true });
 }

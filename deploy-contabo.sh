@@ -36,6 +36,11 @@ RAZORPAY_KEY_ID=rzp_xxx_xxxxxxxxxxxx
 RAZORPAY_KEY_SECRET=YOUR_RAZORPAY_SECRET
 ENVEOF
 
+# Blog storage must be writable by the container user (uid 1001 "nextjs"),
+# otherwise publishing fails with EACCES on the bind-mounted ./frontend/data.
+mkdir -p frontend/data
+chown -R 1001:1001 frontend/data
+
 # Stop old containers
 docker compose down 2>/dev/null || true
 

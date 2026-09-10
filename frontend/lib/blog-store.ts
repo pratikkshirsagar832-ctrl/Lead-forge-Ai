@@ -53,13 +53,15 @@ function readAll(): BlogPost[] {
 }
 
 function writeAll(posts: BlogPost[]): void {
-  cached = posts;
   const file = dataFile();
   const dir = path.dirname(file);
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
   const tmp = `${file}.tmp`;
+  // Only commit the in-memory cache after the disk write succeeded, so a
+  // failed publish (e.g. EACCES on the data volume) never poisons memory.
   fs.writeFileSync(tmp, JSON.stringify(posts, null, 2), 'utf-8');
   fs.renameSync(tmp, file);
+  cached = posts;
 }
 
 export function getBlogs(): BlogPost[] {

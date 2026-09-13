@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
-import { Plus, Trash2, Pencil, X, LogOut, ExternalLink, CheckCircle2, Bold, Link2, List, Quote, Image as ImageIcon, Eye, PenLine, UploadCloud, Loader2 } from 'lucide-react';
+import { Plus, Trash2, Pencil, X, LogOut, ExternalLink, CheckCircle2, Bold, Link2, List, Quote, Image as ImageIcon, Eye, PenLine, UploadCloud, Loader2, Clock, Send, Undo2, FileText } from 'lucide-react';
 import { renderMarkdown } from '../../components/blog-markdown';
 
 function ToolbarBtn({
@@ -49,6 +49,36 @@ interface BlogPost {
   authorBio: string;
 }
 
+interface DraftPost extends BlogPost {
+  status: 'draft';
+  scheduledAt?: string;
+  updatedAt: string;
+}
+
+type ListTab = 'all' | 'published' | 'drafts' | 'scheduled';
+
+const AUTOSAVE_KEY = 'hyperclients:blog-form:v1';
+
+function toLocalInput(iso?: string): string {
+  if (!iso) return '';
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '';
+  const p = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+
+function formatScheduled(iso?: string): string {
+  if (!iso) return '';
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '';
+  return d.toLocaleString('en-IN', { day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' });
+}
+
+function isFutureDateTime(value: string): boolean {
+  const when = new Date(value);
+  return !Number.isNaN(when.getTime()) && when.getTime() > Date.now();
+}
+
 const emptyForm = {
   title: '',
   slug: '',
@@ -68,13 +98,19 @@ const emptyForm = {
 export default function AdminPanel() {
   const router = useRouter();
   const [blogs, setBlogs] = useState<BlogPost[]>([]);
+  const [drafts, setDrafts] = useState<DraftPost[]>([]);
+  const [tab, setTab] = useState<ListTab>('all');
   const [loading, setLoading] = useState(true);
   const [form, setForm] = useState(emptyForm);
   const [editingSlug, setEditingSlug] = useState<string | null>(null);
+  const [editingDraftId, setEditingDraftId] = useState<string | null>(null);
+  const [scheduledAtInput, setScheduledAtInput] = useState('');
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState('');
   const [showPreview, setShowPreview] = useState(false);
   const [uploading, setUploading] = useState(false);
+  const [restoreBanner, setRestoreBanner] = useState<{ savedAt: string } | null>(null);
+  const restoreRef = useRef<{ form: typeof emptyForm; editingSlug: string | null; editingDraftId: string | null; scheduledAtInput: string } | null>(null);
   const contentRef = useRef<HTMLTextAreaElement>(null);
   const coverImgRef = useRef<HTMLInputElement>(null);
   const contentImgRef = useRef<HTMLInputElement>(null);
@@ -183,19 +219,103 @@ export default function AdminPanel() {
   };
 
   const load = useCallback(async () => {
-    const res = await fetch('/api/admin/blogs');
-    if (res.status === 401) {
+    const [blogsRes, draftsRes] = await Promise.all([
+      fetch('/api/admin/blogs'),
+      fetch('/api/admin/drafts'),
+    ]);
+    if (blogsRes.status === 401 || draftsRes.status === 401) {
       router.push('/admin/login');
       return;
     }
-    const data = await res.json();
-    setBlogs(data.blogs || []);
+    const blogsData = await blogsRes.json().catch(() => ({}));
+    const draftsData = await draftsRes.json().catch(() => ({}));
+    setBlogs(blogsData.blogs || []);
+    setDrafts(draftsData.drafts || []);
     setLoading(false);
   }, [router]);
 
   useEffect(() => {
     load();
   }, [load]);
+
+  // ---- Form autosave (localStorage) ----
+  // Restore prompt on mount if an unsaved form was left behind.
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(AUTOSAVE_KEY);
+      if (!raw) return;
+      const saved = JSON.parse(raw);
+      const f = saved?.form;
+      if (saved && f && (String(f.title || '').trim() || String(f.content || '').trim())) {
+        restoreRef.current = {
+          form: { ...emptyForm, ...f },
+          editingSlug: saved.editingSlug ?? null,
+          editingDraftId: saved.editingDraftId ?? null,
+          scheduledAtInput: saved.scheduledAtInput ?? '',
+        };
+        setRestoreBanner({ savedAt: saved.savedAt || '' });
+      }
+    } catch {
+      /* corrupted autosave — ignore */
+    }
+  }, []);
+
+  // Persist on every change (debounced). Never stores a pristine empty form.
+  useEffect(() => {
+    const pristine =
+      !form.title.trim() && !form.content.trim() && !editingSlug && !editingDraftId;
+    if (pristine) return;
+    const t = setTimeout(() => {
+      try {
+        localStorage.setItem(
+          AUTOSAVE_KEY,
+          JSON.stringify({
+            form,
+            editingSlug,
+            editingDraftId,
+            scheduledAtInput,
+            savedAt: new Date().toISOString(),
+          })
+        );
+      } catch {
+        /* quota/private mode — autosave is best-effort */
+      }
+    }, 1000);
+    return () => clearTimeout(t);
+  }, [form, editingSlug, editingDraftId, scheduledAtInput]);
+
+  function clearAutosave() {
+    restoreRef.current = null;
+    setRestoreBanner(null);
+    try {
+      localStorage.removeItem(AUTOSAVE_KEY);
+    } catch {
+      /* ignore */
+    }
+  }
+
+  function applyRestore() {
+    const s = restoreRef.current;
+    if (!s) return;
+    setForm(s.form);
+    setEditingSlug(s.editingSlug);
+    setEditingDraftId(s.editingDraftId);
+    setScheduledAtInput(s.scheduledAtInput);
+    setRestoreBanner(null);
+  }
+
+  function discardRestore() {
+    clearAutosave();
+  }
+
+  function resetFormState() {
+    setForm(emptyForm);
+    setEditingSlug(null);
+    setEditingDraftId(null);
+    setScheduledAtInput('');
+    setShowPreview(false);
+    clearAutosave();
+  }
 
   function setField(field: keyof typeof emptyForm, value: string) {
     setForm((f) => ({ ...f, [field]: value }));
@@ -232,24 +352,24 @@ export default function AdminPanel() {
     };
   }
 
-  async function handleSave(e: React.FormEvent) {
-    e.preventDefault();
+  // ---- Save actions ----
+  // "Save as Draft": always lands in drafts.json, clears any schedule.
+  async function handleSaveDraft() {
     setBusy(true);
-    const payload = parseForm();
     try {
-      const res = await fetch(editingSlug ? `/api/admin/blogs/${editingSlug}` : '/api/admin/blogs', {
-        method: editingSlug ? 'PUT' : 'POST',
+      const payload = { ...parseForm(), scheduledAt: '' };
+      const res = await fetch(editingDraftId ? `/api/admin/drafts/${editingDraftId}` : '/api/admin/drafts', {
+        method: editingDraftId ? 'PUT' : 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
       });
-      const data = await res.json();
+      const data = await res.json().catch(() => ({}));
       if (!res.ok) {
-        flash(data?.error || 'Save failed');
+        flash(data?.error || 'Draft save failed');
         return;
       }
-      flash(editingSlug ? 'Blog updated' : 'Blog published');
-      setForm(emptyForm);
-      setEditingSlug(null);
+      flash('Draft saved');
+      resetFormState();
       await load();
     } catch {
       flash('Something went wrong');
@@ -258,7 +378,175 @@ export default function AdminPanel() {
     }
   }
 
+  // "Publish": new form -> published directly; editing a draft -> move it to
+  // published; editing a published post -> update it in place.
+  async function handlePublishForm() {
+    setBusy(true);
+    try {
+      if (editingDraftId) {
+        const res = await fetch(`/api/admin/drafts/${editingDraftId}/publish`, { method: 'POST' });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          flash(data?.error || 'Publish failed');
+          return;
+        }
+        flash('Blog published');
+        resetFormState();
+        await load();
+        return;
+      }
+      const payload = parseForm();
+      const res = await fetch(editingSlug ? `/api/admin/blogs/${editingSlug}` : '/api/admin/blogs', {
+        method: editingSlug ? 'PUT' : 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        flash(data?.error || 'Save failed');
+        return;
+      }
+      flash(editingSlug ? 'Blog updated' : 'Blog published');
+      resetFormState();
+      await load();
+    } catch {
+      flash('Something went wrong');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  // "Schedule": saves the current form as a draft with a future publish time.
+  async function handleSchedule() {
+    if (!scheduledAtInput) {
+      flash('Pick a date & time first');
+      return;
+    }
+    const when = new Date(scheduledAtInput);
+    if (Number.isNaN(when.getTime())) {
+      flash('Invalid date & time');
+      return;
+    }
+    if (!isFutureDateTime(scheduledAtInput)) {
+      flash('Schedule time must be in the future');
+      return;
+    }
+    setBusy(true);
+    try {
+      const payload = { ...parseForm(), scheduledAt: when.toISOString() };
+      const res = await fetch(editingDraftId ? `/api/admin/drafts/${editingDraftId}` : '/api/admin/drafts', {
+        method: editingDraftId ? 'PUT' : 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        flash(data?.error || 'Schedule failed');
+        return;
+      }
+      flash(`Scheduled for ${when.toLocaleString('en-IN')}`);
+      resetFormState();
+      await load();
+    } catch {
+      flash('Something went wrong');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handlePublishNow(draftId: string) {
+    setBusy(true);
+    try {
+      const res = await fetch(`/api/admin/drafts/${draftId}/publish`, { method: 'POST' });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        flash(data?.error || 'Publish failed');
+        return;
+      }
+      flash('Blog published');
+      if (editingDraftId === draftId) resetFormState();
+      await load();
+    } catch {
+      flash('Something went wrong');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleUnpublish(blog: BlogPost) {
+    setBusy(true);
+    try {
+      const res = await fetch(`/api/admin/blogs/${blog.slug}/unpublish`, { method: 'POST' });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        flash(data?.error || 'Unpublish failed');
+        return;
+      }
+      flash('Moved back to drafts');
+      // If we were editing this post, keep editing it as a draft.
+      if (editingSlug === blog.slug && data.draft) {
+        const d = data.draft as DraftPost;
+        loadDraftIntoForm(d);
+      }
+      await load();
+    } catch {
+      flash('Something went wrong');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleDeleteDraft(draft: DraftPost) {
+    if (!confirm(`Delete draft "${draft.title || 'Untitled draft'}"?\nThis cannot be undone.`)) return;
+    setBusy(true);
+    try {
+      const res = await fetch(`/api/admin/drafts/${draft.id}`, { method: 'DELETE' });
+      if (!res.ok) {
+        const data = await res.json().catch(() => null);
+        flash(data?.error || 'Delete failed');
+        return;
+      }
+      flash('Draft deleted');
+      if (editingDraftId === draft.id) resetFormState();
+      await load();
+    } catch {
+      flash('Something went wrong');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function loadDraftIntoForm(draft: DraftPost) {
+    setEditingSlug(null);
+    setEditingDraftId(draft.id);
+    setForm({
+      title: draft.title,
+      slug: draft.slug,
+      excerpt: draft.excerpt,
+      date: draft.date,
+      content: draft.content,
+      coverImage: draft.coverImage || '',
+      faqs: (draft.faqs || []).map((f) => `${f.q} | ${f.a}`).join('\n'),
+      metaTitle: draft.metaTitle || '',
+      metaDescription: draft.metaDescription || '',
+      keywords: (draft.keywords || []).join(', '),
+      author: draft.author,
+      authorBio: draft.authorBio || '',
+      category: draft.category,
+    });
+    setScheduledAtInput(toLocalInput(draft.scheduledAt));
+    setShowPreview(false);
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  }
+
+  function previewDraft(draft: DraftPost) {
+    loadDraftIntoForm(draft);
+    setShowPreview(true);
+  }
+
   function startEdit(blog: BlogPost) {
+    setEditingDraftId(null);
+    setScheduledAtInput('');
     setEditingSlug(blog.slug);
     setForm({
       title: blog.title,
@@ -290,8 +578,7 @@ export default function AdminPanel() {
       }
       flash('Blog deleted');
       if (editingSlug === blog.slug) {
-        setEditingSlug(null);
-        setForm(emptyForm);
+        resetFormState();
       }
       await load();
     } catch {
@@ -343,13 +630,46 @@ export default function AdminPanel() {
           </div>
         )}
 
+        {restoreBanner && (
+          <div className="mb-6 flex flex-wrap items-center gap-3 text-sm text-ice/85 bg-amber-400/10 border border-amber-400/25 rounded-xl px-4 py-3">
+            <FileText className="w-4 h-4 text-amber-300" />
+            <span className="flex-1 min-w-52">
+              Unsaved form found
+              {restoreBanner.savedAt
+                ? ` (last typed ${new Date(restoreBanner.savedAt).toLocaleString('en-IN')})`
+                : ''}
+              . Restore it?
+            </span>
+            <button
+              type="button"
+              onClick={applyRestore}
+              className="px-3 py-1.5 rounded-lg bg-amber-400/20 text-amber-200 text-xs font-bold hover:bg-amber-400/30 transition-colors"
+            >
+              Restore
+            </button>
+            <button
+              type="button"
+              onClick={discardRestore}
+              className="px-3 py-1.5 rounded-lg bg-white/5 text-ice/70 text-xs font-semibold hover:bg-white/10 transition-colors"
+            >
+              Discard
+            </button>
+          </div>
+        )}
+
         <section className="glass-card-premium rounded-2xl p-6 md:p-8 mb-10">
           <h2 className="text-xl font-bold text-offwhite font-heading mb-6 flex items-center gap-2">
-            {editingSlug ? <Pencil className="w-5 h-5 text-brand-accent-light" /> : <Plus className="w-5 h-5 text-brand-accent-light" />}
-            {editingSlug ? `Edit: ${editingSlug}` : 'New Blog Post'}
+            {editingSlug || editingDraftId ? <Pencil className="w-5 h-5 text-brand-accent-light" /> : <Plus className="w-5 h-5 text-brand-accent-light" />}
+            {editingSlug ? `Edit: ${editingSlug}` : editingDraftId ? 'Edit draft' : 'New Blog Post'}
           </h2>
 
-          <form onSubmit={handleSave} className="space-y-5">
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              handlePublishForm();
+            }}
+            className="space-y-5"
+          >
             <div className="grid md:grid-cols-2 gap-4">
               <div className="md:col-span-2">
                 <label className={labelCls}>Title *</label>
@@ -602,88 +922,274 @@ export default function AdminPanel() {
               </div>
             </div>
 
-            <div className="flex flex-wrap gap-3">
+            <div className="flex flex-wrap gap-3 items-end">
               <button
                 type="submit"
                 disabled={busy}
-                className="btn-gradient-cyan rounded-xl px-6 py-3 text-sm disabled:opacity-50 disabled:cursor-not-allowed"
+                className="btn-gradient-cyan rounded-xl px-6 py-3 text-sm disabled:opacity-50 disabled:cursor-not-allowed inline-flex items-center gap-2"
               >
+                <Send className="w-4 h-4" />
                 {busy ? 'Saving...' : editingSlug ? 'Save Changes' : 'Publish Blog'}
               </button>
+              {!editingSlug && (
+                <button
+                  type="button"
+                  onClick={handleSaveDraft}
+                  disabled={busy}
+                  className="btn-glass rounded-xl px-5 py-3 text-sm inline-flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  <FileText className="w-4 h-4" /> Save as Draft
+                </button>
+              )}
+              {!editingSlug && (
+                <div className="flex items-end gap-2">
+                  <div>
+                    <label className={labelCls}>Schedule for</label>
+                    <input
+                      type="datetime-local"
+                      className={inputCls}
+                      value={scheduledAtInput}
+                      onChange={(e) => setScheduledAtInput(e.target.value)}
+                    />
+                  </div>
+                  <button
+                    type="button"
+                    onClick={handleSchedule}
+                    disabled={busy || !scheduledAtInput}
+                    className="btn-glass rounded-xl px-5 py-3 text-sm inline-flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    <Clock className="w-4 h-4" /> Schedule
+                  </button>
+                </div>
+              )}
               {editingSlug && (
                 <button
                   type="button"
                   onClick={() => {
-                    setEditingSlug(null);
-                    setForm(emptyForm);
+                    const b = blogs.find((x) => x.slug === editingSlug);
+                    if (b) handleUnpublish(b);
                   }}
+                  disabled={busy}
+                  className="btn-glass rounded-xl px-5 py-3 text-sm inline-flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  <Undo2 className="w-4 h-4" /> Unpublish to Draft
+                </button>
+              )}
+              {(editingSlug || editingDraftId) && (
+                <button
+                  type="button"
+                  onClick={resetFormState}
                   className="btn-glass rounded-xl px-5 py-3 text-sm inline-flex items-center gap-2"
                 >
                   <X className="w-4 h-4" /> Cancel Edit
                 </button>
               )}
             </div>
+            {editingDraftId && scheduledAtInput && (
+              <p className="text-xs text-amber-300/90 inline-flex items-center gap-1.5">
+                <Clock className="w-3.5 h-3.5" /> This draft is scheduled — it will publish automatically at the set time.
+              </p>
+            )}
           </form>
         </section>
 
         <section>
-          <div className="flex items-center justify-between mb-4">
-            <h2 className="text-xl font-bold text-offwhite font-heading">
-              Published Posts <span className="text-text-muted text-sm font-normal">({blogs.length})</span>
-            </h2>
-          </div>
-
-          {loading ? (
-            <div className="glass-card rounded-2xl p-8 text-center text-text-muted">Loading...</div>
-          ) : blogs.length === 0 ? (
-            <div className="glass-card rounded-2xl p-8 text-center text-text-muted">
-              No blogs yet. Write your first post above.
-            </div>
-          ) : (
-            <div className="space-y-3">
-              {blogs.map((blog) => (
-                <div
-                  key={blog.id}
-                  className="glass-card-premium rounded-xl p-4 md:p-5 flex flex-wrap items-center gap-4 transition-colors hover:border-brand-accent/20"
-                >
-                  <div className="flex-1 min-w-52">
-                    <h3 className="font-heading font-bold text-offwhite">{blog.title}</h3>
-                    <p className="text-xs text-text-muted mt-1 flex items-center gap-2 flex-wrap">
-                      <span className="text-brand-accent-light">/{blog.slug}</span>
-                      <span>{blog.category}</span>
-                      <span>{blog.date}</span>
-                    </p>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <a
-                      href={`/blogs/${blog.slug}`}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      title="View post"
-                      className="p-2.5 rounded-lg bg-bg-hover text-text-secondary hover:text-brand-accent-light transition-colors"
-                    >
-                      <ExternalLink className="w-4 h-4" />
-                    </a>
+          {(() => {
+            const scheduled = drafts.filter((d) => d.scheduledAt);
+            const unscheduled = drafts.filter((d) => !d.scheduledAt);
+            const tabs: { key: typeof tab; label: string; count: number }[] = [
+              { key: 'all', label: 'All', count: blogs.length + drafts.length },
+              { key: 'published', label: 'Published', count: blogs.length },
+              { key: 'drafts', label: 'Drafts', count: unscheduled.length },
+              { key: 'scheduled', label: 'Scheduled', count: scheduled.length },
+            ];
+            const showPublished = tab === 'all' || tab === 'published';
+            const showDrafts = tab === 'all' || tab === 'drafts';
+            const showScheduled = tab === 'all' || tab === 'scheduled';
+            return (
+              <>
+                <div className="flex flex-wrap gap-2 mb-5">
+                  {tabs.map((t) => (
                     <button
-                      onClick={() => startEdit(blog)}
-                      title="Edit post"
-                      className="p-2.5 rounded-lg bg-bg-hover text-text-secondary hover:text-brand-accent-light transition-colors"
+                      key={t.key}
+                      type="button"
+                      onClick={() => setTab(t.key)}
+                      className={`px-4 py-2 rounded-xl text-sm font-semibold border transition-all ${
+                        tab === t.key
+                          ? 'bg-brand-accent/15 border-brand-accent/40 text-brand-accent-light'
+                          : 'bg-navy/40 border-steel/20 text-ice/60 hover:text-offwhite hover:border-steel/40'
+                      }`}
                     >
-                      <Pencil className="w-4 h-4" />
+                      {t.label}
+                      <span className="ml-1.5 text-xs opacity-70">({t.count})</span>
                     </button>
-                    <button
-                      onClick={() => handleDelete(blog)}
-                      title="Delete post"
-                      disabled={busy}
-                      className="p-2.5 rounded-lg bg-bg-hover text-rose hover:bg-rose/20 transition-colors disabled:opacity-50"
-                    >
-                      <Trash2 className="w-4 h-4" />
-                    </button>
-                  </div>
+                  ))}
                 </div>
-              ))}
-            </div>
-          )}
+
+                {loading ? (
+                  <div className="glass-card rounded-2xl p-8 text-center text-text-muted">Loading...</div>
+                ) : (
+                  <>
+                    {showPublished && (
+                      <div className="mb-8">
+                        <h2 className="text-xl font-bold text-offwhite font-heading mb-4">
+                          Published Posts <span className="text-text-muted text-sm font-normal">({blogs.length})</span>
+                        </h2>
+                        {blogs.length === 0 ? (
+                          <div className="glass-card rounded-2xl p-8 text-center text-text-muted">
+                            No published posts yet.
+                          </div>
+                        ) : (
+                          <div className="space-y-3">
+                            {blogs.map((blog) => (
+                              <div
+                                key={blog.id}
+                                className="glass-card-premium rounded-xl p-4 md:p-5 flex flex-wrap items-center gap-4 transition-colors hover:border-brand-accent/20"
+                              >
+                                <div className="flex-1 min-w-52">
+                                  <h3 className="font-heading font-bold text-offwhite">{blog.title}</h3>
+                                  <p className="text-xs text-text-muted mt-1 flex items-center gap-2 flex-wrap">
+                                    <span className="px-1.5 py-0.5 rounded bg-emerald-500/15 text-emerald-300 font-semibold">
+                                      Published
+                                    </span>
+                                    <span className="text-brand-accent-light">/{blog.slug}</span>
+                                    <span>{blog.category}</span>
+                                    <span>{blog.date}</span>
+                                  </p>
+                                </div>
+                                <div className="flex items-center gap-2">
+                                  <a
+                                    href={`/blogs/${blog.slug}`}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    title="View post"
+                                    className="p-2.5 rounded-lg bg-bg-hover text-text-secondary hover:text-brand-accent-light transition-colors"
+                                  >
+                                    <ExternalLink className="w-4 h-4" />
+                                  </a>
+                                  <button
+                                    onClick={() => startEdit(blog)}
+                                    title="Edit post"
+                                    className="p-2.5 rounded-lg bg-bg-hover text-text-secondary hover:text-brand-accent-light transition-colors"
+                                  >
+                                    <Pencil className="w-4 h-4" />
+                                  </button>
+                                  <button
+                                    onClick={() => handleUnpublish(blog)}
+                                    title="Unpublish — move back to drafts"
+                                    disabled={busy}
+                                    className="p-2.5 rounded-lg bg-bg-hover text-text-secondary hover:text-amber-300 transition-colors disabled:opacity-50"
+                                  >
+                                    <Undo2 className="w-4 h-4" />
+                                  </button>
+                                  <button
+                                    onClick={() => handleDelete(blog)}
+                                    title="Delete post"
+                                    disabled={busy}
+                                    className="p-2.5 rounded-lg bg-bg-hover text-rose hover:bg-rose/20 transition-colors disabled:opacity-50"
+                                  >
+                                    <Trash2 className="w-4 h-4" />
+                                  </button>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    )}
+
+                    {(showDrafts || showScheduled) && (
+                      <div>
+                        <h2 className="text-xl font-bold text-offwhite font-heading mb-4">
+                          {tab === 'scheduled' ? 'Scheduled' : tab === 'drafts' ? 'Drafts' : 'Drafts & Scheduled'}{' '}
+                          <span className="text-text-muted text-sm font-normal">
+                            ({tab === 'scheduled' ? scheduled.length : tab === 'drafts' ? unscheduled.length : drafts.length})
+                          </span>
+                        </h2>
+                        {(() => {
+                          const list = tab === 'scheduled' ? scheduled : tab === 'drafts' ? unscheduled : drafts;
+                          if (list.length === 0) {
+                            return (
+                              <div className="glass-card rounded-2xl p-8 text-center text-text-muted">
+                                No drafts here. Write above and hit “Save as Draft”.
+                              </div>
+                            );
+                          }
+                          return (
+                            <div className="space-y-3">
+                              {list.map((d) => (
+                                <div
+                                  key={d.id}
+                                  className="glass-card-premium rounded-xl p-4 md:p-5 flex flex-wrap items-center gap-4 transition-colors hover:border-brand-accent/20"
+                                >
+                                  <div className="flex-1 min-w-52">
+                                    <h3 className="font-heading font-bold text-offwhite">
+                                      {d.title.trim() || <span className="italic text-text-muted">Untitled draft</span>}
+                                    </h3>
+                                    <p className="text-xs text-text-muted mt-1 flex items-center gap-2 flex-wrap">
+                                      {d.scheduledAt ? (
+                                        <span className="px-1.5 py-0.5 rounded bg-amber-400/15 text-amber-300 font-semibold inline-flex items-center gap-1">
+                                          <Clock className="w-3 h-3" /> Scheduled · {formatScheduled(d.scheduledAt)}
+                                        </span>
+                                      ) : (
+                                        <span className="px-1.5 py-0.5 rounded bg-white/5 text-ice/60 font-semibold border border-white/10">
+                                          Draft
+                                        </span>
+                                      )}
+                                      {d.slug ? (
+                                        <span className="text-brand-accent-light">/{d.slug}</span>
+                                      ) : (
+                                        <span className="italic">(no slug yet)</span>
+                                      )}
+                                      <span>{d.category}</span>
+                                    </p>
+                                  </div>
+                                  <div className="flex items-center gap-2">
+                                    <button
+                                      onClick={() => previewDraft(d)}
+                                      title="Preview draft"
+                                      className="p-2.5 rounded-lg bg-bg-hover text-text-secondary hover:text-brand-accent-light transition-colors"
+                                    >
+                                      <Eye className="w-4 h-4" />
+                                    </button>
+                                    <button
+                                      onClick={() => {
+                                        loadDraftIntoForm(d);
+                                      }}
+                                      title="Edit draft"
+                                      className="p-2.5 rounded-lg bg-bg-hover text-text-secondary hover:text-brand-accent-light transition-colors"
+                                    >
+                                      <Pencil className="w-4 h-4" />
+                                    </button>
+                                    <button
+                                      onClick={() => handlePublishNow(d.id)}
+                                      title="Publish now"
+                                      disabled={busy}
+                                      className="p-2.5 rounded-lg bg-emerald-500/10 text-emerald-300 hover:bg-emerald-500/20 transition-colors disabled:opacity-50"
+                                    >
+                                      <Send className="w-4 h-4" />
+                                    </button>
+                                    <button
+                                      onClick={() => handleDeleteDraft(d)}
+                                      title="Delete draft"
+                                      disabled={busy}
+                                      className="p-2.5 rounded-lg bg-bg-hover text-rose hover:bg-rose/20 transition-colors disabled:opacity-50"
+                                    >
+                                      <Trash2 className="w-4 h-4" />
+                                    </button>
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          );
+                        })()}
+                      </div>
+                    )}
+                  </>
+                )}
+              </>
+            );
+          })()}
         </section>
       </div>
     </div>

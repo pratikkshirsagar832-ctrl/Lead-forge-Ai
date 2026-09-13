@@ -34,16 +34,18 @@ function dataFile(): string {
   return SEED_FILE;
 }
 
-let cached: BlogPost[] | null = null;
+// NOTE: deliberately NO in-memory cache here. Next.js bundles lib/ separately
+// per route, so a module-level cache would diverge between the admin API
+// routes (writers) and the public pages (readers) — a newly published post
+// would 404 until server restart. Blogs are tiny; always read from disk.
 
 function readAll(): BlogPost[] {
-  if (cached) return cached;
+  // Always read from disk: see NOTE above (no in-memory cache).
   try {
     const file = dataFile();
     if (fs.existsSync(file)) {
       const raw = fs.readFileSync(file, 'utf-8').replace(/^\uFEFF/, '');
       const posts: BlogPost[] = JSON.parse(raw);
-      cached = posts;
       return posts;
     }
   } catch (err) {
@@ -57,11 +59,8 @@ function writeAll(posts: BlogPost[]): void {
   const dir = path.dirname(file);
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
   const tmp = `${file}.tmp`;
-  // Only commit the in-memory cache after the disk write succeeded, so a
-  // failed publish (e.g. EACCES on the data volume) never poisons memory.
   fs.writeFileSync(tmp, JSON.stringify(posts, null, 2), 'utf-8');
   fs.renameSync(tmp, file);
-  cached = posts;
 }
 
 export function getBlogs(): BlogPost[] {

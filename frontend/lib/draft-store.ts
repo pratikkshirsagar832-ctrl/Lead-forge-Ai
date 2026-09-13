@@ -39,17 +39,18 @@ function dataFile(): string {
   return SEED_FILE;
 }
 
-let cached: DraftPost[] | null = null;
+// NOTE: deliberately NO in-memory cache here — see blog-store.ts. Next.js
+// bundles lib/ separately per route, so a module-level cache would diverge
+// between route bundles. Drafts are tiny; always read from disk.
 
 function readAll(): DraftPost[] {
-  if (cached) return cached;
+  // Always read from disk: see NOTE above (no in-memory cache).
   try {
     const file = dataFile();
     if (fs.existsSync(file)) {
       const raw = fs.readFileSync(file, 'utf-8').replace(/^\uFEFF/, '');
       const parsed: unknown = JSON.parse(raw);
-      cached = Array.isArray(parsed) ? (parsed as DraftPost[]) : [];
-      return cached;
+      return Array.isArray(parsed) ? (parsed as DraftPost[]) : [];
     }
   } catch (err) {
     console.error('[draft-store] read failed', err);
@@ -62,11 +63,8 @@ function writeAll(drafts: DraftPost[]): void {
   const dir = path.dirname(file);
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
   const tmp = `${file}.tmp`;
-  // Same discipline as blog-store: only commit the in-memory cache after the
-  // disk write succeeded, so a failed save never poisons memory.
   fs.writeFileSync(tmp, JSON.stringify(drafts, null, 2), 'utf-8');
   fs.renameSync(tmp, file);
-  cached = drafts;
 }
 
 function normalizeKeywords(input: unknown): string[] {
@@ -175,21 +173,39 @@ export function saveDraft(input: DraftInput): { draft?: DraftPost; error?: strin
   if (input.id) {
     const idx = drafts.findIndex((d) => d.id === input.id);
     if (idx === -1) return { error: 'Draft not found' };
-    const slug = (input.slug || '').trim();
+    const prev = drafts[idx];
+    const slug = input.slug !== undefined ? input.slug.trim() : prev.slug;
     if (slug && drafts.some((d) => d.id !== input.id && d.slug === slug)) {
       return { error: `Another draft already uses slug "${slug}"` };
     }
+    // Partial update: only keys present in `input` overwrite the saved draft.
+    // (A missing key must never wipe a stored value — e.g. updating just the
+    // schedule must keep the slug.)
+    const f = buildDraftFields(input);
+    const has = (k: keyof DraftInput): boolean => input[k] !== undefined;
     const updated: DraftPost = {
-      ...drafts[idx],
-      ...buildDraftFields(input),
-      id: drafts[idx].id,
+      ...prev,
+      title: has('title') ? f.title : prev.title,
       slug,
+      excerpt: has('excerpt') ? f.excerpt : prev.excerpt,
+      category: has('category') ? f.category || prev.category : prev.category,
+      date: has('date') && input.date ? input.date : prev.date,
+      content: has('content') ? f.content : prev.content,
+      coverImage: has('coverImage') ? f.coverImage : prev.coverImage,
+      faqs: has('faqs') ? f.faqs : prev.faqs,
+      metaTitle: has('metaTitle') ? f.metaTitle : prev.metaTitle,
+      metaDescription: has('metaDescription') ? f.metaDescription : prev.metaDescription,
+      keywords: has('keywords') ? f.keywords : prev.keywords,
+      author: has('author') ? f.author || prev.author : prev.author,
+      authorBio: has('authorBio') ? f.authorBio : prev.authorBio,
+      scheduledAt: has('scheduledAt') ? f.scheduledAt : prev.scheduledAt,
+      id: prev.id,
       status: 'draft',
-      createdAt: drafts[idx].createdAt,
+      createdAt: prev.createdAt,
       updatedAt: now,
     };
-    // Auto-excerpt only when the admin left it blank AND the saved draft has
-    // no excerpt of its own yet (never clobber an intentional excerpt).
+    // Auto-excerpt only when the draft has neither an explicit excerpt nor one
+    // saved before (never clobber an intentional excerpt).
     if (!updated.excerpt && updated.content.trim()) {
       updated.excerpt = cleanExcerpt(updated.content);
     }

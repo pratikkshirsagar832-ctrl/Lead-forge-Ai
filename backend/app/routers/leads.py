@@ -40,7 +40,7 @@ router = APIRouter(prefix="/api/leads", tags=["Leads"])
 async def list_leads(
     search_id: Optional[str] = Query(None, description="Filter by search ID"),
     source: Optional[str] = Query(None, description="Filter by source (google_maps/linkedin)"),
-    post_type: Optional[str] = Query(None, description="Filter LinkedIn leads by post type (buyer/agency_wanted)"),
+    post_type: Optional[str] = Query(None, description="Filter LinkedIn leads by post type (buyer)"),
     lead_category: Optional[str] = Query(None, description="Filter by category (hot/warm)"),
     user_status: Optional[str] = Query(None, description="Filter by user status"),
     is_favorite: Optional[bool] = Query(None, description="Filter favorites only"),
@@ -116,7 +116,7 @@ async def list_leads(
                 for chunk in _chunks(li_ids, 200):
                     q = supabase.table("ha_leads").select("*").in_("search_id", chunk)
                     if post_type:
-                        lt = {"buyer": "need_freelancer", "agency_wanted": "our_agency"}.get(post_type)
+                        lt = {"buyer": "need_freelancer"}.get(post_type)
                         if lt:
                             q = q.eq("lead_type", lt)
                     if user_status:
@@ -242,8 +242,7 @@ def _map_ha_lead(row: dict) -> dict:
     lead_type = row.get("lead_type") or ""
     post_type = {
         "need_freelancer": "buyer",
-        "our_agency": "agency_wanted",
-    }.get(lead_type, lead_type or "")
+    }.get(lead_type, "buyer")
 
     score = row.get("overall_quality_score")
     try:
@@ -314,7 +313,7 @@ CSV_EXPORT_PLANS = {"pro", "agency"}
 async def export_leads_csv(
     search_id: Optional[str] = Query(None, description="Filter by search ID"),
     source: Optional[str] = Query(None, description="Filter by source (google_maps/linkedin)"),
-    post_type: Optional[str] = Query(None, description="Filter LinkedIn leads by post type (buyer/agency_wanted)"),
+    post_type: Optional[str] = Query(None, description="Filter LinkedIn leads by post type (buyer)"),
     lead_category: Optional[str] = Query(None),
     user_status: Optional[str] = Query(None),
     is_favorite: Optional[bool] = Query(None),

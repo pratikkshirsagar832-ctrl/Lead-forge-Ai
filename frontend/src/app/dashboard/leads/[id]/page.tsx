@@ -366,7 +366,7 @@ export default function LeadDetailPage() {
                   <h3 className="font-bold text-offwhite">Genuine Buyer Post</h3>
                   <p className="text-sm text-ice/60">
                     {lead.website_health_score != null
-                      ? `AI quality score: ${Math.round(lead.website_health_score)}/100 · ${lead.post_type === 'agency_wanted' ? 'Agency wanted' : 'Freelancer needed'}`
+                      ? `AI quality score: ${Math.round(lead.website_health_score)}/100 · Freelancer needed`
                       : 'Verified genuine buying intent — reach out with your proposal.'}
                   </p>
                 </div>

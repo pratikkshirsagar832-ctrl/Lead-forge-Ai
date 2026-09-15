@@ -28,7 +28,7 @@ def test_time_window_is_strict_7d():
 
 def test_lead_type_mapping():
     assert ha_service.ha_lead_type_from(["buyer"]) == "need_freelancer"
-    assert ha_service.ha_lead_type_from(["agency_wanted"]) == "our_agency"
+    assert ha_service.ha_lead_type_from(["agency_wanted"]) == "need_freelancer"
     assert ha_service.ha_lead_type_from(["buyer", "agency_wanted"]) == "need_freelancer"
     assert ha_service.ha_lead_type_from(None) == "need_freelancer"
 

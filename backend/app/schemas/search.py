@@ -18,9 +18,9 @@ class SearchCreateRequest(BaseModel):
     source: Literal["google_maps", "linkedin"] = Field("google_maps", description="Source type")
     enrich_emails: bool = Field(True, description="Try to find emails (linkedin only)")
     max_results: int = Field(10, ge=1, le=50, description="Number of leads to return")
-    lead_types: list[Literal["buyer", "agency_wanted"]] = Field(
-        default=["buyer", "agency_wanted"],
-        description="Filter lead types (linkedin only): buyer=needs freelancer, agency_wanted=seeking an agency."
+    lead_types: list[Literal["buyer"]] = Field(
+        default=["buyer"],
+        description="Filter lead types (linkedin only): buyer=needs freelancer."
     )
 
 

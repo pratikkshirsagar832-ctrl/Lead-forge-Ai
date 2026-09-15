@@ -183,7 +183,7 @@ export function useSearch() {
     };
   }, [pollStatus, pollResults, clearPolling]);
 
-  const startSearch = async (niche: string, location: string, options?: { source?: 'google_maps' | 'linkedin'; enrichEmails?: boolean; maxResults?: number; leadTypes?: ('buyer' | 'agency_wanted')[] }) => {
+  const startSearch = async (niche: string, location: string, options?: { source?: 'google_maps' | 'linkedin'; enrichEmails?: boolean; maxResults?: number; leadTypes?: ('buyer')[] }) => {
     if (isStartingRef.current) return;
     try {
       isStartingRef.current = true;

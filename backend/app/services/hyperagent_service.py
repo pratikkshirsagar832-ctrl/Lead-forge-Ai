@@ -78,18 +78,13 @@ def ha_normalize_country(value: str):
 
 
 def ha_lead_type_from(lead_types) -> str:
-    """Map main-app lead_types (buyer/agency_wanted) → Hyperagent type.
+    """Map main-app lead_types (buyer) → Hyperagent type.
 
     UI semantics:
       buyer          -> need_freelancer : posts asking for a freelancer
-      agency_wanted  -> our_agency      : posts seeking an agency/outside team
     Hiring / employee job-ads are never requested (filtered out by the store
-    content gate below). Engine sibling acceptance keeps genuine buyers of any
-    bucket flowing so a request never starves.
+    content gate below).
     """
-    lts = lead_types or []
-    if lts and "agency_wanted" in lts and "buyer" not in lts:
-        return "our_agency"
     return "need_freelancer"
 
 

@@ -75,11 +75,9 @@ function LiveResultCard({ lead, index }: { lead: any; index: number }) {
                   {lead.source === 'linkedin' && (
                     <span className={`text-[9px] px-1.5 py-0.5 rounded font-semibold border ${
                       lead.post_type === 'buyer' ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20'
-                      : lead.post_type === 'agency_wanted' ? 'bg-violet-500/10 text-violet-400 border-violet-500/20'
                       : 'bg-white/5 text-ice/50 border-white/10'
                     }`}>
-                      {lead.post_type === 'buyer' ? 'Freelancer Needed'
-                        : lead.post_type === 'agency_wanted' ? 'Agency Wanted' : 'Post'}
+                      {lead.post_type === 'buyer' ? 'Freelancer Needed' : 'Post'}
                     </span>
                   )}
                   {lead.headline && (
@@ -201,10 +199,8 @@ export default function SearchPage() {
   const [source, setSource] = useState<'google_maps' | 'linkedin'>('google_maps');
   const sourceRef = useRef<'google_maps' | 'linkedin'>('google_maps');
   const [maxResults, setMaxResults] = useState(10);
-  // LinkedIn discovery targets genuine service buyers — the user picks between
-  // freelancer-needed (buyer) and agency-wanted. Hiring/job-ads are excluded.
-  type LinkedInLeadType = 'all' | 'buyer' | 'agency_wanted';
-  const [linkedinLeadType, setLinkedinLeadType] = useState<LinkedInLeadType>('all');
+  // LinkedIn discovery targets genuine service buyers — freelancer-needed
+  // (buyer). Hiring/job-ads are excluded.
   const requestedCount = useSearchStore((s) => s.requestedCount);
   const isUnlocked = useSearchStore((s) => s.unlocked);
   const unlockResults = useSearchStore((s) => s.unlockResults);
@@ -292,9 +288,7 @@ export default function SearchPage() {
       if (source === 'linkedin') {
         await startSearch(data.niche, data.location ?? '', {
           source: 'linkedin', enrichEmails: false, maxResults,
-          leadTypes: linkedinLeadType === 'all'
-            ? ['buyer', 'agency_wanted']
-            : [linkedinLeadType],
+          leadTypes: ['buyer'],
         });
       } else {
         await startSearch(data.niche, data.location ?? '', { source: 'google_maps', enrichEmails: false });
@@ -436,56 +430,13 @@ export default function SearchPage() {
                     </select>
                   </div>
                   <div className="sm:col-span-2">
-                    <label className="block text-sm font-medium text-ice/70 mb-2 flex items-center gap-2">
-                      <Briefcase className="w-4 h-4 text-steel" />
-                      Lead Type
-                    </label>
-                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
-                      <button
-                        type="button"
-                        onClick={() => setLinkedinLeadType('all')}
-                        className={`px-3 py-2.5 rounded-xl border text-sm font-semibold transition-all ${
-                          linkedinLeadType === 'all'
-                            ? 'bg-steel/15 border-steel/50 text-offwhite'
-                            : 'bg-navy/60 border-ocean/25 text-ice/60 hover:text-offwhite hover:border-ocean/40'
-                        }`}
-                      >
-                        All Buyers
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setLinkedinLeadType('buyer')}
-                        className={`px-3 py-2.5 rounded-xl border text-sm font-semibold transition-all ${
-                          linkedinLeadType === 'buyer'
-                            ? 'bg-emerald-500/15 border-emerald-500/40 text-emerald-300'
-                            : 'bg-navy/60 border-ocean/25 text-ice/60 hover:text-offwhite hover:border-ocean/40'
-                        }`}
-                      >
-                        Freelancer Needed
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setLinkedinLeadType('agency_wanted')}
-                        className={`px-3 py-2.5 rounded-xl border text-sm font-semibold transition-all ${
-                          linkedinLeadType === 'agency_wanted'
-                            ? 'bg-violet-500/15 border-violet-500/40 text-violet-300'
-                            : 'bg-navy/60 border-ocean/25 text-ice/60 hover:text-offwhite hover:border-ocean/40'
-                        }`}
-                      >
-                        Agency Wanted
-                      </button>
-                    </div>
                     <p className="text-[11px] text-ice/40 mt-1.5">
-                      {linkedinLeadType === 'all'
-                        ? 'Everyone genuinely buying this service — freelancers needed, agencies wanted, or a team/outsourcing ask. Newest first.'
-                        : linkedinLeadType === 'buyer'
-                          ? 'People posting they need to hire a freelancer for this.'
-                          : 'People posting they are looking for an agency to handle this.'}
+                      People posting they need to hire a freelancer for this.
                     </p>
                   </div>
                   <div className="sm:col-span-2">
                     <p className="text-xs text-ice/60 leading-relaxed">
-                      We scan LinkedIn worldwide for the latest genuine buyers of your service — {linkedinLeadType === 'all' ? 'every buyer situation (freelancer-needed, agency-wanted, team/outsourcing)' : linkedinLeadType === 'buyer' ? 'freelancer-needed' : 'agency-wanted'} posts
+                      We scan LinkedIn worldwide for the latest genuine buyers of your service — freelancer-needed posts
                       only (sellers, hiring ads &amp; job-seeker posts are always excluded) — and deliver exactly the number of leads you ask for, newest first.
                     </p>
                   </div>

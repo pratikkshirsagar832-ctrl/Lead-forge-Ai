@@ -114,11 +114,11 @@ async def create_search(
     location_term = request.location.strip()
 
     # Product policy: LinkedIn discovery targets genuine service buyers -
-    # freelancer-needed (buyer) and agency-wanted. Hiring/job-ads and
+    # freelancer-needed (buyer). Hiring/job-ads and
     # job-seeker intents are never requested.
     if request.source == "linkedin":
-        requested = request.lead_types or ["buyer", "agency_wanted"]
-        lead_types = [t for t in requested if t in ("buyer", "agency_wanted")] or ["buyer"]
+        requested = request.lead_types or ["buyer"]
+        lead_types = [t for t in requested if t in ("buyer",)] or ["buyer"]
     else:
         lead_types = request.lead_types or []
 
@@ -156,12 +156,10 @@ async def create_search(
         )
 
         # Map frontend lead types to Hyperagent lead types.
-        # Frontend sends ["buyer"] / ["agency_wanted"] for a single lane, or
-        # ["buyer","agency_wanted"] for "All Buyers". When BOTH are requested we
-        # run unrestricted (all genuine buyer types kept, newest first).
+        # Frontend sends ["buyer"] (single buyer lane).
         ha_lead_type = ha_lead_type_from(lead_types)
         ha_time_window = ha_time_window_from()
-        all_types = len(lead_types) >= 2
+        all_types = False
 
         # GLOBAL SEARCH: location is intentionally removed for LinkedIn - the
         # engine scans posts from every country and returns the latest buyers.
@@ -434,8 +432,7 @@ async def get_search_results(
                         lt = item["lead_type"]
                         item["post_type"] = {
                             "need_freelancer": "buyer",
-                            "our_agency": "agency_wanted",
-                        }.get(lt, lt)
+                        }.get(lt, "buyer")
                     if not item.get("headline") and item.get("author_name"):
                         item["headline"] = item["author_name"]
                     if not item.get("posted_at") and item.get("post_date"):

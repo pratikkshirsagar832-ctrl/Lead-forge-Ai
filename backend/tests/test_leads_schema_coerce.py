@@ -59,14 +59,14 @@ def test_map_ha_lead_detail_produces_valid_detail():
     row = {
         "id": "li-9", "search_id": "s-9", "author_name": "ACME Ltd",
         "author_profile_url": "https://linkedin.com/in/acme",
-        "post_url": "https://linkedin.com/posts/9", "post_text": "Need an agency.",
-        "post_date": "2026-02-01", "lead_type": "our_agency",
+        "post_url": "https://linkedin.com/posts/9", "post_text": "Need a video editor for our launch.",
+        "post_date": "2026-02-01", "lead_type": "need_freelancer",
         "overall_quality_score": 91.0, "status": "new", "created_at": "2026-02-01T00:00:00Z",
     }
     detail = _map_ha_lead_detail(row, "user-1")
     assert detail["user_id"] == "user-1"
     assert detail["source"] == "linkedin"
-    assert detail["post_type"] == "agency_wanted"
+    assert detail["post_type"] == "buyer"
     assert detail["lead_category"] == "warm"   # coerced (hidden in UI)
     assert isinstance(detail["connections_count"], int)
     item = LeadDetail(**detail)  # must not raise

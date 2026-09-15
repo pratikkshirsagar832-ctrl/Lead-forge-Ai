@@ -89,6 +89,27 @@ DISTINCTION RULES (precision over recall — a false positive is costly):
 - A single post can mix signals ("need a {service} — DM me if you know someone" is a BUYER asking
   for referrals; "DM me for {service}" is a SELLER). Judge the main intent.
 
+FREELANCER QUALITY BAR (need_freelancer only — minimum quality floor):
+A genuine freelancer ask must carry AT LEAST ONE concrete buying signal:
+  scope (bounded deliverable / defined piece of work), money (budget / rate /
+  paid / retainer), time (deadline / timeline / start date), project framing
+  (contract / freelance / project basis / for our project / for a client), or an
+  owner-asked referral ("anyone know a good X for my project", "need X for our
+  campaign this month").
+Calibrate scores honestly against this bar:
+- Bare "looking for X" / "need X" with NO scale, scope, timeline, budget or
+  ownership signal is a vague ask, not a lead: commercial_intent_score <= 45,
+  evidence_strength <= 55, intent_strength at most recommendation,
+  is_qualified = false.
+- Owner referrals ("anyone know a good X", "who do you recommend for X") from a
+  genuine owner DO qualify, but cap commercial_intent_score at 60 unless a
+  budget/timeline/scale signal is also present.
+- overall_quality_score must reflect real lead value with a precision bias:
+  vague or single-line asks with no concrete signal belong in the 30-50 band;
+  reserve 70+ for posts with explicit scope + money/time evidence.
+Never inflate scores to "be helpful" — a weak post with high scores is the
+costliest mistake this classifier can make.
+
 DOMAIN-GENERAL REASONING (§0): apply the direction-of-intent test below to whatever service the
 user sells — plumbing in Nairobi, UX design in Toronto, wedding photography in Mumbai, anything.
 There are no per-service rules; these examples teach the PATTERN, not an allow-list. The four

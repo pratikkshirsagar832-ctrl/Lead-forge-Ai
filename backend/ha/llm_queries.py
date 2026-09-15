@@ -28,9 +28,12 @@ service would plausibly post on LinkedIn when they need it right now:
 - natural first-person asks ("need", "looking for", "recommendations", "anyone know")
 - use the service's real-world vocabulary and role nouns (how buyers say it)
 - vary the intent: urgent asks, project asks, recommendation asks, referral asks
+- prefer phrasings carrying budget/timeline/scope signals ("budget ready",
+  "this week", "for our project", "for a project") over bare "looking for X"
 - FORBIDDEN: seller language ("I offer", "we provide", "hire me", "available for"),
   job-ad language ("apply now", "join our team"), generic marketing words,
-  hashtags, quotes, or any phrasing where the author SELLS the service.
+  hashtags, quotes, vague single-verb asks with no object,
+  or any phrasing where the author SELLS the service.
 
 Return ONLY a JSON object: {{"queries": ["...", "..."]}}"""
 

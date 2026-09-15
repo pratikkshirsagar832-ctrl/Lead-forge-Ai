@@ -171,15 +171,17 @@ def _need_freelancer(svc: str, naked: str, phrase: str | None) -> list[str]:
     ]
     # When the service is an activity/gerund ("video editing", "logo design"),
     # buyers usually ask for the ROLE ("video editor") — use those phrasings
-    # for the base set (raw phrasing still appears in the pool).
+    # for the base set (raw phrasing still appears in the pool). High-intent,
+    # project-scoped phrasings lead so the first discovery round already
+    # surfaces budgeted, project-ready buyers.
     if variants:
         role = variants[0]
         A_role = _article_phrase(role) or role
         qs = [
             f"looking for {A_role}",
             f"need {A_role}",
+            f"need {A_role} for a project",
             f"anyone know a good {role}",
-            f"need someone to help with {svc}",
         ]
     return [q for q in qs if q]
 
@@ -260,6 +262,24 @@ def _pool(svc: str, naked: str, phrase: str | None, lead_type: LeadType) -> list
                 f"looking for a freelance {role}",
                 f"need a freelance {role} for a project",
             ]
+        # --- high-intent first: budget / timeline / project-scoped asks ----
+        # These run in early diversification rounds so budgeted, project-ready
+        # buyers surface before generic "looking for X" volume.
+        for role in role_variants(svc):
+            A_role = _article_phrase(role) or role
+            out += [
+                f"need {A_role} with a budget",
+                f"looking for {A_role} budget ready",
+                f"hire a freelance {role} for a project",
+                f"looking for {A_role} for our project",
+                f"need {A_role} for ongoing work",
+            ]
+        out += [
+            f"need {A} this week",
+            f"looking for {A} asap",
+            f"need {A} for a client project",
+            f"looking for a trusted {N}",
+        ]
         # --- hiring/needing verbs ------------------------------------------
         verbs = [
             "looking for", "searching for", "in need of", "on the lookout for",

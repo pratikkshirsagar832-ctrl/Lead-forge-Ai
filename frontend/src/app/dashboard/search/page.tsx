@@ -13,7 +13,7 @@ import { SearchProgressCard } from '@/components/dashboard/SearchProgressCard';
 import { UpgradeModal } from '@/components/shared/UpgradeModal';
 import { API_ROUTES } from '@/lib/constants';
 import { useSearchStore } from '@/stores/searchStore';
-import { MapPin, Briefcase, SearchIcon, Sparkles, Globe, Star, Phone, ChevronRight, Users, AlertCircle, Search, Linkedin, Mail, Clock, ExternalLink, Unlock } from 'lucide-react';
+import { MapPin, Briefcase, SearchIcon, Sparkles, Globe, Star, Phone, ChevronRight, Users, AlertCircle, Search, Linkedin, Mail, Clock, ExternalLink, Unlock, Check, BadgeCheck } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import Link from 'next/link';
 import { LEAD_CATEGORIES } from '@/lib/constants';
@@ -429,16 +429,39 @@ export default function SearchPage() {
                       ))}
                     </select>
                   </div>
-                  <div className="sm:col-span-2">
-                    <p className="text-[11px] text-ice/40 mt-1.5">
-                      People posting they need to hire a freelancer for this.
-                    </p>
+                  <div className="flex items-center gap-3 px-4 py-3 rounded-xl border border-emerald-500/30 bg-emerald-500/10 self-end w-full">
+                    <div className="p-2 rounded-lg bg-emerald-500/15 shrink-0">
+                      <Briefcase className="w-4 h-4 text-emerald-400" />
+                    </div>
+                    <div className="min-w-0">
+                      <p className="text-sm font-bold text-emerald-300 leading-tight">Freelancer Needed</p>
+                      <p className="text-[11px] text-emerald-400/70 leading-tight mt-0.5">AI-verified buyer intent only</p>
+                    </div>
+                    <BadgeCheck className="w-4 h-4 text-emerald-400/60 ml-auto shrink-0" />
                   </div>
-                  <div className="sm:col-span-2">
-                    <p className="text-xs text-ice/60 leading-relaxed">
-                      We scan LinkedIn worldwide for the latest genuine buyers of your service — freelancer-needed posts
-                      only (sellers, hiring ads &amp; job-seeker posts are always excluded) — and deliver exactly the number of leads you ask for, newest first.
-                    </p>
+                  <div className="sm:col-span-2 grid grid-cols-1 sm:grid-cols-3 gap-2">
+                    {[
+                      { icon: Search, title: 'Scan', desc: 'Latest LinkedIn posts worldwide' },
+                      { icon: Sparkles, title: 'AI verify', desc: 'Every buyer checked for real intent' },
+                      { icon: Check, title: 'Deliver', desc: 'Exact lead count, newest first' },
+                    ].map((s) => (
+                      <div key={s.title} className="flex items-center gap-2.5 px-3 py-2.5 rounded-xl bg-navy/60 border border-ocean/25">
+                        <div className="p-1.5 rounded-lg bg-steel/15 shrink-0">
+                          <s.icon className="w-3.5 h-3.5 text-steel" />
+                        </div>
+                        <div className="min-w-0">
+                          <p className="text-xs font-bold text-offwhite leading-tight">{s.title}</p>
+                          <p className="text-[10px] text-ice/50 leading-tight mt-0.5 truncate">{s.desc}</p>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                  <div className="sm:col-span-2 flex items-center gap-1.5 flex-wrap">
+                    {['AI-verified', 'Newest first', 'Exact count', 'No sellers or job ads'].map((t) => (
+                      <span key={t} className="text-[10px] font-semibold px-2 py-1 rounded-full bg-steel/10 text-steel border border-steel/25">
+                        {t}
+                      </span>
+                    ))}
                   </div>
                   </>
                   )}

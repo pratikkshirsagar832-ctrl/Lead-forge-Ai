@@ -4,6 +4,9 @@
 
 -- 1. Pro $99 -> $49 (USD cents). Agency plan untouched.
 UPDATE public.plans SET price_monthly = 4900 WHERE id = 'pro';
+UPDATE public.plans
+SET description = '$49/mo - 120 HQ LinkedIn leads + 1500 GMB leads per month'
+WHERE id = 'pro' AND description LIKE '$99/mo%';
 
 -- 2. Normalize historical agency lead-types to buyer equivalents.
 -- leads.post_type: agency/agency_wanted -> buyer

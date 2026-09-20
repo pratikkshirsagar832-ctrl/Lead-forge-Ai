@@ -43,6 +43,22 @@ ALTER TABLE public.monthly_usage
   ADD COLUMN IF NOT EXISTS searches_used INTEGER NOT NULL DEFAULT 0 CHECK (searches_used >= 0),
   ADD COLUMN IF NOT EXISTS ai_calls_used INTEGER NOT NULL DEFAULT 0 CHECK (ai_calls_used >= 0);
 
+-- 3b. Normalize usage_month to DATE. Some live DBs carry it as TEXT, which
+-- breaks every row-locked RPC with `operator does not exist: text = date`
+-- (consume/settle/reserve all compare usage_month to a DATE month_start).
+-- Safe to re-run: DATE::date is a no-op, ISO 'YYYY-MM-DD' text casts cleanly.
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_schema = 'public' AND table_name = 'monthly_usage'
+      AND column_name = 'usage_month' AND data_type <> 'date'
+  ) THEN
+    ALTER TABLE public.monthly_usage
+      ALTER COLUMN usage_month TYPE DATE USING usage_month::date;
+  END IF;
+END $$;
+
 -- 4. Atomic monthly consume/settle helpers (row-locked, like v5/v13) ─────
 CREATE OR REPLACE FUNCTION public.consume_monthly_quota(
   p_user_id UUID, p_kind TEXT, p_limit INTEGER

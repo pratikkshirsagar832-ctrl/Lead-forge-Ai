@@ -163,7 +163,7 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
           {searchesPerDay > 0 && (
             <div className="px-2">
               <div className="flex justify-between text-[10px] text-ice/40 mb-1">
-                <span>Searches used</span>
+                <span>Searches used (monthly)</span>
                 <span>{remaining}/{searchesPerDay}</span>
               </div>
               <div className="h-1.5 rounded-full bg-ocean/30 overflow-hidden">

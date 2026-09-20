@@ -3,7 +3,13 @@ export interface SubscriptionInfo {
   plan_name: string;
   status: string;
   searches_per_day: number;
+  searches_per_month?: number;
   leads_per_day: number;
+  leads_per_month?: number;
+  ai_calls_monthly?: number;
+  ai_used?: number;
+  ai_remaining?: number;
+  searches_used?: number;
   remaining_searches: number;
   remaining_leads: number;
   current_period_start?: string;
@@ -24,7 +30,10 @@ export interface Plan {
   name: string;
   price_monthly: number;
   searches_per_day: number;
+  searches_per_month?: number;
   leads_per_day: number;
+  leads_per_month?: number;
+  ai_calls_monthly?: number;
   is_active: boolean;
   sort_order: number;
   features: string[];

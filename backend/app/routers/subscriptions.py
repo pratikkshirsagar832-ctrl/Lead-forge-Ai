@@ -10,6 +10,7 @@ except ImportError:
     razorpay = None
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Request
+from fastapi.responses import JSONResponse
 
 from app.config import get_settings
 from app.database import get_supabase_admin
@@ -33,6 +34,137 @@ def _razorpay_amount_for_plan(settings, plan_id: str) -> int:
     return amount
 
 
+# ── Payment-order ledger ───────────────────────────────────────────────
+#
+# `user_subscriptions.razorpay_order_id` is a SINGLE slot, so starting a second
+# checkout overwrote the first order id — a payment for the abandoned order
+# could then never be verified or webhooked (the customer paid and got
+# nothing). Orders now live in their own table (migration v14); the slot is
+# still written for backward compatibility.
+
+_PAYMENT_ORDERS_SUPPORTED: bool | None = None
+
+
+def _payment_orders_supported(supabase) -> bool:
+    """True when the payment_orders table exists. Caches True permanently;
+    re-probes on False so a migration applied after boot is picked up."""
+    global _PAYMENT_ORDERS_SUPPORTED
+    if _PAYMENT_ORDERS_SUPPORTED is True:
+        return True
+    try:
+        supabase.table("payment_orders").select("order_id").limit(1).execute()
+        _PAYMENT_ORDERS_SUPPORTED = True
+    except Exception as e:
+        logger.info(f"payment_orders unavailable (migration v14 pending): {e}")
+        _PAYMENT_ORDERS_SUPPORTED = False
+    return _PAYMENT_ORDERS_SUPPORTED
+
+
+def _record_payment_order(supabase, order_id: str, user_id: str, plan_id: str, amount: int) -> None:
+    """Best-effort insert of a pending order (never fails checkout)."""
+    if not _payment_orders_supported(supabase):
+        return
+    try:
+        supabase.table("payment_orders").insert({
+            "order_id": order_id,
+            "user_id": user_id,
+            "plan_id": plan_id,
+            "amount": int(amount),
+            "status": "pending",
+        }).execute()
+    except Exception as e:
+        logger.warning(f"Could not record payment order {order_id}: {e}")
+
+
+def _mark_payment_order_paid(supabase, order_id: str, payment_id: str) -> None:
+    if not _payment_orders_supported(supabase):
+        return
+    try:
+        supabase.table("payment_orders").update({
+            "status": "paid",
+            "paid_at": datetime.now(timezone.utc).isoformat(),
+            "payment_id": payment_id,
+        }).eq("order_id", order_id).execute()
+    except Exception as e:
+        logger.warning(f"Could not mark payment order {order_id} paid: {e}")
+
+
+def _resolve_order_owner(supabase, order_id: str) -> dict | None:
+    """Authoritative {user_id, plan_id} for a Razorpay order id.
+
+    Prefers the payment_orders ledger; falls back to the legacy single-slot
+    `user_subscriptions.razorpay_order_id` lookup so a deployment that has not
+    applied migration v14 keeps working exactly as before.
+    """
+    if _payment_orders_supported(supabase):
+        try:
+            resp = (
+                supabase.table("payment_orders")
+                .select("user_id, plan_id, amount, status")
+                .eq("order_id", order_id)
+                .limit(1)
+                .execute()
+            )
+            if resp.data:
+                row = resp.data[0]
+                return {
+                    "user_id": row.get("user_id"),
+                    "plan_id": row.get("plan_id"),
+                    "source": "payment_orders",
+                }
+        except Exception as e:
+            logger.warning(f"payment_orders lookup failed for {order_id}: {e}")
+    try:
+        resp = (
+            supabase.table("user_subscriptions")
+            .select("id, user_id, plan_id")
+            .eq("razorpay_order_id", order_id)
+            .order("created_at", desc=True)
+            .limit(1)
+            .execute()
+        )
+        if resp.data:
+            row = resp.data[0]
+            return {
+                "user_id": row.get("user_id"),
+                "plan_id": row.get("plan_id"),
+                "subscription_id": row.get("id"),
+                "source": "user_subscriptions",
+            }
+    except Exception as e:
+        logger.warning(f"user_subscriptions lookup failed for {order_id}: {e}")
+    return None
+
+
+def _target_subscription_row(supabase, user_id: str) -> dict | None:
+    """Deterministic row to activate/cancel for a user.
+
+    Previously `.limit(1)` with no ordering picked an arbitrary row (a signup
+    trigger row, a team row, a legacy row), so a payment could activate the
+    wrong subscription.
+    """
+    try:
+        rows = (
+            supabase.table("user_subscriptions")
+            .select("id, status, plan_id")
+            .eq("user_id", user_id)
+            .order("created_at", desc=True)
+            .limit(10)
+            .execute()
+            .data
+        ) or []
+    except Exception as e:
+        logger.warning(f"Could not list subscription rows for {user_id[:8]}: {e}")
+        return None
+    if not rows:
+        return None
+    # Mirror resolve_effective_subscription: a cancelled row is never preferred.
+    for row in rows:
+        if row.get("status") != "cancelled":
+            return row
+    return rows[0]
+
+
 def _get_razorpay_client(settings):
     if razorpay is None:
         raise HTTPException(status_code=503, detail="Payment system not configured")
@@ -48,7 +180,7 @@ def _get_razorpay_client(settings):
 async def list_plans():
     supabase = get_supabase_admin()
     try:
-        resp = supabase.table("plans").select("*").order("sort_order").execute()
+        resp = supabase.table("plans").select("id,name,leads_per_day,searches_per_day,searches_per_month,leads_per_month,ai_calls_monthly,gmb_leads_monthly,linkedin_hq_leads_monthly,billing_cycle_days,sort_order,price_monthly").order("sort_order").execute()
         return {"plans": resp.data or []}
     except Exception as e:
         logger.error(f"Failed to fetch plans: {e}")
@@ -60,7 +192,9 @@ async def get_current_subscription(current_user: dict = Depends(get_current_user
     from app.services.plans import (
         resolve_effective_subscription,
         get_plan_row,
-        get_used_today,
+        get_monthly_limit,
+        get_monthly_counters,
+        quota_owner_id,
         get_latest_subscription_row,
     )
 
@@ -71,21 +205,24 @@ async def get_current_subscription(current_user: dict = Depends(get_current_user
         eff = resolve_effective_subscription(supabase, user_id)
         plan_id = eff["plan_id"]
         status = eff["status"]
+        quota_user = quota_owner_id(eff, user_id)
 
         plan = get_plan_row(supabase, plan_id)
-        searches_per_day = plan.get("searches_per_day", 3) or 3
-        leads_per_day = plan.get("leads_per_day", 30) or 30
+        searches_per_month = get_monthly_limit(plan, "searches_per_month", "searches_per_day", 3)
+        leads_per_month = get_monthly_limit(plan, "leads_per_month", "leads_per_day", 30)
+        ai_monthly = get_monthly_limit(plan, "ai_calls_monthly", "ai_calls", 5)
 
-        used_searches, used_leads = get_used_today(supabase, user_id)
         month = datetime.now(timezone.utc).replace(day=1).date().isoformat()
         usage = {}
         try:
-            monthly = supabase.table("monthly_usage").select("*").eq("user_id", user_id).eq("usage_month", month).limit(1).execute()
+            monthly = supabase.table("monthly_usage").select("*").eq("user_id", quota_user).eq("usage_month", month).limit(1).execute()
             usage = (monthly.data or [{}])[0]
         except Exception as monthly_err:
             logger.debug(f"monthly_usage table not available: {monthly_err}")
         linkedin_limit = int(plan.get("linkedin_hq_leads_monthly", 0) or 0)
         gmb_limit = int(plan.get("gmb_leads_monthly", 0) or 0)
+        used_searches = int(usage.get("searches_used", 0) or 0)
+        used_ai = int(usage.get("ai_calls_used", 0) or 0)
 
         source_row = eff.get("source_row") or get_latest_subscription_row(supabase, user_id) or {}
 
@@ -93,9 +230,15 @@ async def get_current_subscription(current_user: dict = Depends(get_current_user
             "plan_id": plan_id,
             "plan_name": plan.get("name", "Free"),
             "status": status,
-            "searches_per_day": searches_per_day,
-            "leads_per_day": leads_per_day,
-            "remaining_searches": max(0, searches_per_day - used_searches),
+            "searches_per_month": searches_per_month,
+            "searches_per_day": searches_per_month,  # compat: frontend may read old key
+            "leads_per_month": leads_per_month,
+            "leads_per_day": leads_per_month,  # compat
+            "ai_calls_monthly": ai_monthly,
+            "remaining_searches": max(0, searches_per_month - used_searches),
+            "searches_used": used_searches,
+            "ai_used": used_ai,
+            "ai_remaining": max(0, ai_monthly - used_ai),
             # Lead quota is MONTHLY — remaining_leads must reflect the monthly
             # cap (resets on the 1st), never the daily leads_per_day counter.
             "remaining_leads": max(0, linkedin_limit - int(usage.get("linkedin_hq_generated", 0) or 0) - int(usage.get("linkedin_hq_reserved", 0) or 0))
@@ -154,13 +297,18 @@ async def create_order(
             },
         })
 
-        existing_sub = supabase.table("user_subscriptions").select("id").eq("user_id", current_user["id"]).limit(1).execute()
+        # Ledger first: this is what makes an abandoned-then-paid order
+        # recoverable after a newer checkout overwrites the single slot below.
+        _record_payment_order(
+            supabase, order["id"], current_user["id"], plan_id, amount
+        )
 
-        if existing_sub.data and len(existing_sub.data) > 0:
-            sub_id = existing_sub.data[0]["id"]
+        existing_sub = _target_subscription_row(supabase, current_user["id"])
+
+        if existing_sub:
             supabase.table("user_subscriptions").update({
                 "razorpay_order_id": order["id"],
-            }).eq("id", sub_id).execute()
+            }).eq("id", existing_sub["id"]).execute()
         else:
             supabase.table("user_subscriptions").insert({
                 "user_id": current_user["id"],
@@ -200,6 +348,10 @@ async def verify_payment(
 
     if not all([razorpay_order_id, razorpay_payment_id, razorpay_signature]):
         raise HTTPException(status_code=400, detail="Missing payment verification fields")
+    # Strict string typing: int/None ids would crash hmac.encode with a 500.
+    # Reject them as 400 instead.
+    if not all(isinstance(v, str) for v in (razorpay_order_id, razorpay_payment_id, razorpay_signature)):
+        raise HTTPException(status_code=400, detail="Invalid payment verification fields")
 
     expected_signature = hmac.new(
         settings.razorpay_key_secret.encode(),
@@ -213,18 +365,21 @@ async def verify_payment(
     supabase = get_supabase_admin()
 
     try:
-        # Bind the payment to the authenticated user's pending order. The
-        # browser never selects the activated plan.
-        pending = supabase.table("user_subscriptions").select("id, razorpay_order_id").eq(
-            "user_id", current_user["id"]
-        ).eq("razorpay_order_id", razorpay_order_id).limit(1).execute()
-        if not pending.data:
+        # Bind the payment to the authenticated user's order. The browser never
+        # selects the activated plan. The ledger resolves the order even when a
+        # newer checkout has since overwritten the single subscription slot.
+        resolved = _resolve_order_owner(supabase, razorpay_order_id)
+        if not resolved or resolved.get("user_id") != current_user["id"]:
             raise HTTPException(status_code=400, detail="Payment order does not belong to this account")
         client = _get_razorpay_client(settings)
         order = client.order.fetch(razorpay_order_id)
         notes = order.get("notes") or {}
         plan_id = notes.get("plan_id")
-        if notes.get("user_id") != current_user["id"] or not plan_id:
+        if not plan_id and resolved.get("source") == "payment_orders":
+            plan_id = resolved.get("plan_id")
+        if notes.get("user_id") and notes.get("user_id") != current_user["id"]:
+            raise HTTPException(status_code=400, detail="Invalid payment order metadata")
+        if not plan_id:
             raise HTTPException(status_code=400, detail="Invalid payment order metadata")
 
         # Server-side capture + amount verification. The HMAC proves Razorpay
@@ -257,24 +412,25 @@ async def verify_payment(
         now = datetime.now(timezone.utc)
         period_end = now + timedelta(days=int(billing_cycle_days))
 
-        existing = pending
-
         sub_data = {
             "plan_id": plan_id,
             "status": "active",
             "razorpay_order_id": razorpay_order_id,
             "current_period_start": now.isoformat(),
             "current_period_end": period_end.isoformat(),
+            "razorpay_payment_id": razorpay_payment_id,
         }
 
-        if existing.data and len(existing.data) > 0:
-            sub_data["razorpay_payment_id"] = razorpay_payment_id
-            sub_id = existing.data[0]["id"]
-            supabase.table("user_subscriptions").update(sub_data).eq("id", sub_id).execute()
+        existing = _target_subscription_row(supabase, current_user["id"])
+        if existing:
+            supabase.table("user_subscriptions").update(sub_data).eq(
+                "id", existing["id"]
+            ).execute()
         else:
             sub_data["user_id"] = current_user["id"]
-            sub_data["razorpay_payment_id"] = razorpay_payment_id
             supabase.table("user_subscriptions").insert(sub_data).execute()
+
+        _mark_payment_order_paid(supabase, razorpay_order_id, razorpay_payment_id)
 
         return {
             "status": "success",
@@ -308,6 +464,11 @@ async def razorpay_webhook(request: Request):
     if not hmac.compare_digest(expected_signature, received_signature or ""):
         raise HTTPException(status_code=400, detail="Invalid webhook signature")
 
+    # Bound before the try so the failure handler can always release the
+    # idempotency claim (they used to be undefined if the body was malformed).
+    event_id = ""
+    event_recorded = False
+    supabase = None
     try:
         event = json.loads(body)
         event_type = event.get("event", "")
@@ -320,8 +481,9 @@ async def razorpay_webhook(request: Request):
 
         # Idempotency: never process the same Razorpay event twice. Best-effort
         # — if the payment_events table does not exist yet (migration pending),
-        # log and continue rather than failing the whole webhook.
-        event_recorded = False
+        # log and continue rather than failing the whole webhook. The row is a
+        # CLAIM: it is released on failure so a Razorpay retry can still
+        # process the event (see the handler below).
         if event_id:
             try:
                 seen = supabase.table("payment_events").select("id").eq("event_id", event_id).limit(1).execute()
@@ -343,12 +505,24 @@ async def razorpay_webhook(request: Request):
                 if payment_status and payment_status != "captured":
                     logger.warning(f"Ignoring payment {payment_id}: status={payment_status} (not captured)")
                     return {"status": "ok", "ignored": "not captured"}
-                existing = supabase.table("user_subscriptions").select("id, user_id, plan_id").eq("razorpay_order_id", order_id).limit(1).execute()
-                sub_data = existing.data[0] if existing.data and len(existing.data) > 0 else None
-                if sub_data:
+                # Resolve the order through the ledger first: a checkout that
+                # started later used to overwrite the single subscription slot,
+                # which made this webhook silently drop a payment that HAD been
+                # captured (customer charged, plan never activated).
+                resolved = _resolve_order_owner(supabase, order_id)
+                if not resolved:
+                    logger.warning(
+                        "Webhook for unknown order %s — no ledger entry or subscription row",
+                        order_id,
+                    )
+                    return {"status": "ok"}
+                order_user_id = resolved.get("user_id")
+                if order_user_id:
                     order = _get_razorpay_client(settings).order.fetch(order_id)
                     notes = order.get("notes") or {}
                     plan_id = notes.get("plan_id")
+                    if not plan_id and resolved.get("source") == "payment_orders":
+                        plan_id = resolved.get("plan_id")
                     if not plan_id:
                         logger.warning("Ignoring payment without plan metadata: %s", order_id)
                         return {"status": "ok"}
@@ -370,25 +544,65 @@ async def razorpay_webhook(request: Request):
                             )
                             return {"status": "ok", "ignored": "amount mismatch"}
                     except Exception as amt_exc:
-                        logger.error(f"Could not verify payment {payment_id} via Razorpay: {amt_exc}")
-                        return {"status": "error", "message": "Payment verification failed"}
+                        # Raise so the outer handler answers non-2xx: Razorpay
+                        # then redelivers instead of dropping the payment.
+                        raise RuntimeError(
+                            f"Could not verify payment {payment_id} via Razorpay: {amt_exc}"
+                        ) from amt_exc
 
-                    # Look up plan to get billing cycle for period dates
+                    # Activate on the user's real (deterministically chosen)
+                    # row. The period is extended once per PAYMENT id, so a
+                    # redelivered event for the same payment never double-extends
+                    # while a genuine renewal still does.
                     now = datetime.now(timezone.utc)
                     update_fields = {
                         "status": "active",
                         "razorpay_payment_id": payment_id,
                         "plan_id": plan_id,
                     }
-                    if not sub_data.get("razorpay_payment_id"):
+                    target = None
+                    if resolved.get("subscription_id"):
+                        target = {"id": resolved["subscription_id"]}
+                    if target is None:
+                        target = _target_subscription_row(supabase, order_user_id)
+                    if target is not None:
+                        try:
+                            cur = (
+                                supabase.table("user_subscriptions")
+                                .select("id, razorpay_payment_id")
+                                .eq("id", target["id"])
+                                .limit(1)
+                                .execute()
+                            )
+                            already_applied = bool(
+                                cur.data and cur.data[0].get("razorpay_payment_id") == payment_id
+                            )
+                        except Exception:
+                            already_applied = False
+                        if not already_applied:
+                            plan_resp = supabase.table("plans").select("billing_cycle_days").eq("id", plan_id).limit(1).execute()
+                            cycle_days = 30
+                            if plan_resp.data and len(plan_resp.data) > 0:
+                                cycle_days = plan_resp.data[0].get("billing_cycle_days", 30)
+                            update_fields["current_period_start"] = now.isoformat()
+                            update_fields["current_period_end"] = (now + timedelta(days=cycle_days)).isoformat()
+
+                        supabase.table("user_subscriptions").update(update_fields).eq("id", target["id"]).execute()
+                    else:
                         plan_resp = supabase.table("plans").select("billing_cycle_days").eq("id", plan_id).limit(1).execute()
                         cycle_days = 30
                         if plan_resp.data and len(plan_resp.data) > 0:
                             cycle_days = plan_resp.data[0].get("billing_cycle_days", 30)
-                        update_fields["current_period_start"] = now.isoformat()
-                        update_fields["current_period_end"] = (now + timedelta(days=cycle_days)).isoformat()
+                        insert_fields = dict(update_fields)
+                        insert_fields.update({
+                            "user_id": order_user_id,
+                            "razorpay_order_id": order_id,
+                            "current_period_start": now.isoformat(),
+                            "current_period_end": (now + timedelta(days=cycle_days)).isoformat(),
+                        })
+                        supabase.table("user_subscriptions").insert(insert_fields).execute()
 
-                    supabase.table("user_subscriptions").update(update_fields).eq("id", sub_data["id"]).execute()
+                    _mark_payment_order_paid(supabase, order_id, payment_id)
 
         elif event_type == "subscription.charged":
             # Not used by the current one-time-order payment flow; logged for
@@ -400,7 +614,22 @@ async def razorpay_webhook(request: Request):
         raise
     except Exception as e:
         logger.error(f"Webhook processing failed: {e}", exc_info=True)
-        return {"status": "error", "message": "Webhook processing failed"}
+        # A 200 here told Razorpay "delivered" — so a transient failure (a
+        # Supabase hiccup, a timeout fetching the payment) silently left a
+        # paying customer without their plan and was never retried. Release the
+        # idempotency claim and answer with a non-2xx so the event is redelivered.
+        if event_recorded and event_id and supabase is not None:
+            try:
+                supabase.table("payment_events").delete().eq("event_id", event_id).execute()
+                logger.info(f"Released webhook idempotency claim for {event_id[:24]}")
+            except Exception as cleanup_err:
+                logger.warning(
+                    f"Could not release webhook claim {event_id[:24]}: {cleanup_err}"
+                )
+        return JSONResponse(
+            status_code=500,
+            content={"status": "error", "message": "Webhook processing failed"},
+        )
 
 
 @router.post("/cancel")

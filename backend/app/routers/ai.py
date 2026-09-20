@@ -7,21 +7,24 @@ Endpoints:
 """
 
 import logging
-from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException
 
 from app.database import get_supabase_admin
 from app.middleware.auth_middleware import get_current_user
-from app.services.ai_service import generate_pitch, generate_website_message
-from app.services.plans import get_plan_row, resolve_effective_subscription
+from app.services.ai_service import (
+    generate_linkedin_pitch,
+    generate_pitch,
+    generate_website_message,
+)
+from app.services.plans import quota_owner_id, resolve_effective_subscription
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/ai", tags=["AI"])
 
-# Plan-based AI limits (daily)
-AI_DAILY_LIMITS = {
+# Plan-based AI limits (MONTHLY, v16 — same numbers, reset on the 1st)
+AI_MONTHLY_LIMITS = {
     "free": 5,
     "solo": 25,
     "pro": 100,
@@ -30,59 +33,48 @@ AI_DAILY_LIMITS = {
 AI_DEFAULT_LIMIT = 5
 
 
-def _get_ai_daily_limit(plan_id: str) -> int:
-    return AI_DAILY_LIMITS.get(plan_id, AI_DEFAULT_LIMIT)
-
-
-def _increment_ai_usage(user_id: str) -> None:
-    supabase = get_supabase_admin()
-    today = datetime.now(timezone.utc).date().isoformat()
-    # Atomic DB-side increment (avoids check-then-increment races under load);
-    # fall back to read-modify-write if the RPC is not present on this schema.
-    try:
-        supabase.rpc("increment_daily_usage", {
-            "p_user_id": user_id, "p_leads": 0, "p_searches": 0, "p_ai_calls": 1,
-        }).execute()
-        return
-    except Exception as e:
-        logger.debug(f"RPC increment_daily_usage unavailable, falling back: {e}")
-    try:
-        existing = supabase.table("daily_usage").select("id, ai_calls").eq("user_id", user_id).eq("date", today).execute()
-        if existing.data and len(existing.data) > 0:
-            row = existing.data[0]
-            new_count = (row.get("ai_calls", 0) or 0) + 1
-            supabase.table("daily_usage").update({"ai_calls": new_count}).eq("id", row["id"]).execute()
-        else:
-            supabase.table("daily_usage").insert({
-                "user_id": user_id,
-                "date": today,
-                "searches_run": 0,
-                "leads_generated": 0,
-                "ai_calls": 1,
-            }).execute()
-    except Exception as e:
-        logger.warning(f"Failed to increment AI usage: {e}")
+def _get_ai_monthly_limit(plan: dict, plan_id: str) -> int:
+    from app.services.plans import get_monthly_limit
+    return get_monthly_limit(plan, "ai_calls_monthly", "ai_calls", AI_MONTHLY_LIMITS.get(plan_id, AI_DEFAULT_LIMIT))
 
 
 async def check_ai_limit(user_id: str) -> str:
-    """Check AI limit based on user's plan. Returns plan_id."""
+    """Consume one monthly AI call for this user. Returns the effective plan_id."""
+    from app.services.plans import get_plan_row
+    from app.services.usage import consume_monthly_quota
+
     supabase = get_supabase_admin()
-    today = datetime.now(timezone.utc).date().isoformat()
 
     eff = resolve_effective_subscription(supabase, user_id)
     plan_id = eff.get("plan_id", "free")
-    limit = _get_ai_daily_limit(plan_id)
+    quota_user = quota_owner_id(eff, user_id)
+    plan = get_plan_row(supabase, plan_id)
+    limit = _get_ai_monthly_limit(plan, plan_id)
 
-    usage_resp = supabase.table("daily_usage").select("ai_calls").eq("user_id", user_id).eq("date", today).execute()
-    used = 0
-    if usage_resp.data and len(usage_resp.data) > 0:
-        used = usage_resp.data[0].get("ai_calls", 0) or 0
-    if used >= limit:
+    consumed = await consume_monthly_quota(supabase, quota_user, "ai", limit)
+    if consumed >= 0:
         raise HTTPException(
             status_code=429,
-            detail=f"Daily AI call limit ({limit} for {plan_id} plan) reached. Please try again tomorrow.",
+            detail=f"Monthly AI call limit ({limit} for {plan_id} plan) reached. Resets on the 1st.",
         )
     return plan_id
+
+
+async def _refund_ai(user_id: str) -> None:
+    """Give back a consumed AI unit when generation could not run."""
+    from app.services.plans import resolve_effective_subscription as _resolve
+    from app.services.usage import refund_monthly_quota
+
+    try:
+        supabase = get_supabase_admin()
+        try:
+            eff = _resolve(supabase, user_id)
+            quota_user = quota_owner_id(eff, user_id)
+        except Exception:
+            quota_user = user_id
+        await refund_monthly_quota(supabase, quota_user, "ai")
+    except Exception as e:  # never fail the request over accounting
+        logger.warning("Could not refund AI unit for user %s: %s", user_id[:8], e)
 
 
 @router.post("/pitch/{lead_id}")
@@ -162,16 +154,14 @@ async def generate_lead_pitch(
     await check_ai_limit(user_id)
 
     # Generate pitch (post-context prompt for LinkedIn leads).
-    if is_linkedin:
-        result = await generate_linkedin_pitch(lead=lead)
-    else:
-        result = await generate_pitch(lead=lead, analysis=analysis)
-
-    # Track AI usage
     try:
-        _increment_ai_usage(user_id)
-    except Exception as e:
-        logger.warning(f"Failed to track AI usage: {e}")
+        if is_linkedin:
+            result = await generate_linkedin_pitch(lead=lead)
+        else:
+            result = await generate_pitch(lead=lead, analysis=analysis)
+    except Exception:
+        await _refund_ai(user_id)
+        raise
 
     # Save pitch to the source table so it persists across reloads.
     try:
@@ -240,12 +230,11 @@ async def generate_lead_website_message(
 
     await check_ai_limit(user_id)
 
-    result = await generate_website_message(lead=lead, analysis=analysis)
-
     try:
-        _increment_ai_usage(user_id)
-    except Exception as e:
-        logger.warning(f"Failed to track AI usage: {e}")
+        result = await generate_website_message(lead=lead, analysis=analysis)
+    except Exception:
+        await _refund_ai(user_id)
+        raise
 
     return {
         "lead_id": lead_id,

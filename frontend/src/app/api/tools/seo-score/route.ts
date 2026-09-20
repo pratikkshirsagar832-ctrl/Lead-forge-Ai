@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import dns from 'node:dns/promises';
+import { clientIp } from '../../../../../lib/client-ip';
 
 export const runtime = 'nodejs';
 export const maxDuration = 60;
@@ -26,16 +27,55 @@ interface SeoResult {
 
 const GRADE = (s: number) => (s >= 90 ? 'A' : s >= 80 ? 'B' : s >= 70 ? 'C' : s >= 60 ? 'D' : 'F');
 
+function parseIpv4Numeric(host: string): string | null {
+  // Reject integer/octal/hex IP forms attackers use to bypass string checks:
+  // 2130706433, 0177.0.0.1, 0x7f.0.0.1, 0x7f000001
+  const h = host.trim().toLowerCase();
+  if (/^[0-9]+$/.test(h)) {
+    try {
+      const n = Number(h);
+      if (!Number.isSafeInteger(n) || n < 0 || n > 4294967295) return null;
+      return `${(n >>> 24) & 255}.${(n >>> 16) & 255}.${(n >>> 8) & 255}.${n & 255}`;
+    } catch {
+      return null;
+    }
+  }
+  if (/^(0x[0-9a-f]+|[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+|.*\.0x[0-9a-f]+.*|.*0[0-7]*\..*)$/.test(h) && /[xX]/.test(h)) {
+    // Contains hex — treat as suspicious numeric form, resolve via normalization
+    const parts = h.split('.');
+    const nums: number[] = [];
+    for (const p of parts) {
+      let v: number;
+      if (/^0x[0-9a-f]+$/.test(p)) v = parseInt(p, 16);
+      else if (/^0[0-7]+$/.test(p)) v = parseInt(p, 8);
+      else if (/^[0-9]+$/.test(p)) v = parseInt(p, 10);
+      else return null;
+      if (v < 0 || v > 255) return h; // let normal path handle
+      nums.push(v);
+    }
+    if (nums.length === 4) return nums.join('.');
+  }
+  return null;
+}
+
 function isPrivateIp(ip: string): boolean {
   if (ip.startsWith('::ffff:')) ip = ip.slice(7);
   if (ip === '::1' || ip === '0.0.0.0') return true;
+  // Normalize integer/octal/hex forms before range checks
+  const normalized = parseIpv4Numeric(ip);
+  if (normalized) ip = normalized;
+  if (/^0x/i.test(ip) || /^[0-9]+$/.test(ip.trim())) return true; // unparseable numeric -> block
   if (ip.includes(':')) {
     const lower = ip.toLowerCase();
-    // IPv6 loopback / link-local / unique-local / unspecified
+    // IPv6 loopback / link-local (fe80::/10) / unique-local / unspecified
     return (
       lower === '::' ||
       lower.startsWith('fc') ||
       lower.startsWith('fd') ||
+      lower.startsWith('fe80') ||
+      lower.startsWith('fe90') ||
+      lower.startsWith('fea0') ||
+      lower.startsWith('feb0') ||
       lower.startsWith('fe8') ||
       lower.startsWith('fe9') ||
       lower.startsWith('fea') ||
@@ -44,14 +84,14 @@ function isPrivateIp(ip: string): boolean {
     );
   }
   const parts = ip.split('.').map(Number);
-  if (parts.length !== 4) return true;
+  if (parts.length !== 4 || parts.some((n) => !Number.isInteger(n) || n < 0 || n > 255)) return true;
   const [a, b] = parts;
   return (
     a === 10 ||
     (a === 172 && b >= 16 && b <= 31) ||
     (a === 192 && b === 168) ||
     a === 127 ||
-    a === 169 || // 169.254 link-local
+    (a === 169 && b === 254) || // 169.254/16 link-local only
     a === 0 ||
     (a === 100 && b >= 64 && b <= 127) // CGNAT
   );
@@ -162,23 +202,41 @@ async function fetchText(url: string, timeoutMs: number, maxRedirects = 4): Prom
   throw new Error('Too many redirects');
 }
 
-// Simple in-memory rate limit (per-process): this route is public and runs
-// arbitrary fetches, so it must not become a free port-scanner / DoS vector.
+// In-memory rate limit (per-process) for a public route that runs arbitrary
+// fetches, so it cannot become a free port-scanner / DoS vector. The window is
+// PER CLIENT IP: a single global counter meant one abuser could lock the tool
+// out for every other visitor.
+// NOTE: DNS→fetch TOCTOU remains (no IP pinning) — DNS-rebind can still swap
+// the IP between assertPublicHost and fetch. Mitigated by re-validating every
+// redirect hop; full pinning needs a custom agent with lookup override.
 const RATE_WINDOW_MS = 60_000;
 const RATE_MAX_PER_WINDOW = 20;
-const hitTimes: number[] = [];
-function rateLimited(): boolean {
+const hitsByIp: Map<string, number[]> = new Map();
+
+function isRateLimited(ip: string): boolean {
   const now = Date.now();
-  while (hitTimes.length && hitTimes[0] < now - RATE_WINDOW_MS) hitTimes.shift();
-  if (hitTimes.length >= RATE_MAX_PER_WINDOW) return true;
-  hitTimes.push(now);
-  return false;
+  const times = (hitsByIp.get(ip) || []).filter((t) => now - t < RATE_WINDOW_MS);
+  hitsByIp.set(ip, times);
+  return times.length >= RATE_MAX_PER_WINDOW;
+}
+
+function recordHit(ip: string): void {
+  const now = Date.now();
+  const times = (hitsByIp.get(ip) || []).filter((t) => now - t < RATE_WINDOW_MS);
+  times.push(now);
+  hitsByIp.set(ip, times);
+  // Bound memory on a busy public endpoint.
+  if (hitsByIp.size > 10_000) {
+    for (const [key, value] of hitsByIp) {
+      const live = value.filter((t) => now - t < RATE_WINDOW_MS);
+      if (live.length === 0) hitsByIp.delete(key);
+      else hitsByIp.set(key, live);
+    }
+  }
 }
 
 export async function POST(req: NextRequest) {
-  if (rateLimited()) {
-    return NextResponse.json({ error: 'Too many requests. Try again shortly.' }, { status: 429 });
-  }
+  const ip = clientIp(req);
   const body = await req.json().catch(() => null);
   let rawUrl = (body?.url as string | undefined)?.trim();
   if (!rawUrl) {
@@ -186,8 +244,16 @@ export async function POST(req: NextRequest) {
   }
   if (!/^https?:\/\//i.test(rawUrl)) rawUrl = `https://${rawUrl}`;
 
+  // Pre-check without counting so blocked SSRF probes don't burn quota,
+  // but DNS-spam is still bounded by the same window.
+  if (isRateLimited(ip)) {
+    return NextResponse.json({ error: 'Too many requests. Try again shortly.' }, { status: 429 });
+  }
+
   try {
     const validated = await assertPublicUrl(rawUrl);
+    // Only validated requests consume budget.
+    recordHit(ip);
 
     const { text: html, finalUrl } = await fetchText(validated.toString(), 15000);
     const final = new URL(finalUrl);
@@ -202,8 +268,8 @@ export async function POST(req: NextRequest) {
     const h2Count = countOccurrences(html, 'h2');
     const h3Count = countOccurrences(html, 'h3');
 
-    const imgTags = html.match(/<img[\s>]/gi) || [];
-    const altCount = imgTags.filter((tag) => /alt=["']([^"']+)["']/i.test(tag) && !/alt=["']\s*["']/.test(tag)).length;
+    const imgTags = html.match(/<img[^>]*>/gi) || [];
+    const altCount = imgTags.filter((tag) => /alt\s*=\s*["']([^"']+)["']/i.test(tag) && !/alt\s*=\s*["']\s*["']/.test(tag)).length;
 
     const hasViewport = /<meta[^>]+name=["']viewport["']/i.test(html);
     const canonical = html.match(/<link[^>]+rel=["']canonical["'][^>]*>/i);

@@ -5,10 +5,12 @@ from fastapi import Depends, HTTPException, status
 from app.database import get_supabase_admin
 from app.middleware.auth_middleware import get_current_user
 from app.services.plans import (
+    get_monthly_limit,
     get_plan_row,
-    get_used_today,
+    quota_owner_id,
     resolve_effective_subscription,
 )
+from app.services.usage import consume_monthly_quota
 
 logger = logging.getLogger(__name__)
 
@@ -20,6 +22,7 @@ async def check_search_limit(current_user: dict = Depends(get_current_user)) -> 
     try:
         eff = resolve_effective_subscription(supabase, user_id)
         plan_id = eff["plan_id"]
+        quota_user = quota_owner_id(eff, user_id)
 
         if eff["status"] not in ("active", "trial"):
             raise HTTPException(
@@ -33,17 +36,21 @@ async def check_search_limit(current_user: dict = Depends(get_current_user)) -> 
             )
 
         plan = get_plan_row(supabase, plan_id)
-        searches_per_day = int(plan.get("searches_per_day", 0) or 0)
-        used_searches, _ = get_used_today(supabase, user_id)
-        remaining = max(0, searches_per_day - used_searches)
+        searches_per_month = get_monthly_limit(plan, "searches_per_month", "searches_per_day", 3)
 
-        if remaining <= 0:
+        # Consume the monthly unit atomically (v16: quotas reset on the 1st).
+        # Returns -1 when consumed, otherwise the remaining allowance.
+        # Team members share their owner's pool (quota_owner_id).
+        consumed = await consume_monthly_quota(
+            supabase, quota_user, "search", searches_per_month
+        )
+        if consumed >= 0:
             raise HTTPException(
                 status_code=status.HTTP_429_TOO_MANY_REQUESTS,
                 detail={
-                    "message": "Daily search limit reached",
-                    "remaining_searches": 0,
-                    "searches_per_day": searches_per_day,
+                    "message": "Monthly search limit reached",
+                    "remaining_searches": consumed,
+                    "searches_per_month": searches_per_month,
                     "plan": plan_id,
                     "upgrade_url": "/pricing",
                 },

@@ -18,6 +18,9 @@ interface PlanData {
   linkedin_hq_leads_monthly: number;
   gmb_leads_monthly: number;
   searches_per_day: number;
+  searches_per_month?: number;
+  leads_per_month?: number;
+  ai_calls_monthly?: number;
   team_seats: number;
   sort_order: number;
 }
@@ -37,9 +40,12 @@ const PLAN_COLORS: Record<string, string> = {
 };
 
 function getFeatures(plan: PlanData): string[] {
+  const searches = plan.searches_per_month ?? plan.searches_per_day;
   const features: string[] = [
     `${plan.linkedin_hq_leads_monthly} HQ LinkedIn leads/mo`,
     `${plan.gmb_leads_monthly} GMB leads/mo`,
+    `${searches} searches/mo`,
+    ...(plan.ai_calls_monthly ? [`${plan.ai_calls_monthly} AI pitches/mo`] : []),
     'Leads management',
     'Website analysis',
   ];

@@ -72,6 +72,16 @@ def get_progress(search_id: str) -> dict[str, Any] | None:
         return _PROGRESS.get(search_id)
 
 
+def clear_progress(search_id: str) -> None:
+    """Drop the live-progress entry for a finished search.
+
+    Entries were never removed, so a completed row could still be overwritten
+    by stale/live registry numbers on the next status poll.
+    """
+    with _PROGRESS_LOCK:
+        _PROGRESS.pop(search_id, None)
+
+
 def ha_normalize_country(value: str):
     """Normalize free-text country → canonical code (original geography table)."""
     return normalize_country(value)
@@ -234,9 +244,10 @@ class _ForceTypeStore:
                         "freelance bench", "overflow work", "white label freelancers",
                         "white-label freelancers")
 
-    def __init__(self, inner, lead_type: str) -> None:
+    def __init__(self, inner, lead_type: str, user_id: str | None = None) -> None:
         self._inner = inner
         self._lead_type = lead_type
+        self._user_id = user_id
 
     def __getattr__(self, name):
         return getattr(self._inner, name)
@@ -252,7 +263,49 @@ class _ForceTypeStore:
                          self._lead_type, text[:60].replace("\n", " "))
                 continue
             forced.append(item)
-        return self._inner.insert_leads_many(forced)
+        return self._inner.insert_leads_many(forced, **({"user_id": self._user_id} if self._user_id else {}))
+
+    def find_existing_post_urls(self, urls, user_id: str | None = None):
+        return self._inner.find_existing_post_urls(urls, user_id=user_id or self._user_id)
+
+    def record_rejections(self, rows, user_id: str | None = None):
+        try:
+            return self._inner.record_rejections(rows, user_id=user_id or self._user_id)
+        except TypeError:
+            return self._inner.record_rejections(rows)
+
+
+class _UserScopedStore:
+    """Delegating store wrapper that stamps the owning user on every row.
+
+    `ha_leads` / `ha_searches` carry a `user_id` column and are protected by
+    owner-scoped RLS (migration v8). The engine itself is user-agnostic, so the
+    owner is injected here — on the search row at create time and on every
+    persisted lead — instead of leaking user plumbing into the engine.
+    """
+
+    def __init__(self, inner, user_id: str) -> None:
+        self._inner = inner
+        self._user_id = user_id
+
+    def __getattr__(self, name):
+        return getattr(self._inner, name)
+
+    def insert_leads_many(self, rows, user_id: str | None = None) -> int:
+        # Always stamp OUR owner: an inner wrapper may forward a stale/absent id.
+        return self._inner.insert_leads_many(rows, user_id=self._user_id)
+
+    def find_existing_post_urls(self, urls, user_id: str | None = None):
+        # Scope ownership dedupe to OUR user so User B never skips posts
+        # owned by User A. Explicit arg wins, else our owner.
+        return self._inner.find_existing_post_urls(urls, user_id=user_id or self._user_id)
+
+    def record_rejections(self, rows, user_id: str | None = None):
+        try:
+            return self._inner.record_rejections(rows, user_id=user_id or self._user_id)
+        except TypeError:
+            # Backward compat with stores predating the user_id arg.
+            return self._inner.record_rejections(rows)
 
 
 def _content_matches_requested_type(text: str, lead_type: str) -> bool:
@@ -350,9 +403,10 @@ def _run_search_worker_body(search_id: str, user_id: str, settings: HaSettings, 
         # that a freelancer search returns freelancer-needed leads and an
         # agency search returns agency-sourcing leads — so the STORED type is
         # forced to the requested wire type before persistence.
+        store = _UserScopedStore(store, user_id)
         content_filter = None
         if force_lead_type and not all_types:
-            store = _ForceTypeStore(store, force_lead_type)
+            store = _ForceTypeStore(store, force_lead_type, user_id=user_id)
             # Pre-LLM direction gate (cheap, no DeepSeek spend): drop posts the
             # store would discard at save time BEFORE they are classified. The
             # engine therefore only counts posts that will really be saved —
@@ -391,6 +445,9 @@ def _run_search_worker_body(search_id: str, user_id: str, settings: HaSettings, 
             log.exception("Could not sync main search row %s", search_id)
     finally:
         _clear_cancel(search_id)
+        # The DB row is now authoritative — a leftover registry entry would let
+        # a later status poll overwrite the final counts with live progress.
+        clear_progress(search_id)
 
 
 def _sync_main_search_row(search_id: str, summary, user_id: str,
@@ -551,6 +608,7 @@ def run_hyperagent_pipeline(
             time_window=time_window,
             leads_needed=leads_needed,
             search_id=search_id,
+            user_id=user_id,
         )
         log.info("ha_searches row created for %s", search_id)
     except Exception as exc:

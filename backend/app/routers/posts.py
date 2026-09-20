@@ -66,7 +66,7 @@ async def scrape_profile_posts(
             raise
         except Exception as e:
             logger.error(f"Failed to load lead {lead_id}: {e}", exc_info=True)
-            raise HTTPException(status_code=500, detail=f"Failed to load lead: {str(e)}")
+            raise HTTPException(status_code=500, detail="Failed to load lead")
 
     try:
         result = await asyncio.to_thread(
@@ -81,12 +81,14 @@ async def scrape_profile_posts(
             lead_id=lead_id,
         )
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        logger.warning("Invalid scrape request for user %s: %s", user_id[:8], e)
+        raise HTTPException(status_code=400, detail="Invalid scrape request")
     except ApifyError as e:
-        raise HTTPException(status_code=502, detail=f"Post scraper provider failed: {e}")
+        logger.warning("Post scraper provider failed for user %s: %s", user_id[:8], e)
+        raise HTTPException(status_code=502, detail="Post scraper temporarily unavailable")
     except Exception as e:
         logger.error(f"[Posts:{user_id[:8]}] scrape failed: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Scrape failed: {str(e)}")
+        raise HTTPException(status_code=500, detail="Scrape failed")
 
     return ProfilePostScrapeResult(
         status="ok",
@@ -117,7 +119,7 @@ async def list_posts(
         )
     except Exception as e:
         logger.error(f"Failed to list posts: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Failed to list posts: {str(e)}")
+        raise HTTPException(status_code=500, detail="Failed to list posts")
     return ProfilePostsPaginatedResponse(
         items=[ProfilePostRow(**r) for r in data["items"]],
         total=data["total"],
@@ -151,26 +153,67 @@ def register_lead_posts_endpoint(app) -> None:
                 .limit(1)
                 .execute()
             )
-            if not (lead.data or []):
-                raise HTTPException(status_code=404, detail="Lead not found")
-        except HTTPException:
-            raise
         except Exception as e:
             logger.error(f"Failed to load lead {lead_id}: {e}", exc_info=True)
             raise HTTPException(status_code=500, detail="Internal server error")
 
-        lead = lead.data[0]
-        linkedin_url = (lead.get("linkedin_url") or "").strip()
+        owner_lead_id: str | None = None
+        profile_url = ""
+        if lead.data:
+            owner_lead_id = lead_id
+            profile_url = (lead.data[0].get("linkedin_url") or "").strip()
+        else:
+            # LinkedIn leads live in ha_leads (no user_id): ownership resolves
+            # through the parent search row. They used to 404 here even though
+            # the profile url is known, so the post history was unreachable.
+            try:
+                ha = (
+                    supabase.table("ha_leads")
+                    .select("id, search_id, author_profile_url")
+                    .eq("id", lead_id)
+                    .limit(1)
+                    .execute()
+                )
+                if ha.data:
+                    srow = (
+                        supabase.table("searches")
+                        .select("user_id")
+                        .eq("id", ha.data[0].get("search_id"))
+                        .limit(1)
+                        .execute()
+                    )
+                    if srow.data and srow.data[0].get("user_id") == user_id:
+                        profile_url = (ha.data[0].get("author_profile_url") or "").strip()
+            except Exception as e:
+                logger.error(f"Failed to resolve LinkedIn lead {lead_id}: {e}", exc_info=True)
+                raise HTTPException(status_code=500, detail="Internal server error")
+
+        if owner_lead_id is None and not profile_url:
+            raise HTTPException(status_code=404, detail="Lead not found")
+
         try:
             data = await asyncio.to_thread(
                 post_scraper_service.list_profile_posts,
                 supabase,
                 user_id,
-                lead_id=lead_id if linkedin_url else None,
-                profile_url=linkedin_url if linkedin_url else None,
+                lead_id=owner_lead_id,
+                profile_url=profile_url or None,
                 page=page,
                 per_page=per_page,
             )
+            # Stored profile urls may differ only by a trailing slash.
+            if not data["items"] and profile_url:
+                variant = profile_url.rstrip("/")
+                if variant and variant != profile_url:
+                    data = await asyncio.to_thread(
+                        post_scraper_service.list_profile_posts,
+                        supabase,
+                        user_id,
+                        lead_id=owner_lead_id,
+                        profile_url=variant,
+                        page=page,
+                        per_page=per_page,
+                    )
         except Exception as e:
             logger.error(f"Failed to list lead posts: {e}", exc_info=True)
             raise HTTPException(status_code=500, detail="Internal server error")

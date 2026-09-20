@@ -49,7 +49,8 @@ async def get_dashboard_stats(
         response = supabase.rpc("get_dashboard_stats", {"p_user_id": user_id}).execute()
         stats = dict(response.data) if response.data is not None else dict(zero)
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to fetch dashboard stats: {str(e)}")
+        logger.warning("Failed to fetch dashboard stats for user %s: %s", user_id[:8], e)
+        raise HTTPException(status_code=500, detail="Failed to fetch dashboard stats")
 
     # ---- LinkedIn counts (best-effort: never fail the whole endpoint) ------
     try:

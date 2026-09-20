@@ -60,15 +60,22 @@ def _is_safe_url(url: str) -> tuple[bool, str]:
     if not hostname:
         return False, "No hostname"
 
+    # Block userinfo (user:pass@host) — obscures the real destination and
+    # leaks credentials into logs/crawls.
+    if parsed.username or parsed.password or "@" in (parsed.netloc or ""):
+        return False, "Blocked userinfo in URL"
+
     # Block localhost variants
     blocked_names = {"localhost", "127.0.0.1", "0.0.0.0", "::1", "[::1]"}
     if hostname.lower() in blocked_names:
         return False, "Blocked localhost"
 
-    # Block cloud metadata IPs
-    blocked_ip_prefixes = ("169.254.", "10.", "192.168.", "172.")
-    if any(hostname.startswith(p) for p in blocked_ip_prefixes):
-        return False, f"Blocked private IP: {hostname}"
+    # NOTE: literal private ranges (10/8, 172.16/12, 192.168/16, 169.254/16
+    # metadata, IPv6 loopback/link-local/ULA) are handled by the ipaddress
+    # check below AND by the DNS resolution check further down. The previous
+    # `hostname.startswith(("10.", "172.", ...))` prefix test was both
+    # redundant and wrong: it refused legitimate public hostnames such as
+    # "10.com" or "172.example.org".
 
     # Block IPv6 private/link-local
     try:
@@ -78,19 +85,28 @@ def _is_safe_url(url: str) -> tuple[bool, str]:
     except ValueError:
         pass  # hostname is not an IP, try DNS resolution
 
-    # Resolve and check resolved IPs
+    # Resolve and check resolved IPs (with timeout so a slow attacker DNS
+    # can't hang a worker; check-then-fetch TOCTOU remains — callers must
+    # re-validate redirect targets, and IP pinning is done at fetch time
+    # where the HTTP client supports it).
     try:
+        socket.setdefaulttimeout(5)
         resolved = socket.getaddrinfo(hostname, None)
         for _, _, _, _, sockaddr in resolved:
             ip = ipaddress.ip_address(sockaddr[0])
             if ip.is_loopback or ip.is_private or ip.is_link_local or ip.is_reserved:
                 return False, f"Hostname resolves to private IP: {ip}"
-    except (socket.gaierror, OSError):
+    except (socket.gaierror, OSError, socket.timeout):
         return False, "DNS resolution failed"
+    finally:
+        try:
+            socket.setdefaulttimeout(None)
+        except Exception:
+            pass
 
-    # Block dangerous ports
+    # Block dangerous ports (infra + common dev/ops surfaces)
     port = parsed.port
-    if port is not None and port in (22, 25, 53, 135, 139, 445, 1433, 3306, 3389, 5432, 6379, 27017):
+    if port is not None and port in (22, 25, 53, 135, 139, 445, 1433, 3306, 3389, 5432, 6379, 27017, 3000, 5000, 8000, 8080, 8443, 9200, 11211, 27018):
         return False, f"Blocked port: {port}"
 
     return True, ""

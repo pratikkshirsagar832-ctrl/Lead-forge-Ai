@@ -48,7 +48,7 @@ def _row_is_active(row: dict) -> bool:
 
 def get_latest_subscription_row(supabase, user_id: str) -> dict | None:
     resp = supabase.table("user_subscriptions") \
-        .select("*") \
+        .select("id,user_id,plan_id,status,current_period_start,current_period_end,trial_end,razorpay_order_id,created_at") \
         .eq("user_id", user_id) \
         .order("created_at", desc=True) \
         .limit(10) \
@@ -97,9 +97,31 @@ def resolve_effective_subscription(supabase, user_id: str) -> dict:
             "team_owner_id": None, "username": None}
 
 
+def quota_owner_id(effective: dict, user_id: str) -> str:
+    """Quota pool owner: team members draw from their owner's pool.
+
+    Without this each team seat gets a full plan's daily/monthly allowance
+    (quota multiplied by seats). Owners use their own id.
+    """
+    return effective.get("team_owner_id") or user_id
+
+
 def get_plan_row(supabase, plan_id: str) -> dict:
-    resp = supabase.table("plans").select("*").eq("id", plan_id).limit(1).execute()
+    resp = supabase.table("plans").select("id,name,leads_per_day,searches_per_day,searches_per_month,leads_per_month,ai_calls_monthly,gmb_leads_monthly,linkedin_hq_leads_monthly,billing_cycle_days").eq("id", plan_id).limit(1).execute()
     return resp.data[0] if resp.data else {}
+
+
+def get_monthly_limit(plan: dict, key: str, legacy_key: str, default: int) -> int:
+    """Monthly cap with fallback to legacy daily column (pre-v16 rows)."""
+    if key in plan and plan.get(key) is not None:
+        try:
+            return max(0, int(plan.get(key) or 0))
+        except (TypeError, ValueError):
+            pass
+    try:
+        return max(0, int(plan.get(legacy_key, default) or default))
+    except (TypeError, ValueError):
+        return default
 
 
 def get_used_today(supabase, user_id: str) -> tuple[int, int]:
@@ -129,9 +151,27 @@ def get_monthly_searches_used(supabase, user_id: str) -> int:
 
 
 def remaining_leads_today(supabase, user_id: str) -> int:
-    """Python-side replacement for the get_remaining_leads RPC —
-    team-aware: members draw from their OWNER's plan quota scale."""
+    """Monthly generic lead allowance (v16): team-aware, owner pool."""
     eff = resolve_effective_subscription(supabase, user_id)
     plan = get_plan_row(supabase, eff["plan_id"])
-    _, used_leads = get_used_today(supabase, user_id)
-    return max(0, (plan.get("leads_per_day", 30) or 30) - used_leads)
+    quota_user = quota_owner_id(eff, user_id)
+    limit = get_monthly_limit(plan, "leads_per_month", "leads_per_day", 30)
+    used = get_monthly_counters(supabase, quota_user)
+    return max(0, limit - int(used.get("leads_used", 0) or 0))
+
+
+def get_monthly_counters(supabase, user_id: str) -> dict:
+    """searches_used / ai_calls_used / generic leads used this calendar month."""
+    month_str = datetime.now(timezone.utc).replace(day=1).date().isoformat()
+    try:
+        resp = supabase.table("monthly_usage") \
+            .select("searches_used,ai_calls_used,linkedin_hq_generated,gmb_generated") \
+            .eq("user_id", user_id).eq("usage_month", month_str).limit(1).execute()
+        row = (resp.data or [{}])[0] or {}
+        return {
+            "searches_used": int(row.get("searches_used", 0) or 0),
+            "ai_used": int(row.get("ai_calls_used", 0) or 0),
+            "leads_used": int(row.get("linkedin_hq_generated", 0) or 0) + int(row.get("gmb_generated", 0) or 0),
+        }
+    except Exception:
+        return {"searches_used": 0, "ai_used": 0, "leads_used": 0}

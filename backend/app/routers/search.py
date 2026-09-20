@@ -11,6 +11,7 @@ Endpoints:
 
 from datetime import datetime, timezone
 
+import asyncio
 import logging
 import math
 
@@ -30,43 +31,27 @@ from app.schemas.search import (
     SearchStatusResponse,
 )
 from app.services.pipeline import cancel_search, run_search_pipeline, load_more_maps_search
-from app.services.hyperagent_service import run_hyperagent_pipeline, get_progress as get_hyperagent_progress
+from app.services.hyperagent_service import (
+    run_hyperagent_pipeline,
+    get_progress as get_hyperagent_progress,
+    clear_progress as clear_hyperagent_progress,
+)
 
 router = APIRouter(prefix="/api/searches", tags=["Searches"])
 
 
-def _increment_daily_searches(supabase, user_id: str) -> None:
-    """Increment daily_usage.searches_run for this user today.
+async def _refund_daily_search(supabase, user_id: str) -> None:
+    """Give back the monthly search unit consumed by `check_search_limit`.
 
-    Prefers the atomic DB RPC (increment_daily_usage) so concurrent requests
-    never lose increments; falls back to read-modify-write only if the RPC is
-    unavailable on the live schema.
+    The unit is consumed atomically *before* the handler runs, so any path that
+    does not actually create a search row must return it — otherwise a failed
+    request silently burns one of the user's monthly searches.
     """
+    from app.services.usage import refund_monthly_quota
     try:
-        supabase.rpc("increment_daily_usage", {
-            "p_user_id": user_id, "p_leads": 0, "p_searches": 1, "p_ai_calls": 0,
-        }).execute()
-        return
-    except Exception as e:
-        logger.debug(f"RPC increment_daily_usage unavailable, falling back: {e}")
-    try:
-        from datetime import date
-        today_str = datetime.now(timezone.utc).date().isoformat()
-        existing = supabase.table("daily_usage").select("id,searches_run").eq("user_id", user_id).eq("date", today_str).limit(1).execute()
-        rows = existing.data or []
-        if rows:
-            cur = int(rows[0].get("searches_run", 0) or 0)
-            supabase.table("daily_usage").update({"searches_run": cur + 1}).eq("id", rows[0]["id"]).execute()
-        else:
-            supabase.table("daily_usage").insert({
-                "user_id": user_id,
-                "date": today_str,
-                "searches_run": 1,
-                "leads_generated": 0,
-                "ai_calls": 0,
-            }).execute()
-    except Exception as e:
-        logger.warning(f"Failed to increment daily searches: {e}")
+        await refund_monthly_quota(supabase, user_id, "search")
+    except Exception as e:  # never fail the request over an accounting refund
+        logger.warning("Could not refund monthly search unit for user %s: %s", user_id[:8], e)
 
 
 async def _release_unused_reservation(supabase, user_id: str, quota_source: str, amount: int) -> None:
@@ -80,8 +65,8 @@ async def _release_unused_reservation(supabase, user_id: str, quota_source: str,
     month_str = datetime.now(timezone.utc).replace(day=1).date().isoformat()
     reserved_col = "linkedin_hq_reserved" if quota_source == "linkedin" else "gmb_reserved"
     try:
-        existing = (
-            supabase.table("monthly_usage")
+        existing = await asyncio.to_thread(
+            lambda: supabase.table("monthly_usage")
             .select(reserved_col)
             .eq("user_id", user_id)
             .eq("usage_month", month_str)
@@ -96,8 +81,17 @@ async def _release_unused_reservation(supabase, user_id: str, quota_source: str,
                 .eq("user_id", user_id).eq("usage_month", month_str)
                 .execute()
             )
+            logger.info(
+                "Released %d unused %s reservation(s) for user %s (search row not created)",
+                amount, quota_source, user_id[:8],
+            )
     except Exception as e:
-        logger.warning(f"Could not release unused reservation for user {user_id}: {e}")
+        # Never fail the request over this, but make the leak visible: without
+        # the release the user permanently loses `amount` of monthly quota.
+        logger.warning(
+            "Could not release unused reservation for user %s (%d %s reserved): %s",
+            user_id[:8], amount, quota_source, e, exc_info=True,
+        )
 
 
 @router.post("", response_model=SearchResponse, status_code=status.HTTP_201_CREATED)
@@ -123,23 +117,34 @@ async def create_search(
         lead_types = request.lead_types or []
 
     # Check monthly lead quota and reserve leads (server-authoritative).
-    from app.services.plans import get_plan_row, resolve_effective_subscription
+    # `check_search_limit` already consumed one daily search unit, so every
+    # rejection between here and the searches row must give it back.
+    from app.services.plans import get_plan_row, quota_owner_id, resolve_effective_subscription
     from app.services.usage import reserve_monthly_leads
-    effective = resolve_effective_subscription(supabase, user_id)
-    plan = get_plan_row(supabase, effective["plan_id"])
-    quota_source = "linkedin" if request.source == "linkedin" else "google_maps"
-    plan_limit = int(plan.get(
-        "linkedin_hq_leads_monthly" if quota_source == "linkedin" else "gmb_leads_monthly", 0
-    ) or 0)
-    # LinkedIn lead runs are capped at 10 requested leads (UI offers 3/5/10).
-    effective_max_results = request.max_results
-    if request.source == "linkedin":
-        effective_max_results = min(request.max_results, 10)
+    quota_user = user_id
+    try:
+        effective = resolve_effective_subscription(supabase, user_id)
+        quota_user = quota_owner_id(effective, user_id)
+        plan = get_plan_row(supabase, effective["plan_id"])
+        quota_source = "linkedin" if request.source == "linkedin" else "google_maps"
+        plan_limit = int(plan.get(
+            "linkedin_hq_leads_monthly" if quota_source == "linkedin" else "gmb_leads_monthly", 0
+        ) or 0)
+        # LinkedIn lead runs are capped at 10 requested leads (UI offers 3/5/10).
+        effective_max_results = request.max_results
+        if request.source == "linkedin":
+            effective_max_results = min(request.max_results, 10)
 
-    reservation_amount = await reserve_monthly_leads(
-        supabase, user_id, effective["plan_id"], quota_source, effective_max_results
-    )
+        reservation_amount = await reserve_monthly_leads(
+            supabase, quota_user, effective["plan_id"], quota_source, effective_max_results
+        )
+    except Exception:
+        await _refund_daily_search(supabase, quota_user)
+        raise
+
     if reservation_amount <= 0:
+        # Monthly quota exhausted: nothing was reserved and no search will run.
+        await _refund_daily_search(supabase, quota_user)
         raise HTTPException(
             status_code=403,
             detail=f"Monthly {quota_source} lead limit reached ({plan_limit}/{plan_limit}). "
@@ -189,14 +194,13 @@ async def create_search(
             search = response.data[0]
         except Exception as e:
             # Do not leak the reservation if the row could not be created.
-            await _release_unused_reservation(supabase, user_id, quota_source, reservation_amount)
+            await _release_unused_reservation(supabase, quota_user, quota_source, reservation_amount)
+            await _refund_daily_search(supabase, quota_user)
             if not isinstance(e, HTTPException):
                 logger.error(f"Failed to create linkedin search: {e}")
             if isinstance(e, HTTPException):
                 raise
             raise HTTPException(status_code=500, detail="Failed to create search")
-
-        _increment_daily_searches(supabase, user_id)
 
         background_tasks.add_task(
             run_hyperagent_pipeline,
@@ -224,7 +228,7 @@ async def create_search(
                 "status": "queued",
                 "message": "Search queued",
                 "enrich_emails": request.enrich_emails,
-                "max_results": request.max_results,
+                "max_results": effective_max_results,
                 "lead_types": lead_types,
                 "quota_source": quota_source,
                 "reserved_leads": reservation_amount,
@@ -236,14 +240,12 @@ async def create_search(
         search = response.data[0]
     except Exception as e:
         # Do not leak the reservation if the row could not be created.
-        await _release_unused_reservation(supabase, user_id, quota_source, reservation_amount)
+        await _release_unused_reservation(supabase, quota_user, quota_source, reservation_amount)
+        await _refund_daily_search(supabase, quota_user)
         if isinstance(e, HTTPException):
             raise
         logger.error(f"Failed to create search: {e}")
         raise HTTPException(status_code=500, detail="Failed to create search")
-
-    # Increment daily_usage.searches_run
-    _increment_daily_searches(supabase, user_id)
 
     background_tasks.add_task(
         run_search_pipeline,
@@ -326,8 +328,11 @@ async def get_search_history(
             items=[SearchHistoryItem(**s) for s in (response.data or [])],
             total=total,
         )
+    except HTTPException:
+        raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to fetch searches: {str(e)}")
+        logger.warning("Failed to fetch searches for user %s: %s", user_id[:8] if 'user_id' in dir() else 'unknown', e)
+        raise HTTPException(status_code=500, detail="Failed to fetch searches")
 
 
 @router.get("/{search_id}", response_model=SearchResponse)
@@ -354,7 +359,8 @@ async def get_search_detail(
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to fetch search: {str(e)}")
+        logger.warning("Failed to fetch search %s: %s", search_id, e)
+        raise HTTPException(status_code=500, detail="Failed to fetch search")
 
 
 @router.get("/{search_id}/results")
@@ -452,8 +458,11 @@ async def get_search_results(
             "per_page": per_page,
             "total_pages": max(1, math.ceil(total / per_page)),
         }
+    except HTTPException:
+        raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to fetch results: {str(e)}")
+        logger.warning("Failed to fetch results for %s: %s", search_id, e)
+        raise HTTPException(status_code=500, detail="Failed to fetch results")
 
 
 @router.get("/{search_id}/status", response_model=SearchStatusResponse)
@@ -542,6 +551,11 @@ async def get_search_status(
                 row["serper_requests_used"] = int(ha_row.get("serper_requests_used") or 0)
                 row["deepseek_calls_used"] = int(ha_row.get("deepseek_calls_used") or 0)
                 row["stop_reason"] = ha_row.get("stop_reason")
+
+        # A terminal row is authoritative: drop any leftover registry entry so
+        # it can never overwrite the final counts on a later poll.
+        if row.get("status") in ("completed", "failed", "cancelled"):
+            clear_hyperagent_progress(search_id)
 
         # Merge Hyperagent live progress if available
         ha_progress = get_hyperagent_progress(search_id)
@@ -639,7 +653,8 @@ async def get_search_status(
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to fetch search status: {str(e)}")
+        logger.warning("Failed to fetch search status %s: %s", search_id, e)
+        raise HTTPException(status_code=500, detail="Failed to fetch search status")
 
 
 @router.post("/{search_id}/cancel")
@@ -690,7 +705,8 @@ async def cancel_search_endpoint(
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to cancel search: {str(e)}")
+        logger.warning("Failed to cancel search %s: %s", search_id, e)
+        raise HTTPException(status_code=500, detail="Failed to cancel search")
 
 
 @router.post("/{search_id}/load-more")
@@ -737,7 +753,8 @@ async def load_more_results(
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to load more results: {str(e)}")
+        logger.warning("Failed to load more for %s: %s", search_id, e)
+        raise HTTPException(status_code=500, detail="Failed to load more results")
 
 
 class DebugSearchRequest(BaseModel):

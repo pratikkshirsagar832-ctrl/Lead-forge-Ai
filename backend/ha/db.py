@@ -32,7 +32,8 @@ class Store(ABC):
     # searches ------------------------------------------------------------
     @abstractmethod
     def create_search(self, *, service: str, country: str, lead_type: str, time_window: str,
-                      leads_needed: int) -> dict[str, Any]: ...
+                      leads_needed: int, search_id: str | None = None,
+                      user_id: str | None = None) -> dict[str, Any]: ...
 
     @abstractmethod
     def get_search(self, search_id: str) -> dict[str, Any] | None: ...
@@ -45,13 +46,15 @@ class Store(ABC):
 
     # leads ------------------------------------------------------------------
     @abstractmethod
-    def insert_leads_many(self, rows: Iterable[dict[str, Any]]) -> int: ...
+    def insert_leads_many(self, rows: Iterable[dict[str, Any]],
+                          user_id: str | None = None) -> int: ...
 
     @abstractmethod
-    def find_existing_post_urls(self, urls: Iterable[str]) -> set[str]:
-        """Post URLs already saved across ANY search (leads.post_url is
-        globally unique). The engine uses this to skip already-owned posts
-        and keep looping until it delivers exactly N NEW leads."""
+    def find_existing_post_urls(self, urls: Iterable[str], user_id: str | None = None) -> set[str]:
+        """Post URLs already saved for this owner (or across ANY search when
+        user_id is None for backward compat). The engine uses this to skip
+        already-owned posts and keep looping until it delivers exactly N NEW
+        leads. Scoping by user_id prevents User B skipping posts User A owns."""
 
     @abstractmethod
     def list_leads(self, *, search_id: str | None = None, time_window: str | None = None,
@@ -60,7 +63,7 @@ class Store(ABC):
     @abstractmethod
     def patch_lead(self, lead_id: str, *, status: str | None = None, notes: str | None = None) -> dict[str, Any] | None: ...
 
-    def record_rejections(self, rows: list[dict[str, Any]]) -> None:
+    def record_rejections(self, rows: list[dict[str, Any]], user_id: str | None = None) -> None:
         """Best-effort persistence of rejected-candidate verdicts (Tier-0
         observability). Default no-op so stores that predate the table never
         break a search; SupabaseStore writes to `ha_rejections`."""
@@ -93,15 +96,17 @@ class MemoryStore(Store):
         return str(uuid.uuid4())
 
     # searches ---------------------------------------------------------------
-    def create_search(self, *, service, country, lead_type, time_window, leads_needed) -> dict[str, Any]:
+    def create_search(self, *, service, country, lead_type, time_window, leads_needed,
+                      search_id: str | None = None, user_id: str | None = None) -> dict[str, Any]:
         with self._lock:
             row = {
-                "id": self._new_id(),
+                "id": search_id or self._new_id(),
                 "service": service,
                 "country": country or "",
                 "lead_type": lead_type,
                 "time_window": time_window,
                 "leads_needed": leads_needed,
+                "user_id": user_id,
                 "status": "queued",
                 "found_count": 0,
                 "accepted_count": 0,
@@ -136,7 +141,8 @@ class MemoryStore(Store):
             return [dict(r) for r in rows[:limit]]
 
     # leads ---------------------------------------------------------------------
-    def insert_leads_many(self, rows: Iterable[dict[str, Any]]) -> int:
+    def insert_leads_many(self, rows: Iterable[dict[str, Any]],
+                          user_id: str | None = None) -> int:
         inserted = 0
         with self._lock:
             for row in rows:
@@ -147,6 +153,7 @@ class MemoryStore(Store):
                 lead = {
                     "id": lead_id,
                     "search_id": row.get("search_id"),
+                    "user_id": user_id or row.get("user_id"),
                     "lead_type": row.get("lead_type"),
                     "time_window": row.get("time_window"),
                     "post_url": url,
@@ -166,11 +173,23 @@ class MemoryStore(Store):
                 inserted += 1
         return inserted
 
-    def find_existing_post_urls(self, urls: Iterable[str]) -> set[str]:
+    def find_existing_post_urls(self, urls: Iterable[str], user_id: str | None = None) -> set[str]:
         wanted = {u.strip() for u in urls if u and u.strip()}
         if not wanted:
             return set()
         with self._lock:
+            if user_id:
+                # Per-user scoping: only suppress posts THIS user already owns.
+                # Rows with no user_id predate scoping — don't suppress them
+                # for a specific user to avoid cross-user leaks.
+                out: set[str] = set()
+                for u in wanted:
+                    lid = self._lead_by_url.get(u)
+                    if lid is None:
+                        continue
+                    if (self._leads.get(lid) or {}).get("user_id") == user_id:
+                        out.add(u)
+                return out
             return {u for u in wanted if u in self._lead_by_url}
 
     def list_leads(self, *, search_id=None, time_window=None, status=None, limit: int = 500) -> list[dict[str, Any]]:
@@ -229,6 +248,27 @@ class SupabaseStore(Store):
         from supabase import create_client
 
         self._client = create_client(url, service_role_key)
+        # Lazily probed: True when the table has the user_id column that
+        # migration v8 (security hardening) added. Probed once per table so a
+        # pre-v8 database degrades instead of failing every insert.
+        self._user_col_cache: dict[str, bool] = {}
+
+    def _has_user_column(self, table: str) -> bool:
+        # Only cache positive probes. A negative probe means "migration not
+        # applied YET" — caching it forever would pin the process to the
+        # degraded path even after v8/v12 is applied. Retrying negatives is
+        # one cheap indexed select per insert path.
+        if self._user_col_cache.get(table) is True:
+            return True
+        try:
+            self._client.table(table).select("user_id").limit(1).execute()
+            ok = True
+        except Exception as exc:  # noqa: BLE001 - pre-v8 schema
+            log.info("Supabase %s.user_id missing (migration v8 not applied?): %s", table, exc)
+            ok = False
+        if ok:
+            self._user_col_cache[table] = True
+        return ok
 
     # -- JSON-safe outbound values -----------------------------------------
     # supabase-py serializes payloads with httpx, which rejects native
@@ -251,13 +291,18 @@ class SupabaseStore(Store):
 
     # searches ------------------------------------------------------------
     def create_search(self, *, service, country, lead_type, time_window, leads_needed,
-                      search_id: str | None = None) -> dict[str, Any]:
+                      search_id: str | None = None,
+                      user_id: str | None = None) -> dict[str, Any]:
         row: dict[str, Any] = {
             "service": service, "country": country or "", "lead_type": lead_type,
             "time_window": time_window, "leads_needed": leads_needed,
         }
         if search_id:
             row["id"] = search_id
+        # Ownership: RLS on ha_searches scopes rows by user_id (migration v8),
+        # so every row the engine creates must carry its owner.
+        if user_id and self._has_user_column("ha_searches"):
+            row["user_id"] = user_id
         resp = self._client.table("ha_searches").insert(row).execute()
         return resp.data[0]
 
@@ -282,8 +327,19 @@ class SupabaseStore(Store):
         return resp.data
 
     # leads -----------------------------------------------------------------
-    def insert_leads_many(self, rows: Iterable[dict[str, Any]]) -> int:
-        payload = [self._jsonable(dict(r)) for r in rows]
+    def insert_leads_many(self, rows: Iterable[dict[str, Any]],
+                          user_id: str | None = None) -> int:
+        stamp = bool(user_id) and self._has_user_column("ha_leads")
+        payload = []
+        for r in rows:
+            item = self._jsonable(dict(r))
+            # RLS on ha_leads scopes rows by user_id (migration v8). Stamp the
+            # owner on every row; drop it again on a pre-v8 schema.
+            if stamp:
+                item["user_id"] = user_id
+            else:
+                item.pop("user_id", None)
+            payload.append(item)
         if not payload:
             return 0
         try:
@@ -306,7 +362,7 @@ class SupabaseStore(Store):
                     log.warning("Supabase per-row insert skipped (duplicate or error): %s", per_row)
             return inserted
 
-    def find_existing_post_urls(self, urls: Iterable[str]) -> set[str]:
+    def find_existing_post_urls(self, urls: Iterable[str], user_id: str | None = None) -> set[str]:
         wanted = sorted({u.strip() for u in urls if u and u.strip()})
         if not wanted:
             return set()
@@ -315,7 +371,11 @@ class SupabaseStore(Store):
         for i in range(0, len(wanted), 200):
             chunk = wanted[i : i + 200]
             try:
-                resp = self._client.table("ha_leads").select("post_url").in_("post_url", chunk).execute()
+                q = self._client.table("ha_leads").select("post_url").in_("post_url", chunk)
+                # Per-user scoping: never suppress User B on posts User A owns.
+                if user_id and self._has_user_column("ha_leads"):
+                    q = q.eq("user_id", user_id)
+                resp = q.execute()
                 existing.update(row["post_url"] for row in (resp.data or []))
             except Exception as exc:  # noqa: BLE001 - treat as "none known"; insert dedupes anyway
                 log.warning("Supabase find_existing_post_urls failed (assuming new): %s", exc)
@@ -350,7 +410,7 @@ class SupabaseStore(Store):
         resp = self._client.table("ha_leads").update(self._jsonable(payload)).eq("id", lead_id).execute()
         return resp.data[0] if resp.data else None
 
-    def record_rejections(self, rows: list[dict[str, Any]]) -> None:
+    def record_rejections(self, rows: list[dict[str, Any]], user_id: str | None = None) -> None:
         """Persist rejected-candidate verdicts to `ha_rejections` (Tier-0
         observability). Tolerant of the table not being migrated yet, and keeps
         a rolling 14-day window."""
@@ -361,6 +421,8 @@ class SupabaseStore(Store):
                 "reason", "evidence", "accepted", "is_qualified")}
             if not keep.get("post_url"):
                 continue
+            if user_id:
+                keep["user_id"] = user_id
             payload.append(self._jsonable(keep))
         if not payload:
             return

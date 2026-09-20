@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { safeEqual, ADMIN_PASSWORD, sessionCookieHeader } from '../../../../../lib/admin-auth';
+import { clientIp } from '../../../../../lib/client-ip';
 
 export const runtime = 'nodejs';
 
@@ -7,16 +8,13 @@ export const runtime = 'nodejs';
 // sliding window. (Stateless deployments: process-local is acceptable for a
 // single-admin panel; if you run many Next instances, terminate behind one
 // proxy so each instance still sees most traffic, or move to a shared store.)
+//
+// The IP comes from lib/client-ip, which does NOT trust the first
+// X-Forwarded-For hop: taking that hop let an attacker rotate the header and
+// bypass this lockout entirely.
 const WINDOW_MS = 15 * 60 * 1000; // 15 minutes
 const MAX_ATTEMPTS = 8;
 const failed: Map<string, number[]> = new Map();
-
-function clientIp(req: NextRequest): string {
-  // Behind nginx/Vercel the first X-Forwarded-For hop is the real client.
-  const fwd = req.headers.get('x-forwarded-for');
-  if (fwd) return fwd.split(',')[0].trim();
-  return req.headers.get('x-real-ip') ?? 'unknown';
-}
 
 function isLockedOut(ip: string): boolean {
   const now = Date.now();

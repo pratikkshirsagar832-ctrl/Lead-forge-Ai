@@ -35,6 +35,21 @@ from app.services.analyzer_service import analyze_website
 
 router = APIRouter(prefix="/api/leads", tags=["Leads"])
 
+_ALLOWED_USER_STATUS = {"new", "contacted", "replied", "converted", "lost"}
+_ALLOWED_LEAD_CATEGORY = {"hot", "warm"}
+_ALLOWED_SOURCE = {"", "google_maps", "linkedin", "all"}
+_ALLOWED_POST_TYPE = {"buyer", None, ""}
+
+
+def _sanitize_search(value: str | None, max_len: int = 100) -> str | None:
+    if not value:
+        return None
+    v = value.strip()[:max_len]
+    if not v:
+        return None
+    # Escape PostgREST/ilike wildcards so user input can't broaden the match.
+    return v.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
 
 @router.get("", response_model=LeadPaginatedResponse)
 async def list_leads(
@@ -63,8 +78,18 @@ async def list_leads(
     offset = (page - 1) * per_page
 
     src = (source or "").lower()
+    if src not in _ALLOWED_SOURCE:
+        src = ""
     include_maps = src in ("", "google_maps", "all")
     include_li = src in ("", "linkedin", "all")
+    # Allowlist filters to prevent PostgREST filter injection via `or_`.
+    if user_status is not None and user_status not in _ALLOWED_USER_STATUS:
+        raise HTTPException(status_code=400, detail="Invalid user_status")
+    if lead_category is not None and lead_category not in _ALLOWED_LEAD_CATEGORY:
+        raise HTTPException(status_code=400, detail="Invalid lead_category")
+    if post_type is not None and post_type not in ("buyer",):
+        raise HTTPException(status_code=400, detail="Invalid post_type")
+    safe_search = _sanitize_search(search)
 
     items: list[dict] = []
     total = 0
@@ -86,9 +111,9 @@ async def list_leads(
             if is_favorite is not None:
                 count_query = count_query.eq("is_favorite", is_favorite)
                 data_query = data_query.eq("is_favorite", is_favorite)
-            if search:
-                count_query = count_query.ilike("business_name", f"%{search}%")
-                data_query = data_query.ilike("business_name", f"%{search}%")
+            if safe_search:
+                count_query = count_query.ilike("business_name", f"%{safe_search}%")
+                data_query = data_query.ilike("business_name", f"%{safe_search}%")
 
             total += count_query.execute().count or 0
 
@@ -98,40 +123,28 @@ async def list_leads(
             # Fetch up to a page window per source, then merge in Python below.
             maps_items = data_query.order(s_by, desc=desc).limit(5000).execute().data or []
             items.extend(maps_items)
+        except HTTPException:
+            raise
         except Exception as e:
-            raise HTTPException(status_code=500, detail=f"Failed to fetch leads: {str(e)}")
+            logger.warning("Failed to fetch maps leads for user %s: %s", user_id[:8], e)
+            raise HTTPException(status_code=500, detail="Failed to fetch leads")
 
     # ---- LinkedIn leads (`ha_leads`) owned via searches.id -----------------
     if include_li:
         try:
-            # Fetch the searches rows this user owns (LinkedIn only) to scope
-            # ha_leads ownership, since ha_leads has no user_id column.
-            s_query = supabase.table("searches").select("id").eq("user_id", user_id).eq("source", "linkedin")
-            if search_id:
-                s_query = s_query.eq("id", search_id)
-            s_rows = s_query.execute().data or []
-            li_ids = [r["id"] for r in s_rows]
-            li_items: list[dict] = []
-            if li_ids:
-                for chunk in _chunks(li_ids, 200):
-                    q = supabase.table("ha_leads").select("*").in_("search_id", chunk)
-                    if post_type:
-                        lt = {"buyer": "need_freelancer"}.get(post_type)
-                        if lt:
-                            q = q.eq("lead_type", lt)
-                    if user_status:
-                        # user_status exists after migration v10; before it,
-                        # fall back to the engine lifecycle column.
-                        q = q.or_(f"user_status.eq.{user_status},status.eq.{user_status}")
-                    li_items.extend(q.order("post_date", desc=True).limit(5000).execute().data or [])
-            # Map to the LeadListItem shape the frontend expects.
-            for r in li_items:
-                if search and search.lower() not in (r.get("author_name") or "").lower():
-                    continue
-                items.append(_map_ha_lead(r))
-            total += len(li_items)
+            items.extend(_fetch_linkedin_leads(
+                supabase, user_id,
+                search_id=search_id,
+                post_type=post_type,
+                user_status=user_status,
+                is_favorite=is_favorite,
+                search=safe_search,
+            ))
+        except HTTPException:
+            raise
         except Exception as e:
-            raise HTTPException(status_code=500, detail=f"Failed to fetch LinkedIn leads: {str(e)}")
+            logger.warning("Failed to fetch LinkedIn leads for user %s: %s", user_id[:8], e)
+            raise HTTPException(status_code=500, detail="Failed to fetch LinkedIn leads")
 
     # ---- Merge across sources, dedupe, sort, paginate ----------------------
     deduped: dict[str, dict] = {}
@@ -174,11 +187,73 @@ async def list_leads(
     )
 
 
+def _fetch_linkedin_leads(
+    supabase,
+    user_id: str,
+    *,
+    search_id: Optional[str] = None,
+    post_type: Optional[str] = None,
+    user_status: Optional[str] = None,
+    is_favorite: Optional[bool] = None,
+    search: Optional[str] = None,
+    limit: int = 5000,
+) -> list[dict]:
+    """This user's LinkedIn (`ha_leads`) leads, mapped to LeadListItem shape.
+
+    Shared by the list AND export endpoints: the export used to read only the
+    Google-Maps `leads` table, so every LinkedIn lead was silently missing from
+    a Pro/Agency customer's CSV (and `source=linkedin` exported nothing).
+
+    Ownership: ha_leads has no user_id — the user owns the parent `searches`
+    row. `is_favorite` is filtered in Python rather than in the query because
+    the column only exists after migration v10, and a missing column would fail
+    the whole request for every user.
+    """
+    s_query = (
+        supabase.table("searches")
+        .select("id")
+        .eq("user_id", user_id)
+        .eq("source", "linkedin")
+    )
+    if search_id:
+        s_query = s_query.eq("id", search_id)
+    s_rows = s_query.execute().data or []
+    li_ids = [r["id"] for r in s_rows]
+    li_items: list[dict] = []
+    if li_ids:
+        for chunk in _chunks(li_ids, 200):
+            q = supabase.table("ha_leads").select("*").in_("search_id", chunk)
+            if post_type:
+                lt = {"buyer": "need_freelancer"}.get(post_type)
+                if lt:
+                    q = q.eq("lead_type", lt)
+            if user_status:
+                # user_status exists after migration v10; before it,
+                # fall back to the engine lifecycle column.
+                q = q.or_(f"user_status.eq.{user_status},status.eq.{user_status}")
+            li_items.extend(
+                q.order("post_date", desc=True).limit(limit).execute().data or []
+            )
+
+    out: list[dict] = []
+    for r in li_items:
+        if search and search.lower() not in (r.get("author_name") or "").lower():
+            continue
+        mapped = _map_ha_lead(r)
+        if is_favorite is not None and bool(mapped.get("is_favorite")) != bool(is_favorite):
+            continue
+        out.append(mapped)
+    return out
+
+
 def _coerce_lead(d: dict) -> dict:
     """Normalize a raw DB row (Maps `leads` or LinkedIn `ha_leads`) to values
     the LeadListItem schema accepts. Without this, a null lead_category /
     connections_count or a float website_health_score 500s the list."""
     out = dict(d)
+    if not out.get("business_name"):
+        # LeadDetail requires a string; a NULL business_name would 500 the page.
+        out["business_name"] = "Unknown Business"
     if out.get("lead_category") is None:
         # Schema requires a non-optional str; 'warm' is hidden in the UI for
         # LinkedIn leads (which have no reliable category).
@@ -333,25 +408,51 @@ async def export_leads_csv(
         })
 
     try:
-        query = supabase.table("leads").select("*").eq("user_id", user_id)
-        if search_id:
-            query = query.eq("search_id", search_id)
-        if source:
-            query = query.eq("source", source)
-        if post_type:
-            query = query.eq("post_type", post_type)
-        if lead_category:
-            query = query.eq("lead_category", lead_category)
-        if user_status:
-            query = query.eq("user_status", user_status)
-        if is_favorite is not None:
-            query = query.eq("is_favorite", is_favorite)
-        if search:
-            query = query.ilike("business_name", f"%{search}%")
+        # Same source selection as GET /api/leads: the export must contain the
+        # same leads the user can see in the dashboard.
+        src = (source or "").lower()
+        include_maps = src in ("", "google_maps", "all")
+        include_li = src in ("", "linkedin", "all")
 
-        query = query.order("created_at", desc=True).limit(EXPORT_MAX_ROWS)
-        response = query.execute()
-        leads = response.data or []
+        leads: list[dict] = []
+        if include_maps:
+            query = supabase.table("leads").select("*").eq("user_id", user_id)
+            if search_id:
+                query = query.eq("search_id", search_id)
+            if src == "google_maps":
+                query = query.eq("source", source)
+            if post_type:
+                query = query.eq("post_type", post_type)
+            if lead_category:
+                query = query.eq("lead_category", lead_category)
+            if user_status:
+                query = query.eq("user_status", user_status)
+            if is_favorite is not None:
+                query = query.eq("is_favorite", is_favorite)
+            if search:
+                query = query.ilike("business_name", f"%{search}%")
+
+            query = query.order("created_at", desc=True).limit(EXPORT_MAX_ROWS)
+            leads.extend(query.execute().data or [])
+
+        # LinkedIn rows live in ha_leads; without this the export silently
+        # omitted them (source=linkedin produced a header-only CSV).
+        if include_li:
+            try:
+                leads.extend(_fetch_linkedin_leads(
+                    supabase, user_id,
+                    search_id=search_id,
+                    post_type=post_type,
+                    user_status=user_status,
+                    is_favorite=is_favorite,
+                    search=search,
+                    limit=EXPORT_MAX_ROWS,
+                ))
+            except Exception as li_err:
+                # Never fail a Maps export because the LinkedIn table is unhappy.
+                logger.warning(f"LinkedIn rows omitted from CSV export: {li_err}")
+
+        leads = leads[:EXPORT_MAX_ROWS]
 
         output = io.StringIO()
         fieldnames = [
@@ -387,8 +488,11 @@ async def export_leads_csv(
             headers={"Content-Disposition": "attachment; filename=leads_export.csv"},
         )
 
+    except HTTPException:
+        raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to export leads: {str(e)}")
+        logger.warning("Failed to export leads: %s", e)
+        raise HTTPException(status_code=500, detail="Failed to export leads")
 
 
 @router.post("/{lead_id}/analyze-website")
@@ -466,7 +570,7 @@ async def analyze_lead_website(
         raise
     except Exception as e:
         logger.error(f"Failed to analyze website for lead {lead_id}: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Analysis failed: {str(e)}")
+        raise HTTPException(status_code=500, detail="Analysis failed")
 
 
 @router.get("/{lead_id}", response_model=LeadDetail)
@@ -493,7 +597,9 @@ async def get_lead_detail(
             .execute()
         )
         if response.data and len(response.data) > 0:
-            lead = response.data[0]
+            # Same coercion the list endpoint applies: raw rows can carry a
+            # numeric score / NULL counters that the response schema rejects.
+            lead = _coerce_lead(response.data[0])
             # Fetch associated website analyses
             try:
                 analysis_resp = (
@@ -573,7 +679,8 @@ async def update_lead_status(
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to update status: {str(e)}")
+        logger.warning("Failed to update status for lead %s: %s", lead_id, e)
+        raise HTTPException(status_code=500, detail="Failed to update status")
 
 
 @router.patch("/{lead_id}/notes")
@@ -610,7 +717,8 @@ async def update_lead_notes(
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to update notes: {str(e)}")
+        logger.warning("Failed to update notes for lead %s: %s", lead_id, e)
+        raise HTTPException(status_code=500, detail="Failed to update notes")
 
 
 @router.patch("/{lead_id}/favorite")
@@ -658,4 +766,5 @@ async def toggle_lead_favorite(
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to update favorite: {str(e)}")
+        logger.warning("Failed to update favorite for lead %s: %s", lead_id, e)
+        raise HTTPException(status_code=500, detail="Failed to update favorite")

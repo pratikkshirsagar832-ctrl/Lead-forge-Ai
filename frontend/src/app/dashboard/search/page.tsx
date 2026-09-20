@@ -636,7 +636,7 @@ function SearchInfoSection({ isAtLimit, remaining, searchesPerDay, isStarting, s
           <AlertCircle className="w-5 h-5 text-rose-400 shrink-0 mt-0.5" />
           <div>
             <p className="text-sm text-rose-300 font-semibold">Search limit reached</p>
-            <p className="text-xs text-rose-400/80 mt-1">You&apos;ve used all {searchesPerDay} searches. Upgrade your plan for more.</p>
+            <p className="text-xs text-rose-400/80 mt-1">You&apos;ve used all {searchesPerDay} searches this month. Resets on the 1st. Upgrade your plan for more.</p>
             <Link href="/dashboard/billing" className="text-xs text-steel hover:underline mt-2 inline-block">Upgrade Plan &rarr;</Link>
           </div>
         </div>
@@ -653,7 +653,7 @@ function SearchInfoSection({ isAtLimit, remaining, searchesPerDay, isStarting, s
 
       <div className="flex items-center justify-between">
         <span className="text-xs text-ice/40">
-          {remaining}/{searchesPerDay} searches remaining
+          {remaining}/{searchesPerDay} searches remaining this month
         </span>
         <LoadingButton
           type="submit"

@@ -26,9 +26,15 @@ export interface DraftPost {
   status: 'draft';
   /** ISO datetime at/after which the draft auto-publishes. Absent = manual only. */
   scheduledAt?: string;
+  /** Last publish failure (scheduled retries back off instead of hammering). */
+  lastPublishError?: string;
+  lastPublishAttemptAt?: string;
   createdAt: string;
   updatedAt: string;
 }
+
+/** How long a failed scheduled publish waits before it is retried. */
+const PUBLISH_RETRY_BACKOFF_MS = 10 * 60 * 1000;
 
 const SEED_FILE = path.join(process.cwd(), 'data', 'drafts.json');
 
@@ -252,36 +258,89 @@ function uniqueSlug(base: string): string {
   return candidate;
 }
 
-/** Move a draft into the published store. The draft row is removed. */
+/** Record a failed publish so scheduled retries can back off. Best-effort. */
+function notePublishFailure(id: string, error: string): void {
+  try {
+    const drafts = readAll();
+    const idx = drafts.findIndex((d) => d.id === id);
+    if (idx === -1) return;
+    drafts[idx] = {
+      ...drafts[idx],
+      lastPublishError: error,
+      lastPublishAttemptAt: new Date().toISOString(),
+    };
+    writeAll(drafts);
+  } catch (err) {
+    console.error('[draft-store] could not record publish failure', err);
+  }
+}
+
+/**
+ * Move a draft into the published store. The draft row is removed.
+ *
+ * Publishing touches TWO files (blogs.json, drafts.json), so a failure between
+ * the writes used to leave the post published AND the draft intact — the next
+ * cron tick then published it again under a different slug. The post is now
+ * rolled back when the draft write fails, so the operation is all-or-nothing.
+ */
 export function publishDraft(id: string): { post?: unknown; error?: string } {
   const drafts = readAll();
   const idx = drafts.findIndex((d) => d.id === id);
   if (idx === -1) return { error: 'Draft not found' };
   const draft = drafts[idx];
-  if (!draft.title.trim()) return { error: 'Title is required to publish' };
-  if (!draft.content.trim()) return { error: 'Content is required to publish' };
+  if (!draft.title.trim()) {
+    notePublishFailure(id, 'Title is required to publish');
+    return { error: 'Title is required to publish' };
+  }
+  if (!draft.content.trim()) {
+    notePublishFailure(id, 'Content is required to publish');
+    return { error: 'Content is required to publish' };
+  }
   const slug = draft.slug || uniqueSlug(draft.title);
   const finalSlug = getBlog(slug) ? uniqueSlug(`${slug}-post`) : slug;
-  const result = createBlog({
-    title: draft.title,
-    slug: finalSlug,
-    excerpt: draft.excerpt,
-    category: draft.category,
-    date: draft.date,
-    content: draft.content,
-    coverImage: draft.coverImage,
-    faqs: draft.faqs,
-    metaTitle: draft.metaTitle,
-    metaDescription: draft.metaDescription,
-    keywords: draft.keywords,
-    author: draft.author,
-    authorBio: draft.authorBio,
-  });
-  if (result.error || !result.post) {
-    return { error: result.error || 'Publish failed' };
+  let result: { post?: { slug?: string }; error?: string };
+  try {
+    result = createBlog({
+      title: draft.title,
+      slug: finalSlug,
+      excerpt: draft.excerpt,
+      category: draft.category,
+      date: draft.date,
+      content: draft.content,
+      coverImage: draft.coverImage,
+      faqs: draft.faqs,
+      metaTitle: draft.metaTitle,
+      metaDescription: draft.metaDescription,
+      keywords: draft.keywords,
+      author: draft.author,
+      authorBio: draft.authorBio,
+    });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'Publish failed';
+    notePublishFailure(id, message);
+    return { error: message };
   }
-  drafts.splice(idx, 1);
-  writeAll(drafts);
+  if (result.error || !result.post) {
+    const message = result.error || 'Publish failed';
+    notePublishFailure(id, message);
+    return { error: message };
+  }
+
+  const nextDrafts = drafts.filter((d) => d.id !== id);
+  try {
+    writeAll(nextDrafts);
+  } catch (err) {
+    // Roll the published post back so the draft is never half-published.
+    console.error('[draft-store] draft write failed after publish; rolling back', err);
+    try {
+      deleteBlog(finalSlug);
+    } catch (rollbackErr) {
+      console.error('[draft-store] publish rollback failed', rollbackErr);
+    }
+    const message = 'Publish failed (storage write failed)';
+    notePublishFailure(id, message);
+    return { error: message };
+  }
   return { post: result.post };
 }
 
@@ -311,18 +370,26 @@ export function unpublishPost(slug: string): { draft?: DraftPost; error?: string
     createdAt: post.createdAt,
     updatedAt: now,
   };
-  try {
-    const removed = deleteBlog(slug);
-    if (!removed.ok) return { error: removed.error || 'Unpublish failed' };
-  } catch (err) {
-    console.error('[draft-store] unpublish delete failed', err);
-    return { error: 'Unpublish failed (storage write failed)' };
-  }
+  // Write the draft copy FIRST so a failed write never destroys the
+  // published post. Only after the draft is durable do we remove the
+  // published row. If the delete fails we compensate by removing the
+  // just-created draft, keeping the operation all-or-nothing.
   drafts.push(draft);
   try {
     writeAll(drafts);
   } catch (err) {
     console.error('[draft-store] unpublish save failed', err);
+    return { error: 'Unpublish failed (storage write failed)' };
+  }
+  try {
+    const removed = deleteBlog(slug);
+    if (!removed.ok) {
+      deleteDraft(draft.id); // compensate: keep the published post as-is
+      return { error: removed.error || 'Unpublish failed' };
+    }
+  } catch (err) {
+    console.error('[draft-store] unpublish delete failed', err);
+    deleteDraft(draft.id);
     return { error: 'Unpublish failed (storage write failed)' };
   }
   return { draft };
@@ -334,6 +401,17 @@ export function publishDueDrafts(nowMs: number = Date.now()): { published: strin
   const failed: { id: string; error: string }[] = [];
   const due = readAll().filter((d) => d.scheduledAt && !Number.isNaN(Date.parse(d.scheduledAt)) && Date.parse(d.scheduledAt) <= nowMs);
   for (const d of due) {
+    // A draft that keeps failing (e.g. empty content) is retried on EVERY admin
+    // API hit; back off so it cannot spin on each request.
+    const lastAttempt = d.lastPublishAttemptAt ? Date.parse(d.lastPublishAttemptAt) : NaN;
+    if (
+      d.lastPublishError &&
+      !Number.isNaN(lastAttempt) &&
+      nowMs - lastAttempt < PUBLISH_RETRY_BACKOFF_MS
+    ) {
+      failed.push({ id: d.id, error: d.lastPublishError });
+      continue;
+    }
     const res = publishDraft(d.id);
     if (res.post) {
       published.push(d.id);

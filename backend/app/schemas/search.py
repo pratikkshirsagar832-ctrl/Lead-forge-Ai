@@ -5,7 +5,7 @@ Hyperclients — Search Schemas
 from datetime import datetime
 from typing import Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 from typing import Literal
@@ -22,6 +22,18 @@ class SearchCreateRequest(BaseModel):
         default=["buyer"],
         description="Filter lead types (linkedin only): buyer=needs freelancer."
     )
+
+    @field_validator("niche")
+    @classmethod
+    def _niche_not_blank(cls, v: str) -> str:
+        if not v or not v.strip():
+            raise ValueError("niche must not be blank")
+        return v.strip()
+
+    @field_validator("location")
+    @classmethod
+    def _location_stripped(cls, v: str) -> str:
+        return (v or "").strip()
 
 
 class SearchResponse(BaseModel):

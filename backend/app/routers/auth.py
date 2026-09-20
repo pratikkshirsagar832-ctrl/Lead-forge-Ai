@@ -18,6 +18,29 @@ PLAN_SEATS = {"pro": 2, "agency": 10}
 MEMBER_EMAIL_DOMAIN = "members.hyperclients.online"
 USERNAME_RE = re.compile(r"^[a-z0-9_]{3,20}$")
 
+# Lightweight in-process throttles (per-process; shared store would need Redis).
+# team-resolve is public by design (username->email) — bound enumeration.
+# team create is owner-authed but still bound to avoid seat-spam.
+import time as _time
+
+_RESOLVE_WINDOW_S = 60
+_RESOLVE_MAX = 30
+_resolve_hits: dict[str, list[float]] = {}
+_TEAM_CREATE_WINDOW_S = 60
+_TEAM_CREATE_MAX = 10
+_team_create_hits: dict[str, list[float]] = {}
+
+
+def _throttled(bucket: dict[str, list[float]], key: str, window_s: int, max_hits: int) -> bool:
+    now = _time.time()
+    hits = [t for t in bucket.get(key, []) if now - t < window_s]
+    if len(hits) >= max_hits:
+        bucket[key] = hits
+        return True
+    hits.append(now)
+    bucket[key] = hits
+    return False
+
 
 def _get_owner_plan(supabase, user_id: str) -> tuple[str, str]:
     from app.services.plans import resolve_effective_subscription
@@ -68,8 +91,10 @@ async def add_team_member(
         raise HTTPException(status_code=400, detail={
             "message": "Username must be 3-20 chars: lowercase letters, numbers, underscores",
         })
-    if len(password) < 6:
-        raise HTTPException(status_code=400, detail={"message": "Password must be at least 6 characters"})
+    if len(password) < 6 or len(password) > 128:
+        raise HTTPException(status_code=400, detail={"message": "Password must be 6-128 characters"})
+    if _throttled(_team_create_hits, current_user["id"], _TEAM_CREATE_WINDOW_S, _TEAM_CREATE_MAX):
+        raise HTTPException(status_code=429, detail={"message": "Too many team invites. Try again shortly."})
 
     supabase = get_supabase_admin()
     owner_id = current_user["id"]
@@ -121,7 +146,12 @@ async def add_team_member(
         logger.error(f"Team member auth create failed: {resp.status_code} {resp.text[:300]}")
         raise HTTPException(status_code=500, detail={"message": "Failed to create team account"})
 
-    member_uid = resp.json().get("id")
+    member_uid = (resp.json() or {}).get("id")
+    if not member_uid:
+        # Without an id the registry row below would be written with a NULL
+        # user_id (a 500 after the auth user already existed).
+        logger.error(f"Team member auth create returned no id: {resp.text[:300]}")
+        raise HTTPException(status_code=500, detail={"message": "Failed to create team account"})
 
     # Mirror owner's plan onto the member + registry entry encoded in
     # razorpay_order_id (no DDL needed for a dedicated table).
@@ -133,14 +163,33 @@ async def add_team_member(
         .execute()
     period_end = owner_sub.data[0].get("current_period_end") if owner_sub.data else None
 
-    supabase.table("user_subscriptions").insert({
-        "user_id": member_uid,
-        "plan_id": plan_id,
-        "status": "active",
-        "current_period_start": datetime.now(timezone.utc).isoformat(),
-        "current_period_end": period_end,
-        "razorpay_order_id": f"team:{owner_id}:{username}",
-    }).execute()
+    try:
+        supabase.table("user_subscriptions").insert({
+            "user_id": member_uid,
+            "plan_id": plan_id,
+            "status": "active",
+            "current_period_start": datetime.now(timezone.utc).isoformat(),
+            "current_period_end": period_end,
+            "razorpay_order_id": f"team:{owner_id}:{username}",
+        }).execute()
+    except Exception as reg_err:
+        # The seat is unusable without its registry row (and the seat count
+        # would be wrong forever) — delete the orphaned auth user and report.
+        logger.error(f"Team member registry insert failed for {username}: {reg_err}")
+        try:
+            async with httpx.AsyncClient(timeout=20) as cleanup:
+                await cleanup.delete(
+                    f"{settings.supabase_url}/auth/v1/admin/users/{member_uid}",
+                    headers={
+                        "apikey": settings.supabase_service_role_key,
+                        "Authorization": f"Bearer {settings.supabase_service_role_key}",
+                    },
+                )
+        except Exception as cleanup_err:
+            logger.error(
+                f"Could not clean up orphaned team auth user {member_uid}: {cleanup_err}"
+            )
+        raise HTTPException(status_code=500, detail={"message": "Failed to create team account"})
 
     return {"id": member_uid, "username": username, "email": member_email}
 
@@ -154,6 +203,7 @@ async def remove_team_member(member_id: str, current_user: dict = Depends(get_cu
         .select("id") \
         .eq("user_id", member_id) \
         .like("razorpay_order_id", f"team:{owner_id}:%") \
+        .order("created_at", desc=True) \
         .limit(1) \
         .execute()
     if not rows.data:
@@ -180,9 +230,17 @@ async def remove_team_member(member_id: str, current_user: dict = Depends(get_cu
 async def resolve_team_username(payload: dict = Body(...)):
     """Public: turn a team username into its login email so the standard
     Supabase password sign-in works without exposing synthetic emails."""
+    # Throttle by a best-effort caller key to bound username enumeration.
+    # No auth here by design; the bucket key is intentionally coarse.
+    try:
+        from fastapi import Request
+    except Exception:
+        Request = None  # type: ignore
     username = (payload.get("username") or "").strip().lower()
     if not USERNAME_RE.match(username):
         raise HTTPException(status_code=400, detail={"message": "Invalid username format"})
+    if _throttled(_resolve_hits, "global", _RESOLVE_WINDOW_S, _RESOLVE_MAX * 10):
+        raise HTTPException(status_code=429, detail={"message": "Too many requests. Try again shortly."})
     return {"email": f"{username}@{MEMBER_EMAIL_DOMAIN}"}
 
 
@@ -191,16 +249,28 @@ async def get_me(current_user: dict = Depends(get_current_user)):
     supabase = get_supabase_admin()
     subscription = None
 
-    # Compute correct remaining counts from actual table state
-    today_str = datetime.now(timezone.utc).date().isoformat()
-    usage_resp = supabase.table("daily_usage") \
-        .select("searches_run, leads_generated") \
-        .eq("user_id", current_user["id"]) \
-        .eq("date", today_str) \
-        .execute()
-    used = usage_resp.data[0] if usage_resp.data and len(usage_resp.data) > 0 else {}
-    used_searches = used.get("searches_run", 0) or 0
-    used_leads = used.get("leads_generated", 0) or 0
+    # Monthly quotas (v16): searches / AI / generic leads reset on the 1st.
+    # daily_usage is reporting-only now.
+    from app.services.plans import (
+        get_monthly_limit,
+        get_monthly_counters,
+        quota_owner_id,
+    )
+    try:
+        from app.services.plans import resolve_effective_subscription as _eff
+        _eff_row = _eff(supabase, current_user["id"])
+        quota_user = quota_owner_id(_eff_row, current_user["id"])
+    except Exception:
+        quota_user = current_user["id"]
+    month_str = datetime.now(timezone.utc).replace(day=1).date().isoformat()
+    try:
+        monthly = supabase.table("monthly_usage").select("*").eq("user_id", quota_user).eq("usage_month", month_str).limit(1).execute()
+        mu = (monthly.data or [{}])[0] if monthly.data else {}
+    except Exception:
+        mu = {}
+    used_searches = int(mu.get("searches_used", 0) or 0)
+    used_ai = int(mu.get("ai_calls_used", 0) or 0)
+    used_leads = 0  # computed per-plan below from monthly generated totals
 
     try:
         sub_resp = supabase.rpc(
@@ -209,10 +279,14 @@ async def get_me(current_user: dict = Depends(get_current_user)):
         ).execute()
         if sub_resp and sub_resp.data:
             subscription = sub_resp.data
-            searches_per_day = subscription.get("searches_per_day", 3)
-            leads_per_day = subscription.get("leads_per_day", 30)
-            subscription["remaining_searches"] = max(0, searches_per_day - used_searches)
-            subscription["remaining_leads"] = max(0, leads_per_day - used_leads)
+            searches_per_month = int(subscription.get("searches_per_month") or subscription.get("searches_per_day", 3) or 3)
+            leads_per_month = int(subscription.get("leads_per_month") or subscription.get("leads_per_day", 30) or 30)
+            subscription["searches_per_month"] = searches_per_month
+            subscription["searches_per_day"] = searches_per_month  # compat
+            subscription["leads_per_month"] = leads_per_month
+            subscription["leads_per_day"] = leads_per_month  # compat
+            subscription["remaining_searches"] = max(0, searches_per_month - used_searches)
+            subscription["remaining_leads"] = max(0, leads_per_month - used_leads)
 
             # Monthly usage
             month_str = datetime.now(timezone.utc).replace(day=1).date().isoformat()
@@ -243,7 +317,9 @@ async def get_me(current_user: dict = Depends(get_current_user)):
                         "plan_id": "free",
                         "plan_name": "Free",
                         "status": "inactive",
+                        "searches_per_month": 0,
                         "searches_per_day": 0,
+                        "leads_per_month": 0,
                         "leads_per_day": 0,
                         "remaining_searches": 0,
                         "remaining_leads": 0,
@@ -255,15 +331,20 @@ async def get_me(current_user: dict = Depends(get_current_user)):
                     }
             elif not subscription or subscription.get("plan_id") != eff["plan_id"]:
                 plan = get_plan_row(supabase, eff["plan_id"])
-                used_s, used_l = get_used_today(supabase, current_user["id"])
+                quota_u = quota_owner_id(eff, current_user["id"])
+                counters = get_monthly_counters(supabase, quota_u)
+                s_limit = get_monthly_limit(plan, "searches_per_month", "searches_per_day", 3)
+                l_limit = get_monthly_limit(plan, "leads_per_month", "leads_per_day", 30)
                 subscription = {
                     "plan_id": eff["plan_id"],
                     "plan_name": plan.get("name", eff["plan_id"]),
                     "status": "active",
-                    "searches_per_day": plan.get("searches_per_day", 3),
-                    "leads_per_day": plan.get("leads_per_day", 30),
-                    "remaining_searches": max(0, plan.get("searches_per_day", 3) - used_s),
-                    "remaining_leads": max(0, plan.get("leads_per_day", 30) - used_l),
+                    "searches_per_month": s_limit,
+                    "searches_per_day": s_limit,
+                    "leads_per_month": l_limit,
+                    "leads_per_day": l_limit,
+                    "remaining_searches": max(0, s_limit - counters["searches_used"]),
+                    "remaining_leads": max(0, l_limit - counters["leads_used"]),
                     "linkedin_hq_leads_monthly": int(plan.get("linkedin_hq_leads_monthly", 0) or 0),
                     "gmb_leads_monthly": int(plan.get("gmb_leads_monthly", 0) or 0),
                     "linkedin_hq_leads_used": 0,
@@ -308,26 +389,19 @@ async def get_me(current_user: dict = Depends(get_current_user)):
                     .execute()
 
                 plan = plan_resp.data[0] if plan_resp.data and len(plan_resp.data) > 0 else {}
-                today_str = datetime.now(timezone.utc).date().isoformat()
-
-                usage_resp = supabase.table("daily_usage") \
-                    .select("searches_run, leads_generated") \
-                    .eq("user_id", current_user["id"]) \
-                    .eq("date", today_str) \
-                    .execute()
-
-                used = usage_resp.data[0] if usage_resp.data else {}
-                searches_per_day = plan.get("searches_per_day", 1)
-                leads_per_day = plan.get("leads_per_day", 10)
+                s_limit = get_monthly_limit(plan, "searches_per_month", "searches_per_day", 3)
+                l_limit = get_monthly_limit(plan, "leads_per_month", "leads_per_day", 30)
 
                 subscription = {
                     "plan_id": plan_id,
                     "plan_name": plan.get("name", "Free"),
                     "status": sub.get("status", "active"),
-                    "searches_per_day": searches_per_day,
-                    "leads_per_day": leads_per_day,
-                    "remaining_searches": max(0, searches_per_day - (used.get("searches_run", 0) or 0)),
-                    "remaining_leads": max(0, leads_per_day - (used.get("leads_generated", 0) or 0)),
+                    "searches_per_month": s_limit,
+                    "searches_per_day": s_limit,
+                    "leads_per_month": l_limit,
+                    "leads_per_day": l_limit,
+                    "remaining_searches": max(0, s_limit - used_searches),
+                    "remaining_leads": max(0, l_limit - used_leads),
                     "linkedin_hq_leads_monthly": int(plan.get("linkedin_hq_leads_monthly", 0) or 0),
                     "gmb_leads_monthly": int(plan.get("gmb_leads_monthly", 0) or 0),
                     "linkedin_hq_leads_used": 0,
@@ -377,10 +451,11 @@ async def get_me(current_user: dict = Depends(get_current_user)):
         subscription["linkedin_hq_leads_monthly"] = li_monthly
         subscription["gmb_leads_monthly"] = gmb_monthly
 
-        # Searches reset DAILY (plan cap = searches_per_day). The search limit
-        # uses the daily counter so a busy month never locks the user out.
-        _sub_limit = int(subscription.get("searches_per_day", 3) or 3)
+        # Searches + generic leads reset MONTHLY (v16, on the 1st).
+        _sub_limit = int(subscription.get("searches_per_month") or subscription.get("searches_per_day", 3) or 3)
         subscription["remaining_searches"] = max(0, _sub_limit - used_searches)
+        subscription["searches_used"] = used_searches
+        subscription["ai_used"] = used_ai
 
     return {
         "id": current_user["id"],

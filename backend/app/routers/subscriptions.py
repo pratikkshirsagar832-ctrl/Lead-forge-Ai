@@ -180,7 +180,13 @@ def _get_razorpay_client(settings):
 async def list_plans():
     supabase = get_supabase_admin()
     try:
-        resp = supabase.table("plans").select("id,name,leads_per_day,searches_per_day,searches_per_month,leads_per_month,ai_calls_monthly,gmb_leads_monthly,linkedin_hq_leads_monthly,billing_cycle_days,sort_order,price_monthly").order("sort_order").execute()
+        try:
+            resp = supabase.table("plans").select("id,name,leads_per_day,searches_per_day,searches_per_month,leads_per_month,ai_calls_monthly,gmb_leads_monthly,linkedin_hq_leads_monthly,billing_cycle_days,sort_order,price_monthly").order("sort_order").execute()
+        except Exception as col_err:
+            # Pre-v16 / partial schema (e.g. missing billing_cycle_days):
+            # fall back to whole-row read rather than 500ing public pricing.
+            logger.warning("plans column select failed, falling back to *: %s", col_err)
+            resp = supabase.table("plans").select("*").order("sort_order").execute()
         return {"plans": resp.data or []}
     except Exception as e:
         logger.error(f"Failed to fetch plans: {e}")
@@ -407,7 +413,7 @@ async def verify_payment(
             raise HTTPException(status_code=404, detail="Plan not found")
 
         plan = plan_resp.data[0]
-        billing_cycle_days = plan.get("billing_cycle_days", 30)
+        billing_cycle_days = plan.get("billing_cycle_days", 30) or 30
 
         now = datetime.now(timezone.utc)
         period_end = now + timedelta(days=int(billing_cycle_days))
@@ -580,19 +586,25 @@ async def razorpay_webhook(request: Request):
                         except Exception:
                             already_applied = False
                         if not already_applied:
-                            plan_resp = supabase.table("plans").select("billing_cycle_days").eq("id", plan_id).limit(1).execute()
                             cycle_days = 30
-                            if plan_resp.data and len(plan_resp.data) > 0:
-                                cycle_days = plan_resp.data[0].get("billing_cycle_days", 30)
+                            try:
+                                plan_resp = supabase.table("plans").select("billing_cycle_days").eq("id", plan_id).limit(1).execute()
+                                if plan_resp.data and len(plan_resp.data) > 0:
+                                    cycle_days = plan_resp.data[0].get("billing_cycle_days", 30) or 30
+                            except Exception as cycle_err:
+                                logger.debug("billing_cycle_days lookup failed, using 30: %s", cycle_err)
                             update_fields["current_period_start"] = now.isoformat()
-                            update_fields["current_period_end"] = (now + timedelta(days=cycle_days)).isoformat()
+                            update_fields["current_period_end"] = (now + timedelta(days=int(cycle_days))).isoformat()
 
                         supabase.table("user_subscriptions").update(update_fields).eq("id", target["id"]).execute()
                     else:
-                        plan_resp = supabase.table("plans").select("billing_cycle_days").eq("id", plan_id).limit(1).execute()
                         cycle_days = 30
-                        if plan_resp.data and len(plan_resp.data) > 0:
-                            cycle_days = plan_resp.data[0].get("billing_cycle_days", 30)
+                        try:
+                            plan_resp = supabase.table("plans").select("billing_cycle_days").eq("id", plan_id).limit(1).execute()
+                            if plan_resp.data and len(plan_resp.data) > 0:
+                                cycle_days = plan_resp.data[0].get("billing_cycle_days", 30) or 30
+                        except Exception as cycle_err:
+                            logger.debug("billing_cycle_days lookup failed, using 30: %s", cycle_err)
                         insert_fields = dict(update_fields)
                         insert_fields.update({
                             "user_id": order_user_id,

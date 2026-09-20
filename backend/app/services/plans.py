@@ -107,8 +107,15 @@ def quota_owner_id(effective: dict, user_id: str) -> str:
 
 
 def get_plan_row(supabase, plan_id: str) -> dict:
-    resp = supabase.table("plans").select("id,name,leads_per_day,searches_per_day,searches_per_month,leads_per_month,ai_calls_monthly,gmb_leads_monthly,linkedin_hq_leads_monthly,billing_cycle_days").eq("id", plan_id).limit(1).execute()
-    return resp.data[0] if resp.data else {}
+    try:
+        resp = supabase.table("plans").select("id,name,leads_per_day,searches_per_day,searches_per_month,leads_per_month,ai_calls_monthly,gmb_leads_monthly,linkedin_hq_leads_monthly,billing_cycle_days").eq("id", plan_id).limit(1).execute()
+        return resp.data[0] if resp.data else {}
+    except Exception as exc:
+        # Partial schema (e.g. live DB missing billing_cycle_days): retry
+        # without the newer columns instead of failing every caller.
+        logger.debug("get_plan_row column fallback (%s)", exc)
+        resp = supabase.table("plans").select("*").eq("id", plan_id).limit(1).execute()
+        return resp.data[0] if resp.data else {}
 
 
 def get_monthly_limit(plan: dict, key: str, legacy_key: str, default: int) -> int:

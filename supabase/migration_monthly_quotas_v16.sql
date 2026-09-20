@@ -25,6 +25,12 @@ UPDATE public.plans SET
 WHERE id IN ('free', 'solo', 'pro', 'agency');
 
 -- 2. Pricing audit: solo $19 / pro $49 / agency $199 ─────────────────────
+-- Also backfill v5 columns some deployments skipped (live DBs missing
+-- billing_cycle_days 500 public pricing when selected explicitly).
+ALTER TABLE public.plans
+  ADD COLUMN IF NOT EXISTS billing_cycle_days INTEGER NOT NULL DEFAULT 30 CHECK (billing_cycle_days > 0),
+  ADD COLUMN IF NOT EXISTS features JSONB NOT NULL DEFAULT '[]'::jsonb;
+UPDATE public.plans SET billing_cycle_days = 30 WHERE billing_cycle_days IS NULL;
 UPDATE public.plans SET price_monthly = 1900 WHERE id = 'solo';
 UPDATE public.plans SET price_monthly = 4900 WHERE id = 'pro';
 UPDATE public.plans SET price_monthly = 19900 WHERE id = 'agency';

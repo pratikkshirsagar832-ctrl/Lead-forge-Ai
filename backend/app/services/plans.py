@@ -74,6 +74,13 @@ def resolve_effective_subscription(supabase, user_id: str) -> dict:
     if not row:
         return {"plan_id": "free", "status": "trial", "team_owner_id": None, "username": None}
 
+    # Free is perpetual: the monthly quota (3 searches/mo) is the gate, not a
+    # 1-day trial clock. Without this, users past trial_end get "Subscription
+    # is not active" with 0 searches used and see the upgrade modal forever.
+    if (row.get("plan_id") or "free") == "free" and not (row.get("razorpay_order_id") or "").startswith(TEAM_MARKER_PREFIX):
+        return {"plan_id": "free", "status": "active", "team_owner_id": None, "username": None,
+                "source_row": row}
+
     marker = row.get("razorpay_order_id") or ""
     if marker.startswith(TEAM_MARKER_PREFIX):
         parts = marker.split(":", 2)

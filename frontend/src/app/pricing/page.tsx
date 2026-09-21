@@ -156,7 +156,7 @@ export default function PricingPage() {
                       </span>
                       {plan.price_monthly > 0 && <span className="text-sm text-ice/40">/mo</span>}
                     </div>
-                    {plan.id === 'free' && <p className="text-xs text-ice/40 mt-1">1 day trial</p>}
+                    {plan.id === 'free' && <p className="text-xs text-ice/40 mt-1">Free forever · 3 searches/mo</p>}
                   </div>
 
                   <div className="flex flex-col gap-2 mb-6 p-3 rounded-lg bg-ocean/20">

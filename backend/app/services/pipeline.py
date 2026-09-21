@@ -290,7 +290,7 @@ async def _save_maps_leads(
     for result in raw_results:
         if remaining_leads <= 0:
             hit_limit = True
-            logger.warning(f"[Pipeline:{search_id}] Daily leads limit reached. Skipping {len(raw_results) - len(lead_ids)} remaining results.")
+            logger.warning(f"[Pipeline:{search_id}] Monthly lead reservation exhausted. Skipping {len(raw_results) - len(lead_ids)} remaining results.")
             break
         try:
             has_website = bool(result.get("website_url"))

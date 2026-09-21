@@ -73,17 +73,52 @@ function BillingContent() {
     error?: { description?: string };
   }
 
+  type RazorpayCtor = { new(options: Record<string, unknown>): { on: (event: string, handler: (response: unknown) => void) => void; open: () => void } };
+
+  function ensureRazorpayLoaded(timeoutMs = 12000): Promise<RazorpayCtor | undefined> {
+    return new Promise((resolve) => {
+      const existing = (window as any).Razorpay as RazorpayCtor | undefined;
+      if (existing) {
+        resolve(existing);
+        return;
+      }
+      // Script tag missing/blocked (ad-blocker, slow network): inject it.
+      if (!document.querySelector('script[src*="checkout.razorpay.com"]')) {
+        const s = document.createElement('script');
+        s.src = 'https://checkout.razorpay.com/v1/checkout.js';
+        s.async = true;
+        document.head.appendChild(s);
+      }
+      const started = Date.now();
+      const timer = setInterval(() => {
+        const Rz = (window as any).Razorpay as RazorpayCtor | undefined;
+        if (Rz) {
+          clearInterval(timer);
+          resolve(Rz);
+        } else if (Date.now() - started > timeoutMs) {
+          clearInterval(timer);
+          resolve(undefined);
+        }
+      }, 250);
+    });
+  }
+
   // Function declaration (hoisted) so the upgrade URL effect above can call
   // it — avoids the temporal-dead-zone hazard of a const used before init.
   async function handleUpgrade(plan: Plan) {
     if (plan.price_monthly <= 0) return;
-    const Razorpay = (window as any).Razorpay as { new(options: Record<string, unknown>): { on: (event: string, handler: (response: unknown) => void) => void; open: () => void } } | undefined;
-    if (!Razorpay) {
-      setError('Payment gateway not loaded. Please refresh the page.');
-      return;
-    }
     setIsProcessing(true);
     setError('');
+
+    // Razorpay checkout.js must be present before we open the modal. On slow
+    // devices/networks the script may still be loading (or blocked), so wait
+    // for it — injecting on demand — instead of failing with "not loaded".
+    const Razorpay = await ensureRazorpayLoaded();
+    if (!Razorpay) {
+      setError('Payment gateway could not load. Check your connection/ad-blocker and try again.');
+      setIsProcessing(false);
+      return;
+    }
 
     try {
       const orderResp = await api.post('/api/subscriptions/create-order', { plan_id: plan.id });

@@ -92,7 +92,7 @@ class Settings(BaseSettings):
     # Total browser-tab budget across ALL parallel workers. Per-worker -c is
     # derived as total // shards (clamped 6-16) so 4 workers x 24 can never
     # OOM a 4vCPU box or trip Google rate limits (96 tabs killed our test).
-    gmaps_total_concurrency: int = 32
+    gmaps_total_concurrency: int = 48
     gmaps_stagger_seconds: float = 3.0
     # Throttled shards must WAIT OUT a Google cooldown, not suicide:
     # the old 12s inactivity exit killed 3/4 parallel workers with 0 rows.

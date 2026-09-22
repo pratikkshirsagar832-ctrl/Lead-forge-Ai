@@ -594,24 +594,25 @@ async def run_maps_scraper_parallel(
     deduped = _dedupe_businesses(merged)[:max_results]
 
     # Mop-up wave: shards Google throttled to 0 rows get ONE serial retry in a
-    # single low-concurrency process with the leftover time budget. This is
-    # what turns "30 in 48s" into "100 in ~60s" under rate limiting.
+    # single low-concurrency process. Allowed a small overrun past the main
+    # timeout (UI already streams partials live, so users see 50+ in ~60s
+    # while the tail completes by ~90s).
     elapsed = time.time() - t0
-    remaining = int(timeout_seconds - elapsed)
     failed_queries = [q for i, part in enumerate(nested) if not part for q in shards[i]]
-    if failed_queries and len(deduped) < max_results and remaining >= 25:
+    mop_budget = min(35, max(0, int(timeout_seconds + 15 - elapsed)))
+    if failed_queries and len(deduped) < max_results and mop_budget >= 25:
         need = max_results - len(deduped)
         logger.info(
             f"[Scraper:{run_id}] MOP-UP: {len(failed_queries)} queries from "
-            f"{sum(1 for p in nested if not p)} empty shards, need {need}, budget {remaining}s"
+            f"{sum(1 for p in nested if not p)} empty shards, need {need}, budget {mop_budget}s"
         )
         try:
             extra = await run_maps_scraper(
                 query=failed_queries,
                 max_results=need,
-                timeout_seconds=remaining,
+                timeout_seconds=mop_budget,
                 depth=depth,
-                soft_deadline_seconds=min(int(soft_deadline_seconds or 55), remaining),
+                soft_deadline_seconds=min(int(soft_deadline_seconds or 55), mop_budget),
                 concurrency=8,
                 exit_inactivity=shard_inactivity,
             )

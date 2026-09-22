@@ -120,10 +120,14 @@ def _gmaps_tuning() -> dict:
     exit_inactivity = (os.environ.get("GMAPS_EXIT_INACTIVITY", "").strip()
                        or (getattr(settings, "gmaps_exit_inactivity", "12s") if settings else "12s")
                        or "12s")
+    shard_inactivity = (os.environ.get("GMAPS_SHARD_INACTIVITY", "").strip()
+                        or (getattr(settings, "gmaps_shard_inactivity", "45s") if settings else "45s")
+                        or "45s")
     return {
         "concurrency": concurrency,
         "total_concurrency": total_concurrency,
         "stagger": stagger,
+        "shard_inactivity": shard_inactivity,
         "workers": workers,
         "depth": depth,
         "soft_deadline": soft,
@@ -164,6 +168,8 @@ async def run_maps_scraper(
     soft_deadline_seconds: int | None = None,
     on_progress=None,
     concurrency: int | None = None,
+    exit_inactivity: str | None = None,
+    stop_event=None,
 ) -> list[dict]:
     """
     Run the google-maps-scraper binary and return parsed results.
@@ -208,7 +214,8 @@ async def run_maps_scraper(
         concurrency = str(concurrency)
         # Depth passed explicitly wins; otherwise use tuned fast default.
         # Load-more still passes depth=2 for thorough background fill.
-        exit_inactivity = tuning["exit_inactivity"]
+        if exit_inactivity is None:
+            exit_inactivity = tuning["exit_inactivity"]
         cmd = [
             scraper_path,
             "-input", input_file,
@@ -280,6 +287,18 @@ async def run_maps_scraper(
                 proc.terminate()
                 terminated_early = True
                 break
+            if stop_event is not None:
+                try:
+                    _stop = stop_event.is_set()
+                except Exception:
+                    _stop = False
+                if _stop:
+                    logger.info(
+                        f"[Scraper:{run_id}] Global target met by a sibling shard — stopping early"
+                    )
+                    proc.terminate()
+                    terminated_early = True
+                    break
             await asyncio.sleep(0.5)
 
         try:
@@ -521,22 +540,33 @@ async def run_maps_scraper_parallel(
     )
 
     # Aggregate progress across shards so the UI shows a single x/100 counter.
+    # When the GLOBAL target is met, all sibling workers stop immediately
+    # instead of each filling its own per-worker quota.
+    t0 = time.time()
     counts = [0] * len(shards)
     last_report = [0.0]
+    stop_event = asyncio.Event()
 
     def _make_cb(idx: int):
         def _cb(n: int) -> None:
             counts[idx] = max(0, int(n or 0))
+            total = sum(counts)
+            if total >= max_results and not stop_event.is_set():
+                stop_event.set()
             if on_progress is None:
                 return
             now = time.time()
             if now - last_report[0] >= 1.0:
                 last_report[0] = now
                 try:
-                    on_progress(sum(counts))
+                    on_progress(total)
                 except Exception as cb_err:
                     logger.debug(f"[Scraper:{run_id}] parallel on_progress error: {cb_err}")
         return _cb
+
+    # Throttled shards must WAIT OUT a Google cooldown (45s inactivity),
+    # not suicide after 12s like single runs may.
+    shard_inactivity = str(tuning.get("shard_inactivity", "45s"))
 
     async def _one(shard: list[str], idx: int) -> list[dict]:
         try:
@@ -550,6 +580,8 @@ async def run_maps_scraper_parallel(
                 soft_deadline_seconds=soft_deadline_seconds,
                 on_progress=_make_cb(idx),
                 concurrency=per_worker_c,
+                exit_inactivity=shard_inactivity,
+                stop_event=stop_event,
             )
         except Exception as e:
             logger.warning(f"[Scraper:{run_id}] shard {idx} failed ({len(shard)} queries): {e}")
@@ -560,9 +592,36 @@ async def run_maps_scraper_parallel(
     for part in nested:
         merged.extend(part or [])
     deduped = _dedupe_businesses(merged)[:max_results]
+
+    # Mop-up wave: shards Google throttled to 0 rows get ONE serial retry in a
+    # single low-concurrency process with the leftover time budget. This is
+    # what turns "30 in 48s" into "100 in ~60s" under rate limiting.
+    elapsed = time.time() - t0
+    remaining = int(timeout_seconds - elapsed)
+    failed_queries = [q for i, part in enumerate(nested) if not part for q in shards[i]]
+    if failed_queries and len(deduped) < max_results and remaining >= 25:
+        need = max_results - len(deduped)
+        logger.info(
+            f"[Scraper:{run_id}] MOP-UP: {len(failed_queries)} queries from "
+            f"{sum(1 for p in nested if not p)} empty shards, need {need}, budget {remaining}s"
+        )
+        try:
+            extra = await run_maps_scraper(
+                query=failed_queries,
+                max_results=need,
+                timeout_seconds=remaining,
+                depth=depth,
+                soft_deadline_seconds=min(int(soft_deadline_seconds or 55), remaining),
+                concurrency=8,
+                exit_inactivity=shard_inactivity,
+            )
+            deduped = _dedupe_businesses(deduped + (extra or []))[:max_results]
+        except Exception as e:
+            logger.warning(f"[Scraper:{run_id}] mop-up failed: {e}")
+
     logger.info(
         f"[Scraper:{run_id}] PARALLEL done: {sum(len(p) for p in nested)} raw "
-        f"-> {len(deduped)} deduped (target {max_results})"
+        f"-> {len(deduped)} deduped (target {max_results}) in {time.time() - t0:.1f}s"
     )
     return deduped
 

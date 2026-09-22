@@ -104,16 +104,26 @@ def _gmaps_tuning() -> dict:
                 pass
         return default
 
-    concurrency = _int_env("GMAPS_CONCURRENCY", 24)
+    concurrency = _int_env("GMAPS_CONCURRENCY", 16)
     workers = _int_env("GMAPS_WORKERS", 4)
     depth = _int_env("GMAPS_DEPTH", 1)
     soft = _int_env("GMAPS_SOFT_DEADLINE_SECONDS", 55)
     timeout = _int_env("GMAPS_TIMEOUT_SECONDS", 70)
+    total_concurrency = _int_env("GMAPS_TOTAL_CONCURRENCY", 32)
+    try:
+        stagger = float((os.environ.get("GMAPS_STAGGER_SECONDS", "").strip()
+                         or (getattr(settings, "gmaps_stagger_seconds", 2.0) if settings else 2.0)
+                         or 2.0))
+    except ValueError:
+        stagger = 2.0
+    stagger = max(0.0, min(stagger, 10.0))
     exit_inactivity = (os.environ.get("GMAPS_EXIT_INACTIVITY", "").strip()
                        or (getattr(settings, "gmaps_exit_inactivity", "12s") if settings else "12s")
                        or "12s")
     return {
         "concurrency": concurrency,
+        "total_concurrency": total_concurrency,
+        "stagger": stagger,
         "workers": workers,
         "depth": depth,
         "soft_deadline": soft,
@@ -153,6 +163,7 @@ async def run_maps_scraper(
     depth: int = 1,
     soft_deadline_seconds: int | None = None,
     on_progress=None,
+    concurrency: int | None = None,
 ) -> list[dict]:
     """
     Run the google-maps-scraper binary and return parsed results.
@@ -192,7 +203,9 @@ async def run_maps_scraper(
             f.write("\n".join(lines) + "\n")
 
         tuning = _gmaps_tuning()
-        concurrency = os.environ.get("GMAPS_CONCURRENCY", "").strip() or str(tuning["concurrency"])
+        if concurrency is None:
+            concurrency = os.environ.get("GMAPS_CONCURRENCY", "").strip() or str(tuning["concurrency"])
+        concurrency = str(concurrency)
         # Depth passed explicitly wins; otherwise use tuned fast default.
         # Load-more still passes depth=2 for thorough background fill.
         exit_inactivity = tuning["exit_inactivity"]
@@ -495,11 +508,16 @@ async def run_maps_scraper_parallel(
 
     shards = _shard_queries(lines, workers)
     per_worker_max = max(10, math.ceil(max_results / len(shards)) + 5)
+    # Split the TOTAL tab budget across shards: 4 shards on a 32 budget ->
+    # -c 8 each (was -c 24 each = 96 tabs, which OOMs/blocks a 4vCPU box).
+    per_worker_c = max(6, min(16, int(tuning["total_concurrency"]) // max(1, len(shards))))
+    stagger = float(tuning.get("stagger", 2.0) or 0.0)
     run_id = str(uuid.uuid4())[:8]
     logger.info(
         f"[Scraper:{run_id}] PARALLEL x{len(shards)} | total_queries={len(lines)} "
         f"| max={max_results} (per-worker {per_worker_max}) | depth={depth} "
-        f"| timeout={timeout_seconds}s soft={soft_deadline_seconds}s"
+        f"| per-worker -c {per_worker_c} (total ~{per_worker_c * len(shards)}) "
+        f"| stagger={stagger}s | timeout={timeout_seconds}s soft={soft_deadline_seconds}s"
     )
 
     # Aggregate progress across shards so the UI shows a single x/100 counter.
@@ -522,6 +540,8 @@ async def run_maps_scraper_parallel(
 
     async def _one(shard: list[str], idx: int) -> list[dict]:
         try:
+            if stagger > 0 and idx > 0:
+                await asyncio.sleep(stagger * idx)
             return await run_maps_scraper(
                 query=shard,
                 max_results=per_worker_max,
@@ -529,6 +549,7 @@ async def run_maps_scraper_parallel(
                 depth=depth,
                 soft_deadline_seconds=soft_deadline_seconds,
                 on_progress=_make_cb(idx),
+                concurrency=per_worker_c,
             )
         except Exception as e:
             logger.warning(f"[Scraper:{run_id}] shard {idx} failed ({len(shard)} queries): {e}")

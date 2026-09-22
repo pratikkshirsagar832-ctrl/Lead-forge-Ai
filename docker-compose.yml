@@ -1,5 +1,3 @@
-version: "3.8"
-
 services:
   backend:
     build:
@@ -11,6 +9,10 @@ services:
       - ./backend/.env
     volumes:
       - ./backend/sessions:/app/sessions
+      # Persist Playwright/Chromium browsers on the host so every container
+      # restart/rebuild does NOT pay a ~25s x N-workers re-download. The Go
+      # binary self-heals: missing versions are downloaded once on demand.
+      - /root/.cache/ms-playwright:/root/.cache/ms-playwright
     environment:
       - ENVIRONMENT=production
       - GMAPS_SCRAPER_PATH=/app/google-maps-scraper/google-maps-scraper

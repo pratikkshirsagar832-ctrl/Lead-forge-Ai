@@ -241,12 +241,25 @@ def _build_query_variants(niche: str, location: str, max_results: int = MAX_RESU
     if not location:
         return [niche] if niche else []
     base = f"{niche} in {location}" if niche else location
+    # Place categories (hotels, restaurants, ...) are physical venues:
+    # "company/agency/services" variants return noise for them, while
+    # luxury/budget/top-rated variants add real recall.
+    _PLACE_WORDS = {
+        "hotel", "hotels", "motel", "resort", "hostel", "guesthouse", "villa",
+        "restaurant", "restaurants", "cafe", "coffee", "pizza", "burger", "sushi",
+        "dhaba", "bakery", "bar", "pub", "gym", "salon", "spa", "clinic",
+        "hospital", "dentist", "dental", "school", "store", "shop", "mall",
+        "theater", "cinema", "garage", "laundry", "barber", "pharmacy",
+        "apartment", "car", "bike",
+    }
+    niche_words = set(niche.lower().split())
+    is_place = bool(niche_words & _PLACE_WORDS)
     candidates = [
         base,
         f"{niche} near {location}",
         f"best {niche} in {location}",
         f"{niche} {location}",
-        f"{niche} services in {location}",
+        f"{niche} services in {location}" if not is_place else f"{niche} {location} center",
     ]
     # Extra recall variants only for large counts — they cost one more shard,
     # not serial time, thanks to parallel workers.
@@ -255,13 +268,22 @@ def _build_query_variants(niche: str, location: str, max_results: int = MAX_RESU
     except (TypeError, ValueError):
         want_large = False
     if want_large:
-        candidates.extend([
-            f"top {niche} in {location}",
-            f"{niche} company in {location}",
-            f"{niche} agency in {location}",
-            f"{niche} {location} reviews",
-            f"{niche} near me {location}",
-        ])
+        if is_place:
+            candidates.extend([
+                f"top {niche} in {location}",
+                f"luxury {niche} in {location}",
+                f"budget {niche} in {location}",
+                f"top rated {niche} {location}",
+                f"{niche} near me {location}",
+            ])
+        else:
+            candidates.extend([
+                f"top {niche} in {location}",
+                f"{niche} company in {location}",
+                f"{niche} agency in {location}",
+                f"{niche} {location} reviews",
+                f"{niche} near me {location}",
+            ])
     limit = QUERY_VARIANT_LIMIT_LARGE if want_large else QUERY_VARIANT_LIMIT
     variants: list[str] = []
     seen: set[str] = set()

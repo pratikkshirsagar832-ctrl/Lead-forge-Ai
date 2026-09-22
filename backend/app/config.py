@@ -88,7 +88,12 @@ class Settings(BaseSettings):
     gmaps_scraper_path: str = "backend/google-maps-scraper/google-maps-scraper"
     # Google Maps speed tuning (env-overridable). Fast-first: depth=1 in the
     # hot path; website/email enrichment is on-demand, not blocking.
-    gmaps_concurrency: int = 24
+    gmaps_concurrency: int = 16
+    # Total browser-tab budget across ALL parallel workers. Per-worker -c is
+    # derived as total // shards (clamped 6-16) so 4 workers x 24 can never
+    # OOM a 4vCPU box or trip Google rate limits (96 tabs killed our test).
+    gmaps_total_concurrency: int = 32
+    gmaps_stagger_seconds: float = 2.0
     gmaps_workers: int = 4
     gmaps_depth: int = 1
     gmaps_soft_deadline_seconds: int = 55

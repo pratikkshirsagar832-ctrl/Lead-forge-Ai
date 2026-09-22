@@ -74,10 +74,10 @@ function LiveResultCard({ lead, index }: { lead: any; index: number }) {
                   <SourceBadge source={lead.source} />
                   {lead.source === 'linkedin' && (
                     <span className={`text-[9px] px-1.5 py-0.5 rounded font-semibold border ${
-                      lead.post_type === 'buyer' ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20'
+                      lead.post_type === 'buyer' || lead.post_type === 'agency' ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20'
                       : 'bg-white/5 text-ice/50 border-white/10'
                     }`}>
-                      {lead.post_type === 'buyer' ? 'Freelancer Needed' : 'Post'}
+                      {lead.post_type === 'buyer' ? 'Freelancer Needed' : lead.post_type === 'agency' ? 'Agency Wanted' : 'Post'}
                     </span>
                   )}
                   {lead.headline && (
@@ -198,6 +198,17 @@ export default function SearchPage() {
   const [reviewFilter, setReviewFilter] = useState<'all' | { min: number; max: number | null }>('all');
   const [source, setSource] = useState<'google_maps' | 'linkedin'>('google_maps');
   const sourceRef = useRef<'google_maps' | 'linkedin'>('google_maps');
+  // LinkedIn role lane: STRICT single-type — freelancer XOR agency, never mixed.
+  const [linkedinRole, setLinkedinRole] = useState<'freelancer' | 'agency'>(() => {
+    try {
+      const saved = typeof window !== 'undefined' ? window.localStorage.getItem('hyperclients_linkedin_role') : null;
+      return saved === 'agency' ? 'agency' : 'freelancer';
+    } catch { return 'freelancer'; }
+  });
+  const setRole = (r: 'freelancer' | 'agency') => {
+    setLinkedinRole(r);
+    try { window.localStorage.setItem('hyperclients_linkedin_role', r); } catch {}
+  };
   const [maxResults, setMaxResults] = useState<number>(() => {
     try {
       const saved = typeof window !== 'undefined' ? window.localStorage.getItem('hyperclients_maps_count') : null;
@@ -303,7 +314,7 @@ export default function SearchPage() {
       if (source === 'linkedin') {
         await startSearch(data.niche, data.location ?? '', {
           source: 'linkedin', enrichEmails: false, maxResults,
-          leadTypes: ['buyer'],
+          leadTypes: [linkedinRole],
         });
       } else {
         await startSearch(data.niche, data.location ?? '', { source: 'google_maps', enrichEmails: false, maxResults });
@@ -341,7 +352,9 @@ export default function SearchPage() {
           </h1>
           <p className="text-ice/50 mt-2 text-sm">
             {source === 'linkedin'
-              ? 'Genuine buyers of your service on LinkedIn — exact count, newest first.'
+              ? (linkedinRole === 'agency'
+                ? 'Clients on LinkedIn actively seeking an agency — exact count, newest first.'
+                : 'Genuine buyers of your service on LinkedIn — exact count, newest first.')
               : 'Find and qualify leads from Google Maps in seconds.'}
           </p>
         </div>
@@ -491,15 +504,31 @@ export default function SearchPage() {
                       ))}
                     </select>
                   </div>
-                  <div className="flex items-center gap-3 px-4 py-3 rounded-xl border border-emerald-500/30 bg-emerald-500/10 self-end w-full">
-                    <div className="p-2 rounded-lg bg-emerald-500/15 shrink-0">
-                      <Briefcase className="w-4 h-4 text-emerald-400" />
-                    </div>
-                    <div className="min-w-0">
-                      <p className="text-sm font-bold text-emerald-300 leading-tight">Freelancer Needed</p>
-                      <p className="text-[11px] text-emerald-400/70 leading-tight mt-0.5">AI-verified buyer intent only</p>
-                    </div>
-                    <BadgeCheck className="w-4 h-4 text-emerald-400/60 ml-auto shrink-0" />
+                  <div className="grid grid-cols-2 gap-2 self-end w-full">
+                    {([
+                      { key: 'freelancer', title: 'Freelancer', desc: 'Posts needing a freelancer', icon: Briefcase },
+                      { key: 'agency', title: 'Agency', desc: 'Clients seeking an agency', icon: Users },
+                    ] as const).map((r) => (
+                      <button
+                        key={r.key}
+                        type="button"
+                        onClick={() => setRole(r.key)}
+                        className={`flex items-center gap-2.5 px-3 py-2.5 rounded-xl border text-left transition-all ${
+                          linkedinRole === r.key
+                            ? 'bg-emerald-500/10 border-emerald-500/40'
+                            : 'bg-navy/60 border-ocean/25 hover:border-steel/40'
+                        }`}
+                      >
+                        <div className={`p-1.5 rounded-lg shrink-0 ${linkedinRole === r.key ? 'bg-emerald-500/15' : 'bg-steel/15'}`}>
+                          <r.icon className={`w-4 h-4 ${linkedinRole === r.key ? 'text-emerald-400' : 'text-steel'}`} />
+                        </div>
+                        <div className="min-w-0">
+                          <p className={`text-xs font-bold leading-tight ${linkedinRole === r.key ? 'text-emerald-300' : 'text-offwhite'}`}>I&apos;m {r.key === 'freelancer' ? 'a Freelancer' : 'an Agency'}</p>
+                          <p className="text-[10px] text-ice/50 leading-tight mt-0.5 truncate">{r.desc}</p>
+                        </div>
+                        {linkedinRole === r.key && <BadgeCheck className="w-4 h-4 text-emerald-400/60 ml-auto shrink-0" />}
+                      </button>
+                    ))}
                   </div>
                   <div className="sm:col-span-2 grid grid-cols-1 sm:grid-cols-3 gap-2">
                     {[

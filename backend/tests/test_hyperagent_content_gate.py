@@ -71,6 +71,72 @@ def test_empty_text_never_cheap_dropped():
     assert _content_matches_requested_type("", "need_freelancer") is True
     assert _content_matches_requested_type(None, "our_agency") is True
     assert _content_matches_requested_type("   ", "need_freelancer") is True
+    assert _content_matches_requested_type("", "need_agency") is True
+
+
+# ---- predicate: strict role split (freelancer XOR agency, never mixed) ----
+
+@pytest.mark.parametrize("text", [
+    "Looking for a marketing agency to handle our SEO. Budget ready.",
+    "Need a video production agency for our launch next month. Any recommendations?",
+    "We are hiring an agency for our rebrand — DM with portfolios.",
+    "Anyone know a good design agency? Need one for our site relaunch.",
+    "Looking to hire an agency to manage our ad spend this quarter.",
+])
+def test_need_agency_keeps_client_seeks_agency(text: str):
+    assert _content_matches_requested_type(text, "need_agency") is True
+
+
+@pytest.mark.parametrize("text", [
+    "Looking for a freelance video editor for our campaign. Budget is ready.",
+    "Anyone know a good video editor? We need 20 shorts cut this month.",
+])
+def test_need_agency_drops_pure_freelancer_asks(text: str):
+    assert _content_matches_requested_type(text, "need_agency") is False
+
+
+@pytest.mark.parametrize("text", [
+    "Our agency is recruiting freelancers for client projects — white label welcome.",
+    "Looking for freelancers to work with our agency on client work.",
+])
+def test_need_agency_drops_agency_sourcing(text: str):
+    assert _content_matches_requested_type(text, "need_agency") is False
+
+
+@pytest.mark.parametrize("text", [
+    "Hiring a designer to join our agency team full-time. Apply with your CV.",
+    "Open role at our agency: in-house editor, salary plus benefits.",
+])
+def test_need_agency_drops_employee_ads_for_agency_team(text: str):
+    assert _content_matches_requested_type(text, "need_agency") is False
+
+
+@pytest.mark.parametrize("text", [
+    "Looking for a marketing agency to handle our SEO. Budget ready.",
+    "Need a video production agency for our launch. Any recommendations?",
+    "We are hiring an agency for our rebrand.",
+])
+def test_need_freelancer_drops_agency_seeking_without_freelance_wording(text: str):
+    # THE strict-split guarantee: agency posts never surface in Freelancer mode.
+    assert _content_matches_requested_type(text, "need_freelancer") is False
+
+
+def test_need_freelancer_keeps_freelance_ask_inside_agency_context():
+    # "for our agency" + genuine freelancer wording is still a freelancer ask.
+    assert _content_matches_requested_type(
+        "Need a freelance video editor for our agency's channel this month.", "need_freelancer") is True
+
+
+def test_force_type_store_stamps_need_agency_and_drops_mixed():
+    inner = _FakeInner()
+    store = _ForceTypeStore(inner, "need_agency")
+    rows = [
+        {"post_text": "Looking for a marketing agency. Budget ready.", "lead_type": "need_agency"},
+        {"post_text": "Looking for a freelance designer. Budget ready.", "lead_type": "need_freelancer"},
+        {"post_text": "We are a full-service agency helping brands scale.", "lead_type": "need_agency"},
+    ]
+    assert store.insert_leads_many(rows) == 1
+    assert inner.seen[0]["lead_type"] == "need_agency"
 
 
 # ---- store wrapper applies the same predicate -------------------------------

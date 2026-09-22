@@ -30,14 +30,27 @@ procurement intent from someone who needs the service — or noise that must be 
 
 Ask ONE question about every post: WHO NEEDS and WHO OFFERS?
 
-Answer as one of three types:
+Answer as one of four types:
 - need_freelancer: someone needs an INDEPENDENT freelancer/contractor/individual for
   their own project or company — whether a solo founder or a business sourcing a
-  freelancer/contractor for a defined piece of work.
+  freelancer/contractor for a defined piece of work. The asker must want a PERSON,
+  never an agency/team/firm.
+- need_agency: a CLIENT/owner needs to hire an AGENCY/team/firm for their own work
+  ("looking for a marketing agency", "need an agency to handle our SEO", "agency
+  recommendations for our rebrand"). The asker is buying agency services — they are
+  NOT an agency themselves and NOT hiring an employee.
 - our_agency: an AGENCY wants to bring in outside freelance help (they source for
-  their own client work, they do not sell).
+  their own client work, they do not sell). (Retired from new searches; label
+  truthfully when you see it.)
 - irrelevant: everything else — including employee job ads, hiring for an in-house
   full-time role, sellers, and all the reject categories below.
+
+CRITICAL DIRECTION RULE: need_freelancer and need_agency are MUTUALLY EXCLUSIVE.
+A post seeking an agency/team/firm is NEVER need_freelancer, even if it says
+"freelance" nowhere. A post seeking an individual freelancer/contractor is NEVER
+need_agency, even if the asker is a company. When the THIS SEARCH scope (below)
+accepts only one type, a genuine buyer of the OTHER type still gets
+is_qualified=false with its true lead_type and the mismatch explained in `reason`.
 
 REJECT CATEGORIES — recognize and reject each, even in disguise:
 1. Seller / offering: the author provides the service themselves. Signals: "we offer...",
@@ -78,6 +91,30 @@ REJECT CATEGORIES — recognize and reject each, even in disguise:
 7. Referral asks that are actually self-promotion: "DM me for recommendations" from someone who
    sells the service themselves is a seller. But "anyone know a good X, my project needs one"
    from a genuine owner IS a buyer (recommendation intent) — do not over-reject.
+8. Agency self-promotion in disguise: "we're a full-service {service} agency",
+   "we help brands with X", "award-winning team taking new clients", "we scale
+   DTC brands" — an agency describing ITSELF is a seller, even with "looking"
+   nearby ("looking to partner with ambitious brands" = hunting clients).
+   Only an agency SOURCING help ("looking for freelancers for our client work")
+   is our_agency, and only a CLIENT seeking an agency is need_agency.
+9. Freelancer offering agency-level work: "I run a one-person agency", "I offer
+   agency-quality X", "freelancer available, agency experience" — a person
+   selling THEIR OWN labor is a job seeker, NEVER need_agency. need_agency
+   requires the asker to be buying, not selling.
+10. Agency↔agency "collab/partnership" with no client: "looking for an agency to
+    partner with", "collab with fellow agencies?", "white-label partnership
+    opportunity" between two agencies with no named client need = irrelevant.
+    It becomes need_agency ONLY when a clear client-side need exists ("we need
+    an agency to handle OUR rebrand" — the asker owns the need).
+11. "Vetted agencies network" / "join our agency directory": a platform
+    recruiting agencies as inventory (talent-marketplace pattern for agencies)
+    is a recruiting-seller, not a buyer — irrelevant.
+12. Employee ad wearing agency words: "hiring for OUR AGENCY TEAM", "join our
+    agency as a full-time designer", "we're hiring, apply with CV" = employee
+    job ad, always irrelevant. CONTRAST with the buyer: "HIRING AN AGENCY"
+    ("we're hiring an agency for our SEO") — the object being hired is an
+    outside firm, not a person joining a team. Hiring-AN-agency is a buyer;
+    hiring-FOR-an-agency(-team) is an employee ad. Decide, don't keyword-match.
 
 DISTINCTION RULES (precision over recall — a false positive is costly):
 - "is_buying_sourcing" = the author needs the service for their OWN project/company/clients.
@@ -110,6 +147,21 @@ Calibrate scores honestly against this bar:
 Never inflate scores to "be helpful" — a weak post with high scores is the
 costliest mistake this classifier can make.
 
+AGENCY QUALITY BAR (need_agency only — same floor as the freelancer bar):
+A genuine agency ask must carry AT LEAST ONE concrete buying signal:
+  scope (what the agency will own: "handle our SEO", "full rebrand", "manage
+  our ads"), money (budget / retainer / monthly spend), time (deadline /
+  timeline / start date / "this quarter"), outsourcer framing ("outsource our
+  X", "need an outside team", "hire an agency"), or an owner-asked referral
+  ("anyone know a good X agency for our launch").
+Calibrate identically: bare "need an agency" with NO scope/money/time signal
+is vague (commercial <= 45, evidence <= 55, intent at most recommendation,
+is_qualified = false); owner referrals qualify but cap commercial at 60
+without budget/timeline; 70+ only with scope + money/time evidence.
+AND the direction check comes first: an agency pitching itself scores
+is_selling_offering = true and is_qualified = false NO MATTER how concrete
+its offer sounds — concreteness of an OFFER is never buying intent.
+
 DOMAIN-GENERAL REASONING (§0): apply the direction-of-intent test below to whatever service the
 user sells — plumbing in Nairobi, UX design in Toronto, wedding photography in Mumbai, anything.
 There are no per-service rules; these examples teach the PATTERN, not an allow-list. The four
@@ -132,6 +184,24 @@ canonical pairs (paraphrased, for an imaginary production service) are:
 7. "Need 20 short videos cut for our campaign before the 15th — freelance, project basis, budget
    ready."  ->  is_qualified: true, lead_type: need_freelancer (bounded deliverable + deadline +
    freelance framing).
+8. "Looking for a performance marketing agency to manage our ad spend — $10k/mo
+   budget, starting next quarter. Recommendations welcome."  ->  is_qualified:
+   true, lead_type: need_agency (client buying agency services: scope + money + time).
+9. "We're a full-service creative agency helping DTC brands scale. DM us for
+   a free audit."  ->  is_qualified: false, is_selling_offering: true (agency
+   self-promotion — describing itself, hunting clients).
+10. "Anyone know a good SEO agency? We need one for our site relaunch next
+    month." (owner referral with timeline)  ->  is_qualified: true, lead_type:
+    need_agency.
+11. "Hiring a rockstar designer to join our agency team full-time. 3+ years,
+    apply with your CV."  ->  is_qualified: false, lead_type: irrelevant
+    (employee ad FOR an agency team — contrast with hiring-AN-agency).
+12. "I run a one-person video agency, available for projects — agency-quality
+    work."  ->  is_qualified: false, is_job_seek: true (person selling own
+    labor, however they brand it).
+13. "Looking for an agency to partner with on upcoming projects — collab?"
+    (no client, no scope, agency-to-agency)  ->  is_qualified: false, lead_type:
+    irrelevant (mutual partnership fishing, no buyer).
 
 Same pattern for any {service}: the asker must need the work done, not offer to do it, not be a
 freelancer hunting for their own gig, and not be a recruiter stocking talent for other people.
@@ -165,7 +235,7 @@ Never invent facts not in the post. Never output anything but the JSON object.
 OUTPUT FORMAT — return ONE JSON object and NEVER omit a field. The object must contain
 EXACTLY these keys (fill every one; booleans as true/false, scores 0-100, confidence 0-1):
 {
-  "lead_type": "need_freelancer|our_agency|irrelevant",
+   "lead_type": "need_freelancer|need_agency|our_agency|irrelevant",
   "intent_strength": "explicit|active_search|recommendation|problem_awareness|research|none",
   "is_buying_sourcing": true,
   "is_selling_offering": false,
@@ -194,6 +264,11 @@ _TYPE_DEFINITIONS: dict[str, tuple[str, str]] = {
         "contractor for a defined piece of work for their own project/company — the author is the "
         "buyer of the service, never an agency and never a recruiter hiring an employee.",
     ),
+    "need_agency": (
+        "Need Agency",
+        "a CLIENT/owner that wants to hire an AGENCY/team/firm for their own work — the author is "
+        "buying agency services, never an agency pitching itself and never a recruiter hiring an employee.",
+    ),
     "our_agency": (
         "Our Agency",
         "an AGENCY (design/production/marketing/etc.) that wants to bring in OUTSIDE freelance help "
@@ -210,7 +285,7 @@ _CLASSIFICATION_SCHEMA: dict[str, Any] = {
         "overall_quality_score", "is_qualified", "confidence", "evidence", "reason",
     ],
     "properties": {
-        "lead_type": {"type": "string", "enum": ["need_freelancer", "our_agency", "irrelevant"]},
+        "lead_type": {"type": "string", "enum": ["need_freelancer", "our_agency", "need_agency", "irrelevant"]},
         "intent_strength": {
             "type": "string",
             "enum": ["explicit", "active_search", "recommendation", "problem_awareness", "research", "none"],
@@ -277,7 +352,7 @@ def _user_prompt(post: dict[str, Any], service: str, country: str, requested_typ
             "THIS SEARCH ACCEPTS THESE BUYER TYPES: "
             + ", ".join(labels)
             + ". Any post that matches ONE of them is a qualified lead for this search — "
-            "label its real lead_type truthfully (need_freelancer / our_agency) and set "
+            "label its real lead_type truthfully (need_freelancer / need_agency) and set "
             "is_qualified=true. Only genuine buyers qualify: sellers, job seekers, talent marketplaces, "
             "agency self-promotion and thought-leadership posts must have is_qualified=false."
         )

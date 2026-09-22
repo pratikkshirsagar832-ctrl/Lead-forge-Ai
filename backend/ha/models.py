@@ -17,18 +17,23 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 class LeadType(str, Enum):
     """Buyer intents that are requestable. Everything else is rejected.
 
-    Exactly two requestable buyer situations (Â§1): an owner needs an
-    independent freelancer, or an agency wants to bring in outside freelance
-    help. Hiring/employee job ads and job seekers are never requestable.
+    Exactly two requestable buyer situations (§1): an owner needs an
+    independent freelancer (NEED_FREELANCER — the "I'm a Freelancer" mode),
+    or a client/owner needs an AGENCY for their work (NEED_AGENCY — the
+    "I'm an Agency" mode). Hiring/employee job ads and job seekers are never
+    requestable. OUR_AGENCY (an agency sourcing freelance help for its own
+    clients) is retired from the UI but kept for historical rows.
     """
 
     NEED_FREELANCER = "need_freelancer"  # individual/founder wants an independent freelancer
-    OUR_AGENCY = "our_agency"  # an agency wants to bring in outside freelance help
+    OUR_AGENCY = "our_agency"  # (retired) an agency wants to bring in outside freelance help
+    NEED_AGENCY = "need_agency"  # client/owner wants to hire an agency for their work
 
 
 LEAD_TYPE_LABELS: dict[LeadType, str] = {
     LeadType.NEED_FREELANCER: "Need Freelancer",
     LeadType.OUR_AGENCY: "Our Agency",
+    LeadType.NEED_AGENCY: "Need Agency",
 }
 
 # Sent the classifier may return when a candidate is not a qualified buyer.
@@ -103,7 +108,7 @@ class LeadClassification(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    lead_type: Literal["need_freelancer", "our_agency", "irrelevant"]
+    lead_type: Literal["need_freelancer", "our_agency", "need_agency", "irrelevant"]
     intent_strength: Literal[
         "explicit", "active_search", "recommendation", "problem_awareness", "research", "none"
     ]

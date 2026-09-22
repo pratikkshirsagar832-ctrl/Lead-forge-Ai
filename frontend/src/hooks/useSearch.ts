@@ -187,7 +187,7 @@ export function useSearch() {
     };
   }, [pollStatus, pollResults, clearPolling]);
 
-  const startSearch = async (niche: string, location: string, options?: { source?: 'google_maps' | 'linkedin'; enrichEmails?: boolean; maxResults?: number; leadTypes?: ('buyer')[] }) => {
+  const startSearch = async (niche: string, location: string, options?: { source?: 'google_maps' | 'linkedin'; enrichEmails?: boolean; maxResults?: number; leadTypes?: ('freelancer' | 'agency' | 'buyer')[] }) => {
     if (isStartingRef.current) return;
     try {
       isStartingRef.current = true;

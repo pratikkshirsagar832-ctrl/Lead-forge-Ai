@@ -18,10 +18,17 @@ class SearchCreateRequest(BaseModel):
     source: Literal["google_maps", "linkedin"] = Field("google_maps", description="Source type")
     enrich_emails: bool = Field(True, description="Try to find emails (linkedin only)")
     max_results: int = Field(10, ge=1, le=100, description="Number of leads to return")
-    lead_types: list[Literal["buyer"]] = Field(
-        default=["buyer"],
-        description="Filter lead types (linkedin only): buyer=needs freelancer."
+    lead_types: list[Literal["freelancer", "agency", "buyer"]] = Field(
+        default=["freelancer"],
+        description="Role filter (linkedin only): freelancer=needs a freelancer, "
+                    "agency=client seeks an agency. 'buyer' is legacy for freelancer."
     )
+
+    @field_validator("lead_types")
+    @classmethod
+    def _normalize_roles(cls, v: list[str]) -> list[str]:
+        # Legacy clients send ["buyer"] — same as freelancer mode.
+        return ["freelancer" if t == "buyer" else t for t in (v or ["freelancer"])] or ["freelancer"]
 
     @field_validator("niche")
     @classmethod

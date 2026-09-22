@@ -107,12 +107,15 @@ async def create_search(
     query_term = request.niche.strip()
     location_term = request.location.strip()
 
-    # Product policy: LinkedIn discovery targets genuine service buyers -
-    # freelancer-needed (buyer). Hiring/job-ads and
-    # job-seeker intents are never requested.
+    # Product policy: LinkedIn runs in exactly ONE role lane — freelancer
+    # (posts needing a freelancer) or agency (clients seeking an agency).
+    # Never mixed. Hiring/job-ads and job-seeker intents are never requested.
     if request.source == "linkedin":
-        requested = request.lead_types or ["buyer"]
-        lead_types = [t for t in requested if t in ("buyer",)] or ["buyer"]
+        requested = request.lead_types or ["freelancer"]
+        # Legacy "buyer" == freelancer lane. First valid role wins (one lane).
+        norm = ["freelancer" if t == "buyer" else t for t in requested]
+        lead_types = [t for t in norm if t in ("freelancer", "agency")] or ["freelancer"]
+        lead_types = lead_types[:1]
     else:
         lead_types = request.lead_types or []
 
@@ -160,8 +163,8 @@ async def create_search(
             ha_time_window_from,
         )
 
-        # Map frontend lead types to Hyperagent lead types.
-        # Frontend sends ["buyer"] (single buyer lane).
+        # Map frontend role to Hyperagent lead type.
+        # Frontend sends ["freelancer"] or ["agency"] (single role lane).
         ha_lead_type = ha_lead_type_from(lead_types)
         ha_time_window = ha_time_window_from()
         all_types = False
@@ -434,11 +437,12 @@ async def get_search_results(
                         item["linkedin_url"] = item["author_profile_url"]
                     if not item.get("post_type") and item.get("lead_type"):
                         # Map Hyperagent lead_type to frontend post_type. Only
-                        # the two requestable buyer types are stored (no
-                        # legacy hiring_buyer / marketplace_match rows remain).
+                        # the two requestable buyer types are stored (strict
+                        # single-lane: freelancer XOR agency, never mixed).
                         lt = item["lead_type"]
                         item["post_type"] = {
                             "need_freelancer": "buyer",
+                            "need_agency": "agency",
                         }.get(lt, "buyer")
                     if not item.get("headline") and item.get("author_name"):
                         item["headline"] = item["author_name"]

@@ -187,9 +187,20 @@ def _need_freelancer(svc: str, naked: str, phrase: str | None) -> list[str]:
 
 
 def _our_agency(svc: str, naked: str, phrase: str | None) -> list[str]:
-    # Agency-wanted lane: companies/people posting that they want to hire an
-    # AGENCY / outside team for the service — NOT an agency sourcing
-    # freelancers (that is the sibling hiring direction).
+    # RETIRED from the UI (kept for engine compat): an agency sourcing
+    # freelancers for its own clients. New searches never request this.
+    qs = [
+        f"looking for {svc} freelancers to work with our agency",
+        f"our agency needs extra {svc} help",
+        f"{svc} freelancers needed for client projects",
+    ]
+    return [q for q in qs]
+
+
+def _need_agency(svc: str, naked: str, phrase: str | None) -> list[str]:
+    # Agency-wanted lane: a client/owner posting that they want to hire an
+    # AGENCY / outside team for the service — the "I'm an Agency" mode.
+    # NOT an agency sourcing freelancers (that is the retired sibling).
     qs = [
         f"looking for an agency for {svc}",
         f"need an agency for {svc}",
@@ -203,6 +214,7 @@ def _our_agency(svc: str, naked: str, phrase: str | None) -> list[str]:
 _BUILDERS = {
     LeadType.NEED_FREELANCER: _need_freelancer,
     LeadType.OUR_AGENCY: _our_agency,
+    LeadType.NEED_AGENCY: _need_agency,
 }
 
 
@@ -346,9 +358,39 @@ def _pool(svc: str, naked: str, phrase: str | None, lead_type: LeadType) -> list
         ]
         return out
 
-    # OUR_AGENCY — discovery targets agencies/teams that want outside freelance
-    # help for their own client work, plus companies seeking an agency/outside
-    # team (sibling buyer under ACCEPT_SIBLING_BUYERS).
+    if lead_type == LeadType.NEED_AGENCY:
+        # NEED_AGENCY — a client/owner seeking an agency for their own work.
+        # STRICT: no agency-seeks-freelancers phrasings here (that retired
+        # sibling direction must never surface in "I'm an Agency" mode).
+        out += [
+            f"looking for an agency for {svc}",
+            f"need an agency for {svc}",
+            f"looking for a {svc} agency",
+            f"need a {svc} agency",
+            f"seeking an agency for {svc}",
+            f"anyone recommend a {svc} agency",
+            f"recommendations for a {svc} agency",
+            f"hiring an agency for {svc}",
+            f"looking to hire an agency for {svc}",
+            f"looking for an agency to handle {svc}",
+            f"need an agency to handle {svc}",
+            f"recommend a good {svc} agency",
+            f"looking for the best {svc} agency",
+            f"{svc} agency recommendations",
+            f"looking for a company that does {svc}",
+            f"need a partner for {svc}",
+            f"looking for an expert team for {svc}",
+            f"outsource {svc} to an agency",
+            f"anyone know a good {svc} agency",
+            f"we are looking for an agency for {svc}",
+            f"hire a {svc} agency",
+            f"best {svc} agency for hire",
+            f"looking for a reliable {svc} agency",
+            f"need a full-service {svc} agency",
+        ]
+        return out
+
+    # OUR_AGENCY (retired from UI) — agency-seeks-freelancers phrasings only.
     lane_a = [
         "looking for freelancers to work with our agency",
         f"looking for {svc} freelancers to work with our agency",
@@ -373,30 +415,7 @@ def _pool(svc: str, naked: str, phrase: str | None, lead_type: LeadType) -> list
         "need a freelance bench for client work",
         f"any good {svc} freelancers for agency work",
     ]
-    lane_b = [
-        # company/person seeking an agency for their own work
-        f"looking for an agency for {svc}",
-        f"need an agency for {svc}",
-        f"looking for a {svc} agency",
-        f"need a {svc} agency",
-        f"seeking an agency for {svc}",
-        f"anyone recommend a {svc} agency",
-        f"recommendations for a {svc} agency",
-        f"hiring an agency for {svc}",
-        f"looking to hire an agency for {svc}",
-        f"looking for an agency to handle {svc}",
-        f"need an agency to handle {svc}",
-        f"recommend a good {svc} agency",
-        f"looking for the best {svc} agency",
-        f"{svc} agency recommendations",
-        f"looking for a company that does {svc}",
-        f"need a partner for {svc}",
-        f"looking for an expert team for {svc}",
-        f"outsource {svc} to an agency",
-        f"anyone know a good {svc} agency",
-        f"we are looking for an agency for {svc}",
-    ]
-    out += lane_b + lane_a
+    out += lane_a
     return out
 
 

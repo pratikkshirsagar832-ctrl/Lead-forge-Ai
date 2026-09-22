@@ -88,13 +88,18 @@ def ha_normalize_country(value: str):
 
 
 def ha_lead_type_from(lead_types) -> str:
-    """Map main-app lead_types (buyer) → Hyperagent type.
+    """Map main-app lead_types (freelancer/agency) → Hyperagent type.
 
-    UI semantics:
-      buyer          -> need_freelancer : posts asking for a freelancer
+    UI semantics (STRICT — one role per search, never mixed):
+      freelancer     -> need_freelancer : posts asking for a freelancer/person
+      agency         -> need_agency     : posts where a client seeks an agency
+      buyer (legacy) -> need_freelancer : old rows predate the role picker
     Hiring / employee job-ads are never requested (filtered out by the store
     content gate below).
     """
+    requested = [str(t or "").strip().lower() for t in (lead_types or [])]
+    if "agency" in requested:
+        return "need_agency"
     return "need_freelancer"
 
 
@@ -123,8 +128,11 @@ def _ha_settings() -> HaSettings:
     os.environ.setdefault("DEEPSEEK_MODEL", main.deepseek_model)
     # GLOBAL SEARCH: no country filter at all. STRICT_COUNTRY stays off so
     # every country's genuine buyers are accepted.
-    os.environ["ACCEPT_SIBLING_BUYERS"] = "1"
-    os.environ["MIN_OVERALL_SCORE"] = "55"
+    # STRICT role split: one search = exactly ONE buyer direction. Sibling
+    # acceptance is OFF so a freelancer search can never deliver agency
+    # posts and vice versa ("no any other").
+    os.environ["ACCEPT_SIBLING_BUYERS"] = "0"
+    os.environ["MIN_OVERALL_SCORE"] = "60"
     # MIN_SERVICE_MATCH=60: the earlier 45 let "adjacent craft" posts through
     # (a social-media-agency ask delivered for a "video editing" search scored
     # match=70). Genuine buyer posts score 70-90, so 60 drops the weakest
@@ -143,10 +151,10 @@ def _ha_settings() -> HaSettings:
     # to keep the same number of full discovery rounds.
     os.environ["MAX_SERPER_REQUESTS_PER_SEARCH"] = "80"
     os.environ["MAX_DEEPSEEK_CALLS_PER_SEARCH"] = "150"
-    # Model gate OFF: referral/recommendation posts (very common for agency
-    # seekers) often hedge is_qualified=false despite real buying intent — the
-    # score/intent/content gates already protect precision.
-    os.environ["REQUIRE_MODEL_QUALIFIED"] = "0"
+    # Model gate ON: with the v2 prompt (explicit need_agency scope, 6 new
+    # traps, direction-first calibration) the model's own verdict is trusted —
+    # a hedged is_qualified=false kills the candidate. Strict > volume.
+    os.environ["REQUIRE_MODEL_QUALIFIED"] = "1"
     os.environ["STRICT_COUNTRY"] = "0"
     return HaSettings()
 
@@ -200,11 +208,11 @@ def build_classifier(settings: HaSettings):
 class _ForceTypeStore:
     """Delegating store wrapper that enforces the requested lead type on save.
 
-    The engine (sibling mode) accepts every genuine buyer (need_freelancer /
-    our_agency) so nothing starves; THIS wrapper is what makes a Freelancer
-    search show freelancer-needed posts and an Agency search show agency/
-    team-sourcing posts. The type label is stamped AND opposite-direction
-    content is dropped.
+    Sibling mode is OFF (ACCEPT_SIBLING_BUYERS=0): the engine only accepts the
+    requested type, and THIS wrapper is the second strict wall — the type
+    label is stamped AND opposite-direction content is dropped. A Freelancer
+    search shows ONLY freelancer-needed posts; an Agency search shows ONLY
+    client-seeks-agency posts. No mixing, ever.
     """
 
     # Employee-role / job-ad markers. When present WITHOUT any freelance/contract
@@ -243,6 +251,16 @@ class _ForceTypeStore:
                         "client projects", "client work", "work with our agency",
                         "freelance bench", "overflow work", "white label freelancers",
                         "white-label freelancers")
+    # Agency-SEEKING = agency words + seeking verbs TOGETHER. Either side alone
+    # is ambiguous (an agency pitching itself also says "agency"; a freelancer
+    # ask also says "looking for") — the pair is the direction signal, and the
+    # classifier owns the remaining ambiguity. This pair is the "I'm an Agency"
+    # direction — and what must NEVER surface in Freelancer mode.
+    _AGENCY_SEEK_VERBS = ("looking for", "need ", "needs ", "hiring an agency",
+                          "hire an agency", "recommend", "seeking", "outsource",
+                          "anyone know", "looking to hire", "want to hire")
+    # "Hiring an agency" is a buyer ask even though it contains hiring words —
+    # the employee-hiring drop must exempt it (see gate below).
 
     def __init__(self, inner, lead_type: str, user_id: str | None = None) -> None:
         self._inner = inner
@@ -319,13 +337,16 @@ def _content_matches_requested_type(text: str, lead_type: str) -> bool:
     post is never discarded at save time — a search that claims N leads really
     saves N — and no LLM credit is spent on a post the store would drop anyway.
 
-    need_freelancer  -> someone needs an independent freelancer/contractor.
-                       Agency-sourcing posts (an agency recruiting freelancers
-                       for its clients) and employee job-ads (no freelance
-                       wording) are the wrong direction.
-    our_agency       -> an agency / outside team is being sourced. Posts that
-                       reference an agency or company/team-sourcing context are
-                       kept; pure individual freelance asks are dropped.
+    need_freelancer  -> someone needs an independent freelancer/contractor
+                       PERSON. Agency-sourcing posts, agency-SEEKING posts (a
+                       client wanting an agency — the opposite direction), and
+                       employee job-ads (no freelance wording) are dropped.
+    need_agency      -> a client/owner seeks to HIRE an agency/team/firm.
+                       Agency-sourcing posts (agency recruiting freelancers),
+                       agency self-promo without seeking verbs, and employee
+                       job-ads are dropped. "Hiring AN agency" is exempt from
+                       the employee-hiring drop.
+    our_agency       -> (retired) an agency / outside team is being sourced.
     Empty text is never cheap-dropped (no text = classifier owns it).
     """
     low = (text or "").lower()
@@ -335,10 +356,26 @@ def _content_matches_requested_type(text: str, lead_type: str) -> bool:
     freelance = any(m in low for m in _ForceTypeStore._FREELANCER_WORDS)
     agency = any(m in low for m in _ForceTypeStore._AGENCY_WORDS)
     agency_sourcing = any(m in low for m in _ForceTypeStore._AGENCY_SOURCING)
+    seek = any(m in low for m in _ForceTypeStore._AGENCY_SEEK_VERBS)
+    agency_seeking = agency and seek and not agency_sourcing
+    hiring_an_agency = "hiring an agency" in low or "hire an agency" in low
     if lead_type == "need_freelancer":
         if agency_sourcing:
             return False
+        # Agency-seeking with no freelancer wording is the opposite direction
+        # ("need a marketing agency" is not a freelancer ask) — strict split.
+        if agency_seeking and not freelance:
+            return False
         if emp_hiring and not freelance:
+            return False
+        return True
+    if lead_type == "need_agency":
+        if agency_sourcing:
+            return False
+        if not agency_seeking:
+            return False
+        # Employee job-ads are never agency hires — except hiring AN agency.
+        if emp_hiring and not hiring_an_agency:
             return False
         return True
     if lead_type == "our_agency":
@@ -398,11 +435,11 @@ def _run_search_worker_body(search_id: str, user_id: str, settings: HaSettings, 
             query_expander = make_query_expander(classifier, lead_type=force_lead_type or "need_freelancer")
         except Exception:  # noqa: BLE001 - expansion is optional, never blocking
             log.debug("Query expander unavailable (deterministic pool only)", exc_info=True)
-        # Store wrapper: the engine may classify a genuine post under either
-        # buyer bucket (need_freelancer / our_agency). The product promise is
-        # that a freelancer search returns freelancer-needed leads and an
-        # agency search returns agency-sourcing leads — so the STORED type is
-        # forced to the requested wire type before persistence.
+        # Store wrapper: strict single-type mode (ACCEPT_SIBLING_BUYERS=0), so
+        # the engine only accepts the requested bucket. The product promise is
+        # that a freelancer search returns ONLY freelancer-needed leads and an
+        # agency search returns ONLY client-seeks-agency leads — so the STORED
+        # type is forced to the requested wire type before persistence.
         store = _UserScopedStore(store, user_id)
         content_filter = None
         if force_lead_type and not all_types:

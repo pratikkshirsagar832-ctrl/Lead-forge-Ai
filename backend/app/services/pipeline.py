@@ -25,10 +25,12 @@ _cancel_lock = threading.Lock()
 _cancelled_searches: set[str] = set()
 MAX_SEARCH_TIME_SECONDS = 600
 MAX_RESULTS = 25
-# Fast-first budgets: 100 leads in ~60s. Depth=1 hot path; website/email
-# enrichment is on-demand via POST /api/leads/{id}/analyze-website.
-SCRAPER_SOFT_DEADLINE_SECONDS = 55
-SCRAPER_HARD_TIMEOUT_SECONDS = 70
+# Fast budgets (VPS-measured vs live Google): single -c24 fleet yields
+# ~1 lead/s, so 100 needs ~85s scrape + ~10s save. Depth=1 hot path;
+# website/email enrichment is on-demand via POST /api/leads/{id}/analyze-website.
+# Leads stream to the UI live, so users see the first 20+ within ~20s.
+SCRAPER_SOFT_DEADLINE_SECONDS = 65
+SCRAPER_HARD_TIMEOUT_SECONDS = 85
 SCRAPER_FAST_DEPTH = 1
 # Query variants sharded across parallel Go workers (see scraper_service).
 QUERY_VARIANT_LIMIT = 5

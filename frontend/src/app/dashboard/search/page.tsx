@@ -205,7 +205,7 @@ export default function SearchPage() {
       return [20, 50, 80, 100].includes(n) ? n : 20;
     } catch { return 20; }
   });
-  const MAPS_ETA: Record<number, string> = { 20: '~20s', 50: '~35s', 80: '~50s', 100: '~60s' };
+  const MAPS_ETA: Record<number, string> = { 20: '~25s', 50: '~50s', 80: '~75s', 100: '~90s' };
   const setMapsCount = (n: number) => {
     setMaxResults(n);
     try { window.localStorage.setItem('hyperclients_maps_count', String(n)); } catch {}
@@ -708,7 +708,7 @@ function SearchInfoSection({ isAtLimit, remaining, searchesPerDay, isStarting, s
           <p className="text-sm text-ice/70 leading-relaxed">
             {isLinkedIn
               ? 'Hyperclients will scan the latest LinkedIn posts, verify every buyer with AI, and deliver your exact lead count. Usually takes 1-5 minutes.'
-              : 'Parallel fast scrape delivers up to 100 leads in ~60s. Website + email analysis runs on demand from the lead page.'}
+              : 'Fast scrape streams leads live — first results in ~20s, up to 100 in ~90s. Website + email analysis runs on demand from the lead page.'}
           </p>
         </div>
       )}

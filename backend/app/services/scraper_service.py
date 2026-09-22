@@ -506,24 +506,55 @@ async def run_maps_scraper_parallel(
         depth = tuning["depth"]
     if soft_deadline_seconds is None:
         soft_deadline_seconds = tuning["soft_deadline"]
+    # Evidence-based default from 5 live VPS runs against Google Maps:
+    #   * 4 fleets x -c8..12  -> late starters throttled to 0 rows (30-53 leads)
+    #   * 1 fleet  x -c48      -> nearly everything blocked (1 lead / 90s)
+    #   * 1 fleet  x -c24      -> sweet spot (86 leads / 90s, no mass blocks)
+    # So: ONE browser fleet, -c16 (small) / -c24 (large), plus a serial
+    # second pass for stragglers. Sharding stays for explicit workers=N.
     if workers is None:
-        if max_results <= 20:
-            workers = min(2, tuning["workers"])
-        elif max_results <= 50:
-            workers = min(3, tuning["workers"])
-        else:
-            workers = tuning["workers"]
+        workers = 1
     workers = max(1, min(workers, len(lines), 4))
 
+    t0 = time.time()
     if workers <= 1 or len(lines) <= 1:
-        return await run_maps_scraper(
+        single_c = 16 if max_results <= 20 else 24
+        first = await run_maps_scraper(
             query=lines,
             max_results=max_results,
             timeout_seconds=timeout_seconds,
             depth=depth,
             soft_deadline_seconds=soft_deadline_seconds,
             on_progress=on_progress,
+            concurrency=single_c,
         )
+        got = _dedupe_businesses(first or [])
+        # Serial second pass in the SAME fleet (no new concurrent burst):
+        # picks up queries Google slow-rolled the first time around.
+        second_budget = int(timeout_seconds + 15 - (time.time() - t0))
+        if len(got) < max_results and second_budget >= 20:
+            need = max_results - len(got)
+            logger.info(
+                f"[Scraper] SECOND-PASS: have {len(got)}/{max_results}, "
+                f"retrying all queries for +{need} with {second_budget}s"
+            )
+            try:
+                extra = await run_maps_scraper(
+                    query=lines,
+                    max_results=need,
+                    timeout_seconds=second_budget,
+                    depth=depth,
+                    soft_deadline_seconds=min(int(soft_deadline_seconds or 65), second_budget),
+                    on_progress=on_progress,
+                    concurrency=single_c,
+                )
+                got = _dedupe_businesses(got + (extra or []))[:max_results]
+            except Exception as e:
+                logger.warning(f"[Scraper] second pass failed: {e}")
+        logger.info(
+            f"[Scraper] SINGLE done: {len(got)}/{max_results} in {time.time() - t0:.1f}s"
+        )
+        return got
 
     shards = _shard_queries(lines, workers)
     per_worker_max = max(10, math.ceil(max_results / len(shards)) + 5)

@@ -90,20 +90,24 @@ export function useSearch() {
     resultsAbortRef.current?.abort();
     const abort = new AbortController();
     resultsAbortRef.current = abort;
+    // Maps fast path streams 100 leads in ~60s: fetch 12/page every 2.5s
+    // (was 4/page every 4s = 25 polls for 100). LinkedIn max is 10 anyway.
+    const PER_PAGE = 12;
+    const INTERVAL = 2500;
     try {
       const page = resultsPageRef.current;
-      const { data } = await api.get(`${API_ROUTES.searches.detail(id)}/results?page=${page}&per_page=4`, { signal: abort.signal });
+      const { data } = await api.get(`${API_ROUTES.searches.detail(id)}/results?page=${page}&per_page=${PER_PAGE}`, { signal: abort.signal });
       if (data.items?.length > 0) {
         appendResults(data.items);
       }
       if (data.total && data.total > 0) {
         setResults(useSearchStore.getState().results, data.total);
       }
-      if (data.total > resultsPageRef.current * 4) {
+      if (data.total > resultsPageRef.current * PER_PAGE) {
         resultsPageRef.current += 1;
       }
       resultsRetryRef.current = 0;
-      resultsPollTimerRef.current = setTimeout(() => pollResultsRef.current?.(id), 4000);
+      resultsPollTimerRef.current = setTimeout(() => pollResultsRef.current?.(id), INTERVAL);
     } catch (e: any) {
       if (e.name === 'CanceledError' || e.code === 'ERR_CANCELED') return;
       console.warn('Poll results failed, retrying:', e);
@@ -112,7 +116,7 @@ export function useSearch() {
         clearPolling();
         return;
       }
-      resultsPollTimerRef.current = setTimeout(() => pollResultsRef.current?.(id), 4000);
+      resultsPollTimerRef.current = setTimeout(() => pollResultsRef.current?.(id), INTERVAL);
     }
   }, [appendResults, clearPolling, setResults]);
 

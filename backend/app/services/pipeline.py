@@ -15,16 +15,26 @@ import time
 from datetime import date, datetime, timezone
 
 from app.database import get_supabase_admin
-from app.services.scraper_service import run_maps_scraper
+from app.services.scraper_service import run_maps_scraper, run_maps_scraper_parallel
 from app.services.usage import settle_search_quota
 
 logger = logging.getLogger(__name__)
 
-_search_semaphore = asyncio.Semaphore(3)
+_search_semaphore = asyncio.Semaphore(4)
 _cancel_lock = threading.Lock()
 _cancelled_searches: set[str] = set()
 MAX_SEARCH_TIME_SECONDS = 600
 MAX_RESULTS = 25
+# Fast-first budgets: 100 leads in ~60s. Depth=1 hot path; website/email
+# enrichment is on-demand via POST /api/leads/{id}/analyze-website.
+SCRAPER_SOFT_DEADLINE_SECONDS = 55
+SCRAPER_HARD_TIMEOUT_SECONDS = 70
+SCRAPER_FAST_DEPTH = 1
+# Query variants sharded across parallel Go workers (see scraper_service).
+QUERY_VARIANT_LIMIT = 5
+QUERY_VARIANT_LIMIT_LARGE = 10
+# Bulk-save chunk: 100 leads must not serialize on RPC round-trips.
+SAVE_CHUNK_SIZE = 25
 
 TERMINAL_STATUSES = ("completed", "failed", "cancelled")
 # Hard per-search cap for load-more batches (avoids unbounded paid scraper runs).
@@ -54,9 +64,15 @@ async def run_search_pipeline(
     user_id: str,
     niche: str,
     location: str,
+    max_results: int = MAX_RESULTS,
 ) -> None:
     supabase = get_supabase_admin()
     start_time = time.time()
+    try:
+        requested = int(max_results)
+    except (TypeError, ValueError):
+        requested = MAX_RESULTS
+    requested = max(1, min(requested, MAX_SEARCH_LEADS_CAP))
 
     try:
         async with _search_semaphore:
@@ -72,7 +88,9 @@ async def run_search_pipeline(
                 "message": f"Starting search...",
             })
 
-            outcome, limit_hit = await _run_maps_search(supabase, search_id, user_id, niche, location, start_time)
+            outcome, limit_hit = await _run_maps_search(
+                supabase, search_id, user_id, niche, location, start_time, max_results=requested
+            )
 
             # Only a genuinely-running outcome may be finalized as completed.
             # Terminal outcomes already wrote their own status.
@@ -210,8 +228,71 @@ async def load_more_maps_search(
     return len(lead_ids)
 
 
+def _build_query_variants(niche: str, location: str, max_results: int = MAX_RESULTS) -> list[str]:
+    """Build query lines sharded across parallel Go workers.
+
+    Small runs (<=20) use 5 focused variants. Large runs (>=50) fan out to
+    8-10 broader variants so 100 unique businesses are reachable within the
+    60s budget — each shard runs in its own Go process (see
+    run_maps_scraper_parallel), so extra variants add coverage, not latency.
+    """
+    niche = (niche or "").strip()
+    location = (location or "").strip()
+    if not location:
+        return [niche] if niche else []
+    base = f"{niche} in {location}" if niche else location
+    candidates = [
+        base,
+        f"{niche} near {location}",
+        f"best {niche} in {location}",
+        f"{niche} {location}",
+        f"{niche} services in {location}",
+    ]
+    # Extra recall variants only for large counts — they cost one more shard,
+    # not serial time, thanks to parallel workers.
+    try:
+        want_large = int(max_results or 0) >= 50
+    except (TypeError, ValueError):
+        want_large = False
+    if want_large:
+        candidates.extend([
+            f"top {niche} in {location}",
+            f"{niche} company in {location}",
+            f"{niche} agency in {location}",
+            f"{niche} {location} reviews",
+            f"{niche} near me {location}",
+        ])
+    limit = QUERY_VARIANT_LIMIT_LARGE if want_large else QUERY_VARIANT_LIMIT
+    variants: list[str] = []
+    seen: set[str] = set()
+    for q in candidates:
+        key = q.strip().lower()
+        if key and key not in seen:
+            seen.add(key)
+            variants.append(q.strip())
+        if len(variants) >= limit:
+            break
+    return variants or [base]
+
+
+def _dedupe_results(results: list[dict]) -> list[dict]:
+    """Drop duplicate businesses across query variants (first wins)."""
+    seen: set[str] = set()
+    deduped: list[dict] = []
+    for r in results:
+        key = (r.get("google_key") or "").strip().lower()
+        if not key:
+            key = (r.get("business_name") or "").strip().lower()
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        deduped.append(r)
+    return deduped
+
+
 async def _run_maps_search(
-    supabase, search_id: str, user_id: str, niche: str, location: str, start_time: float
+    supabase, search_id: str, user_id: str, niche: str, location: str, start_time: float,
+    max_results: int = MAX_RESULTS,
 ) -> tuple[str, bool]:
     """Run the scraper and save leads.
 
@@ -221,21 +302,40 @@ async def _run_maps_search(
       outcome "cancelled" -> cancelled (terminal 'cancelled' already written)
       outcome "no_results"-> completed with zero leads (already written)
     """
-    query = f"{niche} in {location}" if (location or "").strip() else niche
+    queries = _build_query_variants(niche, location, max_results)
     elapsed = time.time() - start_time
-    remaining_timeout = max(60, int(MAX_SEARCH_TIME_SECONDS - elapsed - 60))
+    # Hard 60-70s budget for the hot path: prefer partial 100 now over
+    # perfect 100 later. remaining_timeout only applies to queued-behind time.
+    remaining_timeout = max(60, min(SCRAPER_HARD_TIMEOUT_SECONDS, int(MAX_SEARCH_TIME_SECONDS - elapsed - 60)))
+    soft_deadline = max(30, min(SCRAPER_SOFT_DEADLINE_SECONDS, remaining_timeout))
 
     await _update_search(supabase, search_id, {
         "progress_percent": 10,
         "message": f"Searching Google Maps for '{niche}' in {location}...",
     })
 
+    def _on_progress(count: int) -> None:
+        if count <= 0:
+            return
+        pct = min(35, 10 + int((count / max(1, max_results)) * 25))
+        try:
+            supabase.table("searches").update({
+                "progress_percent": pct,
+                "message": f"Found {count}/{max_results} businesses on Google Maps...",
+            }).eq("id", search_id).execute()
+        except Exception:
+            pass
+
     try:
-        raw_results = await run_maps_scraper(
-            query=query,
-            max_results=MAX_RESULTS,
+        # Parallel sharded run: 2 workers for <=20, 3 for <=50, 4 for 80-100.
+        # Depth=1 fast path; load-more keeps depth=2 thorough fill.
+        raw_results = await run_maps_scraper_parallel(
+            query=queries,
+            max_results=max_results,
             timeout_seconds=remaining_timeout,
-            depth=3,
+            depth=SCRAPER_FAST_DEPTH,
+            soft_deadline_seconds=soft_deadline,
+            on_progress=_on_progress,
         )
     except Exception as e:
         logger.error(f"[Pipeline:{search_id}] Maps scraper failed: {e}")
@@ -248,6 +348,8 @@ async def _run_maps_search(
     if is_search_cancelled(search_id) or await _db_status_is(supabase, search_id, "cancelled"):
         await _mark_cancelled(supabase, search_id)
         return "cancelled", False
+
+    raw_results = _dedupe_results(raw_results)[:max_results]
 
     if not raw_results:
         await _update_search(supabase, search_id, {
@@ -285,13 +387,23 @@ async def _save_maps_leads(
         remaining_leads = len(raw_results) + 100
         logger.debug(f"[Pipeline:{search_id}] reserved_leads column unavailable, saving all results")
 
-    lead_ids = []
     hit_limit = False
-    for result in raw_results:
-        if remaining_leads <= 0:
-            hit_limit = True
-            logger.warning(f"[Pipeline:{search_id}] Monthly lead reservation exhausted. Skipping {len(raw_results) - len(lead_ids)} remaining results.")
-            break
+    to_save = list(raw_results)
+    if remaining_leads > 0 and len(to_save) > remaining_leads:
+        hit_limit = True
+        logger.warning(
+            f"[Pipeline:{search_id}] Monthly lead reservation exhausted. "
+            f"Saving {remaining_leads} of {len(raw_results)} results."
+        )
+        to_save = to_save[:remaining_leads]
+    elif remaining_leads <= 0:
+        hit_limit = True
+        logger.warning(f"[Pipeline:{search_id}] Monthly lead reservation exhausted. Skipping all results.")
+        to_save = []
+
+    total = len(to_save)
+
+    async def _save_one(result: dict) -> str | None:
         try:
             has_website = bool(result.get("website_url"))
             lead_data = {
@@ -316,10 +428,26 @@ async def _save_maps_leads(
                 lambda: supabase.rpc("save_lead", {"p_data": lead_data}).execute()
             )
             if response.data and len(response.data) > 0:
-                lead_ids.append(response.data[0]["id"])
-                remaining_leads -= 1  # decrement local counter after successful save
+                return response.data[0]["id"]
         except Exception as e:
             logger.error(f"Failed to save lead '{result.get('business_name', '?')}': {e}")
+        return None
+
+    # Batch saves in parallel chunks so 100 leads do not serialize on RPC RTT.
+    # 25-wide chunks = 4 round-trips for 100 leads (was 10 round-trips).
+    lead_ids: list[str] = []
+    chunk_size = SAVE_CHUNK_SIZE
+    for i in range(0, total, chunk_size):
+        chunk = to_save[i:i + chunk_size]
+        saved = await asyncio.gather(*(_save_one(r) for r in chunk))
+        lead_ids.extend([sid for sid in saved if sid])
+        if total > 0 and i + chunk_size < total:
+            pct = 40 + int((len(lead_ids) / total) * 50)
+            await _update_search(supabase, search_id, {
+                "progress_percent": min(95, pct),
+                "message": f"Saving leads... {len(lead_ids)}/{total}",
+            })
+
     return lead_ids, hit_limit
 
 

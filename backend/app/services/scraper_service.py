@@ -11,6 +11,7 @@ import json
 import logging
 import os
 import tempfile
+import time
 import uuid
 from pathlib import Path
 
@@ -62,20 +63,110 @@ def _get_scraper_path() -> str:
     return path
 
 
+def _count_csv_rows(output_file: str) -> int:
+    """Best-effort count of data rows in a (possibly still-writer) CSV."""
+    try:
+        if not os.path.exists(output_file):
+            return 0
+        with open(output_file, "r", encoding="utf-8", errors="replace") as f:
+            # First line is the header; count non-empty remaining lines.
+            n = 0
+            for line in f:
+                if line.strip():
+                    n += 1
+            return max(0, n - 1)
+    except OSError:
+        return 0
+
+
+def _gmaps_tuning() -> dict:
+    """Resolve speed tunables from Settings with env fallback.
+
+    Keeps backwards compat with the legacy GMAPS_CONCURRENCY env var while
+    allowing full tuning via typed Settings (which also read env).
+    """
+    try:
+        settings = get_settings()
+    except Exception:
+        settings = None  # type: ignore[assignment]
+
+    def _int_env(name: str, default: int) -> int:
+        raw = os.environ.get(name, "").strip()
+        if raw:
+            try:
+                return max(1, int(raw))
+            except ValueError:
+                pass
+        if settings is not None:
+            try:
+                return max(1, int(getattr(settings, name.lower(), default) or default))
+            except (TypeError, ValueError):
+                pass
+        return default
+
+    concurrency = _int_env("GMAPS_CONCURRENCY", 24)
+    workers = _int_env("GMAPS_WORKERS", 4)
+    depth = _int_env("GMAPS_DEPTH", 1)
+    soft = _int_env("GMAPS_SOFT_DEADLINE_SECONDS", 55)
+    timeout = _int_env("GMAPS_TIMEOUT_SECONDS", 70)
+    exit_inactivity = (os.environ.get("GMAPS_EXIT_INACTIVITY", "").strip()
+                       or (getattr(settings, "gmaps_exit_inactivity", "12s") if settings else "12s")
+                       or "12s")
+    return {
+        "concurrency": concurrency,
+        "workers": workers,
+        "depth": depth,
+        "soft_deadline": soft,
+        "timeout": timeout,
+        "exit_inactivity": exit_inactivity,
+    }
+
+
+def _shard_queries(lines: list[str], workers: int) -> list[list[str]]:
+    """Round-robin shard queries across workers for even coverage."""
+    workers = max(1, min(workers, len(lines)))
+    shards: list[list[str]] = [[] for _ in range(workers)]
+    for i, q in enumerate(lines):
+        shards[i % workers].append(q)
+    return [s for s in shards if s]
+
+
+def _dedupe_businesses(results: list[dict]) -> list[dict]:
+    """Drop duplicates across parallel shards (first wins)."""
+    seen: set[str] = set()
+    out: list[dict] = []
+    for r in results:
+        key = (r.get("google_key") or "").strip().lower()
+        if not key:
+            key = (r.get("business_name") or "").strip().lower()
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        out.append(r)
+    return out
+
+
 async def run_maps_scraper(
-    query: str,
+    query: str | list[str],
     max_results: int = 50,
     timeout_seconds: int = 300,
     depth: int = 1,
+    soft_deadline_seconds: int | None = None,
+    on_progress=None,
 ) -> list[dict]:
     """
     Run the google-maps-scraper binary and return parsed results.
 
     Args:
-        query: Search query (e.g., "plumbers in New York")
+        query: Search query, or list of queries (one per line in the input
+            file — the Go binary schedules them as parallel jobs).
         max_results: Maximum number of results to return
         timeout_seconds: Max time to wait for the scraper process
         depth: Number of pages to scrape (1 = fast, 3 = thorough)
+        soft_deadline_seconds: After this many seconds, stop as soon as we
+            already have >= max_results rows in the CSV (avoids waiting for
+            inactivity timeout when the target is met).
+        on_progress: Optional sync callback(count) invoked ~1/s while running.
 
     Returns:
         List of business dicts parsed from the CSV output.
@@ -90,69 +181,115 @@ async def run_maps_scraper(
     output_file = os.path.join(tmp_dir, f"results_{run_id}.csv")
 
     try:
-        # Write query to input file
+        # Write query(s) to input file — one per line
+        if isinstance(query, (list, tuple)):
+            lines = [str(q).strip() for q in query if str(q).strip()]
+        else:
+            lines = [query.strip()] if str(query).strip() else []
+        if not lines:
+            raise ValueError("run_maps_scraper: empty query")
         with open(input_file, "w", encoding="utf-8") as f:
-            f.write(query + "\n")
+            f.write("\n".join(lines) + "\n")
 
+        tuning = _gmaps_tuning()
+        concurrency = os.environ.get("GMAPS_CONCURRENCY", "").strip() or str(tuning["concurrency"])
+        # Depth passed explicitly wins; otherwise use tuned fast default.
+        # Load-more still passes depth=2 for thorough background fill.
+        exit_inactivity = tuning["exit_inactivity"]
         cmd = [
             scraper_path,
             "-input", input_file,
             "-results", output_file,
-            "-exit-on-inactivity", "30s",
+            "-exit-on-inactivity", exit_inactivity,
             "-depth", str(depth),
-            "-c", "4",
-            "-email"
+            "-c", str(concurrency),
         ]
 
         logger.info(f"[Scraper:{run_id}] Binary path: {scraper_path}")
         logger.info(f"[Scraper:{run_id}] Binary exists: {os.path.exists(scraper_path)}")
+        logger.info(f"[Scraper:{run_id}] Queries: {len(lines)} | concurrency={concurrency}")
         logger.info(f"[Scraper:{run_id}] Starting: {' '.join(cmd)}")
 
         import subprocess
-        
-        def run_in_thread():
-            # Don't set cwd in containerized environments - causes permission issues
-            cwd = None
-            if os.name == "nt":
-                # Only set cwd on Windows if directory exists
-                scraper_dir = os.path.dirname(scraper_path)
-                if scraper_dir and os.path.isdir(scraper_dir):
-                    cwd = scraper_dir
-            
-            return subprocess.run(
+
+        cwd = None
+        if os.name == "nt":
+            scraper_dir = os.path.dirname(scraper_path)
+            if scraper_dir and os.path.isdir(scraper_dir):
+                cwd = scraper_dir
+
+        try:
+            proc = subprocess.Popen(
                 cmd,
-                capture_output=True,
-                timeout=timeout_seconds,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
                 cwd=cwd,
                 env={**os.environ},
             )
+        except FileNotFoundError:
+            raise
+        except PermissionError:
+            raise
+
+        hard_deadline = time.time() + max(1, int(timeout_seconds))
+        soft_deadline = (
+            time.time() + max(1, int(soft_deadline_seconds))
+            if soft_deadline_seconds
+            else None
+        )
+        last_report = 0.0
+        last_count = 0
+        terminated_early = False
+
+        while True:
+            ret = proc.poll()
+            if ret is not None:
+                break
+            now = time.time()
+            if now >= hard_deadline:
+                logger.warning(f"[Scraper:{run_id}] Hard timeout after {timeout_seconds}s — killing process")
+                proc.kill()
+                terminated_early = True
+                break
+            count = _count_csv_rows(output_file)
+            if count != last_count:
+                last_count = count
+            if on_progress and now - last_report >= 1.0:
+                last_report = now
+                try:
+                    on_progress(count)
+                except Exception as cb_err:
+                    logger.debug(f"[Scraper:{run_id}] on_progress error: {cb_err}")
+            if soft_deadline and now >= soft_deadline and count >= max_results:
+                logger.info(
+                    f"[Scraper:{run_id}] Soft deadline hit with {count}/{max_results} rows — stopping early"
+                )
+                proc.terminate()
+                terminated_early = True
+                break
+            await asyncio.sleep(0.5)
 
         try:
-            process = await asyncio.to_thread(run_in_thread)
-            stdout = process.stdout.decode(errors='replace') if process.stdout else ""
-            stderr = process.stderr.decode(errors='replace') if process.stderr else ""
-            
-            if stdout:
-                logger.info(f"[Scraper:{run_id}] stdout: {stdout[:1000]}")
-            if stderr:
-                logger.warning(f"[Scraper:{run_id}] stderr: {stderr[:1000]}")
-                
-            # Log return code
-            logger.info(f"[Scraper:{run_id}] Process returned code: {process.returncode}")
-        except subprocess.TimeoutExpired as e:
-            logger.warning(f"[Scraper:{run_id}] Timeout after {timeout_seconds}s")
-            # Try to decode partial output
-            stdout = e.stdout.decode(errors='replace') if e.stdout else ""
-            stderr = e.stderr.decode(errors='replace') if e.stderr else ""
-            if stdout:
-                logger.info(f"[Scraper:{run_id}] Partial stdout: {stdout[:500]}")
-            if stderr:
-                logger.warning(f"[Scraper:{run_id}] Partial stderr: {stderr[:500]}")
+            stdout, stderr = proc.communicate(timeout=10)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            stdout, stderr = proc.communicate()
+
+        stdout = stdout.decode(errors="replace") if stdout else ""
+        stderr = stderr.decode(errors="replace") if stderr else ""
+        if stdout:
+            logger.info(f"[Scraper:{run_id}] stdout: {stdout[:1000]}")
+        if stderr:
+            logger.warning(f"[Scraper:{run_id}] stderr: {stderr[:1000]}")
+        logger.info(
+            f"[Scraper:{run_id}] Process returned code: {proc.returncode}"
+            + (" (early stop)" if terminated_early else "")
+        )
 
         # Parse results (even on timeout, partial CSV may exist)
         results = _parse_csv_results(output_file, max_results)
         logger.info(f"[Scraper:{run_id}] Parsed {len(results)} results")
-        
+
         # Quality logging
         if results:
             named = sum(1 for r in results if r.get("business_name"))
@@ -165,7 +302,7 @@ async def run_maps_scraper(
                 f"cat='{sample.get('category')}', rating={sample.get('rating')}, "
                 f"reviews={sample.get('total_reviews')}, web='{sample.get('website_url', '')[:40]}'"
             )
-        
+
         return results
 
     except FileNotFoundError:
@@ -299,6 +436,114 @@ def _normalize_row(row: dict) -> dict:
         "business_hours": safe_json(row.get("open_hours"), {}),
         "description": (row.get("descriptions") or row.get("description") or "").strip(),
     }
+
+
+async def run_maps_scraper_parallel(
+    query: str | list[str],
+    max_results: int = 100,
+    timeout_seconds: int | None = None,
+    depth: int | None = None,
+    soft_deadline_seconds: int | None = None,
+    workers: int | None = None,
+    on_progress=None,
+) -> list[dict]:
+    """Run N Go scraper processes in parallel, each with a query shard.
+
+    This is the 10x path for 100-leads-in-~60s: a single Go process fans
+    variants via -c, but one slow query still blocks the whole CSV. Sharding
+    into 2-4 processes isolates slow queries and multiplies throughput.
+
+    Fast-first: depth=1 in the hot path. Website/email deep analysis is
+    on-demand (POST /api/leads/{id}/analyze-website), never blocking here.
+
+    Falls back to single-process run_maps_scraper when only 1 query/worker.
+    """
+    import math
+
+    if isinstance(query, (list, tuple)):
+        lines = [str(q).strip() for q in query if str(q).strip()]
+    else:
+        lines = [str(query).strip()] if str(query).strip() else []
+    if not lines:
+        raise ValueError("run_maps_scraper_parallel: empty query")
+
+    tuning = _gmaps_tuning()
+    if timeout_seconds is None:
+        timeout_seconds = tuning["timeout"]
+    if depth is None:
+        depth = tuning["depth"]
+    if soft_deadline_seconds is None:
+        soft_deadline_seconds = tuning["soft_deadline"]
+    if workers is None:
+        if max_results <= 20:
+            workers = min(2, tuning["workers"])
+        elif max_results <= 50:
+            workers = min(3, tuning["workers"])
+        else:
+            workers = tuning["workers"]
+    workers = max(1, min(workers, len(lines), 4))
+
+    if workers <= 1 or len(lines) <= 1:
+        return await run_maps_scraper(
+            query=lines,
+            max_results=max_results,
+            timeout_seconds=timeout_seconds,
+            depth=depth,
+            soft_deadline_seconds=soft_deadline_seconds,
+            on_progress=on_progress,
+        )
+
+    shards = _shard_queries(lines, workers)
+    per_worker_max = max(10, math.ceil(max_results / len(shards)) + 5)
+    run_id = str(uuid.uuid4())[:8]
+    logger.info(
+        f"[Scraper:{run_id}] PARALLEL x{len(shards)} | total_queries={len(lines)} "
+        f"| max={max_results} (per-worker {per_worker_max}) | depth={depth} "
+        f"| timeout={timeout_seconds}s soft={soft_deadline_seconds}s"
+    )
+
+    # Aggregate progress across shards so the UI shows a single x/100 counter.
+    counts = [0] * len(shards)
+    last_report = [0.0]
+
+    def _make_cb(idx: int):
+        def _cb(n: int) -> None:
+            counts[idx] = max(0, int(n or 0))
+            if on_progress is None:
+                return
+            now = time.time()
+            if now - last_report[0] >= 1.0:
+                last_report[0] = now
+                try:
+                    on_progress(sum(counts))
+                except Exception as cb_err:
+                    logger.debug(f"[Scraper:{run_id}] parallel on_progress error: {cb_err}")
+        return _cb
+
+    async def _one(shard: list[str], idx: int) -> list[dict]:
+        try:
+            return await run_maps_scraper(
+                query=shard,
+                max_results=per_worker_max,
+                timeout_seconds=timeout_seconds,
+                depth=depth,
+                soft_deadline_seconds=soft_deadline_seconds,
+                on_progress=_make_cb(idx),
+            )
+        except Exception as e:
+            logger.warning(f"[Scraper:{run_id}] shard {idx} failed ({len(shard)} queries): {e}")
+            return []
+
+    nested = await asyncio.gather(*(_one(s, i) for i, s in enumerate(shards)))
+    merged: list[dict] = []
+    for part in nested:
+        merged.extend(part or [])
+    deduped = _dedupe_businesses(merged)[:max_results]
+    logger.info(
+        f"[Scraper:{run_id}] PARALLEL done: {sum(len(p) for p in nested)} raw "
+        f"-> {len(deduped)} deduped (target {max_results})"
+    )
+    return deduped
 
 
 def _cleanup_temp_files(tmp_dir: str, *files: str) -> None:

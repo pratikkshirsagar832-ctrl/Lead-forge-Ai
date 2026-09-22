@@ -43,7 +43,7 @@ func NewGmapJob(
 
 	const (
 		maxRetries = 3
-		prio       = scrapemate.PriorityLow
+		prio       = scrapemate.PriorityMedium
 	)
 
 	if id == "" {
@@ -320,7 +320,7 @@ func scroll(ctx context.Context,
 
 	const (
 		timeout  = 500
-		maxWait2 = 2000
+		maxWait2 = 800
 	)
 
 	for i := 0; i < maxDepth; i++ {
@@ -360,7 +360,7 @@ func scroll(ctx context.Context,
 		default:
 		}
 
-		waitTime *= 1.5
+		waitTime *= 1.2
 
 		if waitTime > maxWait2 {
 			waitTime = maxWait2

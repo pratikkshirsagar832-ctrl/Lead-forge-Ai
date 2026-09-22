@@ -86,6 +86,14 @@ class Settings(BaseSettings):
     razorpay_agency_amount_inr: int = 0
 
     gmaps_scraper_path: str = "backend/google-maps-scraper/google-maps-scraper"
+    # Google Maps speed tuning (env-overridable). Fast-first: depth=1 in the
+    # hot path; website/email enrichment is on-demand, not blocking.
+    gmaps_concurrency: int = 24
+    gmaps_workers: int = 4
+    gmaps_depth: int = 1
+    gmaps_soft_deadline_seconds: int = 55
+    gmaps_timeout_seconds: int = 70
+    gmaps_exit_inactivity: str = "12s"
 
     scrapling_proxy: str = ""
     scrapling_solve_cloudflare: bool = True

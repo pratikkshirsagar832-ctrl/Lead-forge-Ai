@@ -198,7 +198,18 @@ export default function SearchPage() {
   const [reviewFilter, setReviewFilter] = useState<'all' | { min: number; max: number | null }>('all');
   const [source, setSource] = useState<'google_maps' | 'linkedin'>('google_maps');
   const sourceRef = useRef<'google_maps' | 'linkedin'>('google_maps');
-  const [maxResults, setMaxResults] = useState(10);
+  const [maxResults, setMaxResults] = useState<number>(() => {
+    try {
+      const saved = typeof window !== 'undefined' ? window.localStorage.getItem('hyperclients_maps_count') : null;
+      const n = saved ? parseInt(saved, 10) : 20;
+      return [20, 50, 80, 100].includes(n) ? n : 20;
+    } catch { return 20; }
+  });
+  const MAPS_ETA: Record<number, string> = { 20: '~20s', 50: '~35s', 80: '~50s', 100: '~60s' };
+  const setMapsCount = (n: number) => {
+    setMaxResults(n);
+    try { window.localStorage.setItem('hyperclients_maps_count', String(n)); } catch {}
+  };
   // LinkedIn discovery targets genuine service buyers — freelancer-needed
   // (buyer). Hiring/job-ads are excluded.
   const requestedCount = useSearchStore((s) => s.requestedCount);
@@ -247,6 +258,10 @@ export default function SearchPage() {
   const changeSource = (next: 'google_maps' | 'linkedin') => {
     sourceRef.current = next;
     setSource(next);
+    // Each source has its own count picker — reset so a Maps value never
+    // leaks into the LinkedIn run (and vice versa).
+    if (next === 'linkedin') setMaxResults(10);
+    else setMapsCount(20);
     mapsForm.clearErrors();
   };
 
@@ -291,7 +306,7 @@ export default function SearchPage() {
           leadTypes: ['buyer'],
         });
       } else {
-        await startSearch(data.niche, data.location ?? '', { source: 'google_maps', enrichEmails: false });
+        await startSearch(data.niche, data.location ?? '', { source: 'google_maps', enrichEmails: false, maxResults });
       }
     } catch (e: any) {
       if (e.response?.status === 429) setShowUpgradeModal(true);
@@ -410,6 +425,53 @@ export default function SearchPage() {
                     {mapsForm.formState.errors.location && (
                       <p className="text-red-400 text-sm mt-1.5">{mapsForm.formState.errors.location.message}</p>
                     )}
+                  </div>
+                  )}
+                  {source === 'google_maps' && (
+                  <div className="md:col-span-2">
+                    <label className="block text-sm font-medium text-ice/70 mb-2 flex items-center gap-2">
+                      <Users className="w-4 h-4 text-steel" />
+                      Leads Needed
+                      <span className="ml-auto text-[11px] font-mono text-emerald-400/80">
+                        {MAPS_ETA[maxResults] ?? '~60s'} • parallel fast scrape
+                      </span>
+                    </label>
+                    <div className="grid grid-cols-4 gap-2">
+                      {[20, 50, 80, 100].map(n => {
+                        const disabled = isStarting || !!isSearchActive;
+                        return (
+                        <button
+                          key={n}
+                          type="button"
+                          disabled={disabled}
+                          onClick={() => setMapsCount(n)}
+                          title={`${n} leads ${MAPS_ETA[n] ?? ''}`}
+                          className={`px-3 py-3 rounded-xl border text-sm font-semibold transition-all disabled:opacity-50 disabled:cursor-not-allowed ${
+                            maxResults === n
+                              ? 'bg-emerald-500/10 border-emerald-500/40 text-emerald-400'
+                              : 'bg-navy/60 border-ocean/25 text-ice/60 hover:text-offwhite hover:border-steel/40'
+                          }`}
+                        >
+                          {n}
+                        </button>
+                        );
+                      })}
+                    </div>
+                    {(() => {
+                      const gmbLeft = subscription?.gmb_leads_remaining;
+                      if (typeof gmbLeft === 'number' && gmbLeft < maxResults) {
+                        return (
+                          <p className="text-[11px] text-amber-400/90 mt-1.5">
+                            Needs {maxResults}, you have {Math.max(0, gmbLeft)} Maps leads left this month — will deliver partial. Upgrade for full {maxResults}.
+                          </p>
+                        );
+                      }
+                      return (
+                        <p className="text-[11px] text-ice/40 mt-1.5">
+                          Up to {maxResults} leads {MAPS_ETA[maxResults] ?? ''}. Website + email analysis on demand from the lead page (not blocking).
+                        </p>
+                      );
+                    })()}
                   </div>
                   )}
                   {source === 'linkedin' && (
@@ -646,7 +708,7 @@ function SearchInfoSection({ isAtLimit, remaining, searchesPerDay, isStarting, s
           <p className="text-sm text-ice/70 leading-relaxed">
             {isLinkedIn
               ? 'Hyperclients will scan the latest LinkedIn posts, verify every buyer with AI, and deliver your exact lead count. Usually takes 1-5 minutes.'
-              : 'Hyperclients will search for targeted results, extract data, and run AI analysis. The process usually takes 2-10 minutes.'}
+              : 'Parallel fast scrape delivers up to 100 leads in ~60s. Website + email analysis runs on demand from the lead page.'}
           </p>
         </div>
       )}

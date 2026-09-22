@@ -253,6 +253,7 @@ async def create_search(
         user_id=user_id,
         niche=query_term,
         location=location_term,
+        max_results=effective_max_results,
     )
 
     return search

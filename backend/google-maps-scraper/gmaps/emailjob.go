@@ -101,6 +101,31 @@ func (j *EmailExtractJob) ProcessOnFetchError() bool {
 	return true
 }
 
+// BrowserActions renders the page in a browser (waits for DOMContentLoaded)
+// so JS-injected mailto links / contact pages are present before extraction.
+func (j *EmailExtractJob) BrowserActions(ctx context.Context, page scrapemate.BrowserPage) scrapemate.Response {
+	var resp scrapemate.Response
+
+	pageResponse, err := page.Goto(j.GetFullURL(), scrapemate.WaitUntilDOMContentLoaded)
+	if err != nil {
+		resp.Error = err
+		return resp
+	}
+
+	body, err := page.Content()
+	if err != nil {
+		resp.Error = err
+		return resp
+	}
+
+	resp.URL = pageResponse.URL
+	resp.StatusCode = pageResponse.StatusCode
+	resp.Headers = pageResponse.Headers
+	resp.Body = []byte(body)
+
+	return resp
+}
+
 func docEmailExtractor(doc *goquery.Document) []string {
 	seen := map[string]bool{}
 

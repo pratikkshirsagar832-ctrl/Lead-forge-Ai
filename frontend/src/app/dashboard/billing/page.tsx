@@ -124,6 +124,14 @@ function BillingContent() {
       const orderResp = await api.post('/api/subscriptions/create-order', { plan_id: plan.id });
       const order = orderResp.data as { key_id: string; amount: number; currency: string; plan_name: string; order_id: string };
 
+      // Never open checkout with a malformed order (backend 4xx/5xx payloads
+      // or proxy errors must surface as text, not a checkout.js crash).
+      if (!order || !order.order_id || !order.key_id || !(order.amount > 0)) {
+        setError('Could not start the payment (invalid order). Please try again.');
+        setIsProcessing(false);
+        return;
+      }
+
       const options = {
         key: order.key_id,
         amount: order.amount,

@@ -176,6 +176,9 @@ export default function DeveloperPage() {
       const Razorpay = await ensureRazorpayLoaded();
       if (!Razorpay) throw new Error('Payment window could not load. Disable ad-blockers and retry.');
       const order = (await api.post('/api/developer/wallet/topup', { amount_inr: topup })).data;
+      if (!order || !order.order_id || !order.key_id || !(order.amount > 0)) {
+        throw new Error('Could not start the payment (invalid order). Please try again.');
+      }
       const rzp = new Razorpay({
         key: order.key_id,
         amount: order.amount,

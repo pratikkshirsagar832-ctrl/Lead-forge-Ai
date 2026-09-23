@@ -5,12 +5,16 @@ Served in every environment (the internal /docs stays dev-only).
 """
 from __future__ import annotations
 
+import logging
+
 from fastapi import FastAPI
 from fastapi.openapi.docs import get_redoc_html, get_swagger_ui_html
 from fastapi.openapi.utils import get_openapi
 from fastapi.responses import JSONResponse
 
 from app.config import get_settings
+
+logger = logging.getLogger(__name__)
 
 API_VERSION = "1.0.0"
 
@@ -77,10 +81,25 @@ def _fill(text: str, values: dict) -> str:
     return text
 
 
+def _public_routes(app: FastAPI) -> list:
+    """The /v1 endpoints, taken from the public router itself (independent of
+    how the app's route table is assembled in a given deployment), falling
+    back to scanning the app for /v1 API routes."""
+    from fastapi.routing import APIRoute
+
+    from app.routers import public_api
+
+    routes = [r for r in public_api.router.routes if isinstance(r, APIRoute)]
+    if not routes:
+        routes = [r for r in app.routes if isinstance(r, APIRoute)
+                  and r.path.startswith("/v1/") and r.include_in_schema]
+    return routes
+
+
 def _spec(app: FastAPI) -> dict:
     settings = get_settings()
-    routes = [r for r in app.routes if getattr(r, "path", "").startswith("/v1/")
-              and "/v1/docs" not in r.path and "/v1/redoc" not in r.path and "openapi" not in r.path]
+    routes = _public_routes(app)
+    logger.info("Public API docs: %d endpoint(s) published", len(routes))
     spec = get_openapi(
         title="Hyperclients API",
         version=API_VERSION,
@@ -101,9 +120,10 @@ def register_public_docs(app: FastAPI) -> None:
 
     @app.get("/v1/openapi.json", include_in_schema=False)
     async def public_openapi():
-        if "spec" not in cache:
-            cache["spec"] = _spec(app)
-        return JSONResponse(cache["spec"])
+        spec = cache.get("spec") or _spec(app)
+        if spec.get("paths"):  # never pin an empty spec for the process lifetime
+            cache["spec"] = spec
+        return JSONResponse(spec)
 
     @app.get("/v1/docs", include_in_schema=False)
     async def public_swagger():

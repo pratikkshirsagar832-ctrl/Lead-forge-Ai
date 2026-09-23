@@ -51,7 +51,7 @@ def serialize_search(row: dict[str, Any], delivered: int | None = None) -> dict[
         "service": row.get("niche"),
         "status": status,
         "progress_percent": int(row.get("progress_percent") or (100 if status == "completed" else 0)),
-        "message": row.get("message") or "",
+        "message": _public_message(source, status, requested, int(delivered or 0)),
         "requested": requested,
         "delivered": int(delivered or 0),
         "price_per_lead_inr": inr(price),
@@ -68,6 +68,24 @@ def serialize_search(row: dict[str, Any], delivered: int | None = None) -> dict[
     if status == "failed":
         out["error"] = row.get("error_message") or row.get("message") or "search failed"
     return out
+
+
+def _public_message(source: str, status: str, requested: int, delivered: int) -> str:
+    """Stable, customer-facing progress text (internal engine/scraper
+    messages like "Found 25/5 businesses" never leak into the API)."""
+    where = "LinkedIn" if source == "linkedin" else "Google Maps"
+    if status == "queued":
+        return "Search queued"
+    if status == "running":
+        return f"Searching {where}: {delivered} of {requested} leads found so far"
+    if status == "completed":
+        if delivered >= requested:
+            return f"Done: {delivered} lead{'s' if delivered != 1 else ''} delivered"
+        return (f"Done: {delivered} of {requested} leads delivered (only this many qualified "
+                f"leads exist right now; you are charged for {delivered})")
+    if status == "cancelled":
+        return f"Cancelled: {delivered} lead{'s' if delivered != 1 else ''} delivered before cancel"
+    return "Search failed - you were not charged for undelivered leads"
 
 
 def serialize_linkedin_lead(row: dict[str, Any]) -> dict[str, Any]:

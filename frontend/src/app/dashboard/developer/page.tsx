@@ -39,7 +39,12 @@ interface WalletInfo {
   balance_inr: number;
   held_inr: number;
   available_inr: number;
-  prices: { linkedin_per_lead_inr: number; google_maps_per_lead_inr: number };
+  prices: {
+    linkedin_per_lead_inr: number;
+    google_maps_per_lead_inr: number;
+    linkedin_per_lead_usd: number;
+    google_maps_per_lead_usd: number;
+  };
   topup_limits_inr: { min: number; max: number };
   ledger: LedgerRow[];
 }
@@ -52,12 +57,16 @@ interface ApiSearch {
   requested: number;
   delivered: number;
   charged_inr: number | null;
+  charged_usd: number | null;
   max_charge_inr: number;
+  max_charge_usd: number;
   created_at: string | null;
 }
 
 const inr = (n: number | null | undefined) =>
   `₹${Number(n ?? 0).toLocaleString('en-IN', { maximumFractionDigits: 2 })}`;
+
+const usd = (n: number | null | undefined) => `$${Number(n ?? 0).toLocaleString('en-US', { maximumFractionDigits: 3 })}`;
 
 const TOPUP_PRESETS = [10000, 25000, 50000, 100000];
 
@@ -302,11 +311,17 @@ app.post("/hooks/hyperclients", express.raw({ type: "application/json" }), (req,
           <div className="space-y-3">
             <div className="flex items-center justify-between">
               <span className="flex items-center gap-2 text-sm text-offwhite"><Linkedin className="w-4 h-4 text-sky-400" /> LinkedIn lead</span>
-              <span className="text-lg font-bold text-offwhite">{inr(wallet?.prices.linkedin_per_lead_inr ?? 50)}</span>
+              <span className="text-right">
+                <span className="text-lg font-bold text-offwhite">{inr(wallet?.prices.linkedin_per_lead_inr ?? 50)}</span>
+                <span className="block text-[11px] text-ice/50">{usd(wallet?.prices.linkedin_per_lead_usd ?? 0.52)} per lead</span>
+              </span>
             </div>
             <div className="flex items-center justify-between">
               <span className="flex items-center gap-2 text-sm text-offwhite"><MapPin className="w-4 h-4 text-emerald-400" /> Google Maps lead</span>
-              <span className="text-lg font-bold text-offwhite">{inr(wallet?.prices.google_maps_per_lead_inr ?? 5)}</span>
+              <span className="text-right">
+                <span className="text-lg font-bold text-offwhite">{inr(wallet?.prices.google_maps_per_lead_inr ?? 5)}</span>
+                <span className="block text-[11px] text-ice/50">{usd(wallet?.prices.google_maps_per_lead_usd ?? 0.052)} per lead</span>
+              </span>
             </div>
           </div>
           <p className="text-[11px] text-ice/40 mt-4 leading-relaxed">
@@ -484,7 +499,11 @@ app.post("/hooks/hyperclients", express.raw({ type: "application/json" }), (req,
                     <td className="py-2 pr-3 max-w-[220px] truncate">{s.service}</td>
                     <td className="py-2 pr-3 capitalize">{s.status}</td>
                     <td className="py-2 pr-3 text-right">{s.delivered}/{s.requested}</td>
-                    <td className="py-2 text-right">{s.charged_inr == null ? <span className="text-ice/40">held {inr(s.max_charge_inr)}</span> : inr(s.charged_inr)}</td>
+                    <td className="py-2 text-right whitespace-nowrap">
+                      {s.charged_inr == null
+                        ? <span className="text-ice/40">held {inr(s.max_charge_inr)} ({usd(s.max_charge_usd)})</span>
+                        : <>{inr(s.charged_inr)} <span className="text-ice/45 text-[11px]">({usd(s.charged_usd)})</span></>}
+                    </td>
                   </tr>
                 ))}
               </tbody>

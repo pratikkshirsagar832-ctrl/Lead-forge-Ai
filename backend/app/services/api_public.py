@@ -17,7 +17,7 @@ from datetime import datetime, timezone
 from typing import Any
 from urllib.parse import urlsplit
 
-from app.services.api_wallet import inr
+from app.services.api_wallet import inr, price_per_lead_usd, usd_for_leads, usd_from_paise
 
 logger = logging.getLogger(__name__)
 
@@ -55,8 +55,12 @@ def serialize_search(row: dict[str, Any], delivered: int | None = None) -> dict[
         "requested": requested,
         "delivered": int(delivered or 0),
         "price_per_lead_inr": inr(price),
+        "price_per_lead_usd": price_per_lead_usd(source),
         "max_charge_inr": inr(price * requested),
+        "max_charge_usd": usd_for_leads(source, requested),
         "charged_inr": inr(row.get("wallet_charged_paise")) if row.get("wallet_settled_at") else None,
+        "charged_usd": (usd_from_paise(source, row.get("wallet_charged_paise"))
+                        if row.get("wallet_settled_at") else None),
         "webhook_url": row.get("webhook_url"),
         "created_at": row.get("created_at"),
         "completed_at": row.get("completed_at"),

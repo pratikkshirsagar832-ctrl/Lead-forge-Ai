@@ -273,6 +273,7 @@ def test_insufficient_balance_is_402_and_leaves_nothing_behind(env):
     assert r.status_code == 402
     body = r.json()["error"]
     assert body["code"] == "insufficient_balance" and body["required_inr"] == 150.0
+    assert body["required_usd"] == 1.56
     assert env["db"].tables.get("searches", []) == []
     assert env["db"].wallet(USER)["held_paise"] == 0
     assert env["started"] == []
@@ -286,6 +287,7 @@ def test_create_holds_funds_and_starts_the_engine(env):
     body = r.json()
     assert body["status"] == "queued" and body["requested"] == 5
     assert body["price_per_lead_inr"] == 50.0 and body["max_charge_inr"] == 250.0
+    assert body["price_per_lead_usd"] == 0.52 and body["max_charge_usd"] == 2.6
     row = env["db"].search(body["id"])
     assert row["billing"] == "api" and row["reserved_leads"] == 5 and row["wallet_hold_paise"] == 25000
     assert env["db"].wallet(USER)["held_paise"] == 25000
@@ -304,6 +306,7 @@ def test_maps_needs_location_and_linkedin_max_10(env):
     r = c.post("/v1/searches", json={"source": "google_maps", "service": "dentists",
                                      "location": "Pune", "leads": 40})
     assert r.status_code == 202 and r.json()["max_charge_inr"] == 200.0  # 40 × ₹5
+    assert r.json()["price_per_lead_usd"] == 0.052 and r.json()["max_charge_usd"] == 2.08  # 40 × $0.052
     assert env["started"][-1][0] == "google_maps"
 
 
@@ -334,7 +337,7 @@ def test_charged_only_for_delivered_leads(env):
     _settle_sync(env["db"], sid, USER, 10)
     assert env["db"].wallet(USER)["balance_paise"] == 65000
     s = env["client"].get(f"/v1/searches/{sid}").json()
-    assert s["charged_inr"] == 350.0
+    assert s["charged_inr"] == 350.0 and s["charged_usd"] == 3.64  # 7 × $0.52
 
 
 def test_failed_search_charges_nothing(env):

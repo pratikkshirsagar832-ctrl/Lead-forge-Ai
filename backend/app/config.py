@@ -82,6 +82,9 @@ class Settings(BaseSettings):
     # Public API v1 — pay per DELIVERED lead from a prepaid wallet (INR).
     api_price_linkedin_inr: int = 50
     api_price_maps_inr: int = 5
+    # USD equivalents shown next to INR (billing itself is in INR).
+    api_price_linkedin_usd: float = 0.52
+    api_price_maps_usd: float = 0.052
     api_min_topup_inr: int = 10000
     api_max_topup_inr: int = 100000
     api_rate_create_per_min: int = 20

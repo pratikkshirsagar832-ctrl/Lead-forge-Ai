@@ -42,11 +42,14 @@ curl {base}/v1/searches/SEARCH_ID/leads -H "Authorization: Bearer $HYPERCLIENTS_
 Send your key as `Authorization: Bearer hc_live_...` (or `X-API-Key: hc_live_...`).
 Keep keys server-side - never ship them in a browser or mobile app.
 
-## Pricing (prepaid wallet, INR)
-| Source | Price |
+## Pricing (prepaid wallet)
+| Source | Price per lead delivered |
 |---|---|
-| LinkedIn | **₹{li} per lead delivered** |
-| Google Maps | **₹{maps} per lead delivered** |
+| LinkedIn | **₹{li}** (≈ **${li_usd}**) |
+| Google Maps | **₹{maps}** (≈ **${maps_usd}**) |
+
+The wallet is billed in INR; every price and charge is also returned in USD
+(`*_usd` fields).
 
 Creating a search **holds** `leads × price`. When it finishes you are charged
 **only for leads actually delivered**; the rest of the hold is released
@@ -106,6 +109,7 @@ def _spec(app: FastAPI) -> dict:
         description=_fill(DESCRIPTION, {
             "base": settings.public_api_base_url.rstrip("/"),
             "li": settings.api_price_linkedin_inr, "maps": settings.api_price_maps_inr,
+            "li_usd": f"{settings.api_price_linkedin_usd:g}", "maps_usd": f"{settings.api_price_maps_usd:g}",
             "create": settings.api_rate_create_per_min, "read": settings.api_rate_read_per_min,
         }),
         routes=routes,

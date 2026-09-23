@@ -73,12 +73,12 @@ X-API-Key: hc_live_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 
 ## 3. Pricing and wallet
 
-| Source | Price |
-|---|---|
-| LinkedIn (`source: "linkedin"`) | **₹50 per lead delivered** |
-| Google Maps (`source: "google_maps"`) | **₹5 per lead delivered** |
+| Source | Price per lead delivered (INR) | USD equivalent |
+|---|---|---|
+| LinkedIn (`source: "linkedin"`) | **₹50** | **$0.52** |
+| Google Maps (`source: "google_maps"`) | **₹5** | **$0.052** |
 
-The API is **prepaid**. It is separate from, and doesn't use, your web-app plan's monthly lead quota.
+The wallet is funded and billed in **INR**. Every price and charge is also returned in **USD** (the `*_usd` fields) for easy reporting. The API is **prepaid**. It is separate from, and doesn't use, your web-app plan's monthly lead quota.
 
 **How a charge works:**
 
@@ -88,11 +88,11 @@ The API is **prepaid**. It is separate from, and doesn't use, your web-app plan'
 
 | Scenario | Hold | Delivered | Charged | Released |
 |---|---|---|---|---|
-| LinkedIn, `leads: 10` | ₹500 | 10 | ₹500 | ₹0 |
-| LinkedIn, `leads: 10`, only 7 genuine buyers found | ₹500 | 7 | **₹350** | ₹150 |
-| Google Maps, `leads: 50` | ₹250 | 50 | ₹250 | ₹0 |
+| LinkedIn, `leads: 10` | ₹500 ($5.20) | 10 | ₹500 ($5.20) | ₹0 |
+| LinkedIn, `leads: 10`, only 7 genuine buyers found | ₹500 ($5.20) | 7 | **₹350 ($3.64)** | ₹150 |
+| Google Maps, `leads: 50` | ₹250 ($2.60) | 50 | ₹250 ($2.60) | ₹0 |
 | Search `failed` | ₹250 | 0 | **₹0** | ₹250 |
-| You cancel after 2 of 5 LinkedIn leads | ₹250 | 2 | ₹100 | ₹150 |
+| You cancel after 2 of 5 LinkedIn leads | ₹250 ($2.60) | 2 | ₹100 ($1.04) | ₹150 |
 
 - **Balance** is the money in your wallet. **Held** is the amount reserved by running searches. **Available** is `balance − held`, which is what new searches can use.
 - Top-ups must be between **₹10,000 and ₹1,00,000** per payment.
@@ -180,8 +180,11 @@ queued ──▶ running ──▶ completed
   "requested": 3,
   "delivered": 0,
   "price_per_lead_inr": 50.0,
+  "price_per_lead_usd": 0.52,
   "max_charge_inr": 150.0,
+  "max_charge_usd": 1.56,
   "charged_inr": null,
+  "charged_usd": null,
   "webhook_url": "https://example.com/hooks/hyperclients",
   "created_at": "2026-09-23T10:15:02Z",
   "completed_at": null,
@@ -201,12 +204,14 @@ Poll this every **5–10 seconds** until `status` is `completed`, `failed` or `c
   "mode": "freelancer", "status": "completed", "progress_percent": 100,
   "message": "Done! 3 qualified leads found and saved.",
   "requested": 3, "delivered": 3,
-  "price_per_lead_inr": 50.0, "max_charge_inr": 150.0, "charged_inr": 150.0,
+  "price_per_lead_inr": 50.0, "price_per_lead_usd": 0.52,
+  "max_charge_inr": 150.0, "max_charge_usd": 1.56,
+  "charged_inr": 150.0, "charged_usd": 1.56,
   "webhook_url": null, "created_at": "2026-09-23T10:15:02Z", "completed_at": "2026-09-23T10:16:40Z"
 }
 ```
 
-`charged_inr` is `null` while the search is running (the funds are still held). A `failed` search also carries an `error` string.
+`charged_inr` / `charged_usd` are `null` while the search is running (the funds are still held). A `failed` search also carries an `error` string.
 
 ### 5.3 `GET /v1/searches/{id}/leads`: the leads
 
@@ -242,7 +247,8 @@ Query parameters: `limit` (1–100, default 20), `offset` (default 0), `status` 
   "balance_inr": 9850.0,
   "held_inr": 0.0,
   "available_inr": 9850.0,
-  "prices": { "linkedin_per_lead_inr": 50.0, "google_maps_per_lead_inr": 5.0 },
+  "prices": { "linkedin_per_lead_inr": 50.0, "google_maps_per_lead_inr": 5.0,
+              "linkedin_per_lead_usd": 0.52, "google_maps_per_lead_usd": 0.052 },
   "ledger": [
     { "type": "charge", "amount_inr": -150.0, "balance_after_inr": 9850.0,
       "search_id": "3f0c…", "note": "3 lead(s) delivered", "created_at": "2026-09-23T10:16:40Z" },
@@ -271,9 +277,9 @@ Query parameters: `limit` (1–100, default 20), `offset` (default 0), `status` 
 | `progress_percent` | 0–100 | Approximate |
 | `message` | string | Human-readable progress |
 | `requested` / `delivered` | integer | |
-| `price_per_lead_inr` | number | Locked when the search was created |
-| `max_charge_inr` | number | `requested × price` (the hold) |
-| `charged_inr` | number \| null | Final charge; `null` until settled |
+| `price_per_lead_inr` / `price_per_lead_usd` | number | Locked when the search was created |
+| `max_charge_inr` / `max_charge_usd` | number | `requested × price` (the hold) |
+| `charged_inr` / `charged_usd` | number \| null | Final charge; `null` until settled |
 | `webhook_url` | string \| null | |
 | `error` | string | Only when `failed` |
 | `created_at` / `completed_at` | ISO-8601 | |
@@ -405,7 +411,7 @@ http_response_code(200);
 Every error has the same shape:
 
 ```json
-{ "error": { "code": "insufficient_balance", "message": "This search needs ₹500.00 available (10 × ₹50.00); you have ₹120.00. Top up your wallet in the Hyperclients dashboard.", "required_inr": 500.0, "available_inr": 120.0 } }
+{ "error": { "code": "insufficient_balance", "message": "This search needs ₹500.00 available (10 × ₹50.00); you have ₹120.00. Top up your wallet in the Hyperclients dashboard.", "required_inr": 500.0, "required_usd": 5.2, "available_inr": 120.0 } }
 ```
 
 | HTTP | `code` | Meaning | What to do |
@@ -453,7 +459,9 @@ When you exceed a limit you get `429 rate_limited` with a `Retry-After: 60` head
 
 **Can I get more than 10 LinkedIn leads?** Start several searches (for example with different `service` wordings, or `freelancer` and `agency` modes). Each search is deduplicated against leads your account already owns.
 
-**Is there a sandbox?** Not yet. Use small `leads` values (a 1-lead LinkedIn search costs at most ₹50).
+**Is there a sandbox?** Not yet. Use small `leads` values (a 1-lead LinkedIn search costs at most ₹50, about $0.52).
+
+**Can I pay in USD?** Wallet top-ups are in INR through Razorpay (international cards are supported where enabled). USD values are shown for reference: $0.52 per LinkedIn lead, $0.052 per Google Maps lead.
 
 **Refunds for unused wallet balance?** Contact support.
 
@@ -466,6 +474,8 @@ When you exceed a limit you get `429 rate_limited` with a `Retry-After: 60` head
    ```
    API_PRICE_LINKEDIN_INR=50
    API_PRICE_MAPS_INR=5
+   API_PRICE_LINKEDIN_USD=0.52                  # shown next to INR everywhere
+   API_PRICE_MAPS_USD=0.052
    API_MIN_TOPUP_INR=10000
    API_MAX_TOPUP_INR=100000
    API_RATE_CREATE_PER_MIN=20

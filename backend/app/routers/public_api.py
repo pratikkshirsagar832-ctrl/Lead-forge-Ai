@@ -1,8 +1,8 @@
 """Hyperclients Public API v1.
 
 Authenticated with API keys (``Authorization: Bearer hc_live_...``). Billing:
-prepaid wallet, charged per DELIVERED lead (LinkedIn ₹50, Google Maps ₹5 by
-default). Creating a search holds ``leads × price``; when the search finishes
+prepaid wallet, charged per DELIVERED lead (LinkedIn ₹50 ≈ $0.52, Google Maps
+₹5 ≈ $0.052 by default). Creating a search holds ``leads × price``; when the search finishes
 only delivered leads are charged and the rest is released.
 
 Full guide: docs/14-PUBLIC-API.md  ·  Interactive reference: /v1/docs
@@ -150,10 +150,12 @@ async def create_search(body: CreateSearchRequest, user: dict = Depends(get_api_
         wallet = await asyncio.to_thread(api_wallet.get_wallet, supabase, user["id"], 0)
         raise ApiError(
             402, "insufficient_balance",
-            f"This search needs ₹{api_wallet.inr(hold_amount):,.2f} available "
+            f"This search needs ₹{api_wallet.inr(hold_amount):,.2f} "
+            f"(~${api_wallet.usd_for_leads(body.source, body.leads):,.2f}) available "
             f"({body.leads} × ₹{api_wallet.inr(price):,.2f}); you have ₹{wallet['available_inr']:,.2f}. "
             "Top up your wallet in the Hyperclients dashboard.",
             required_inr=api_wallet.inr(hold_amount), available_inr=wallet["available_inr"],
+            required_usd=api_wallet.usd_for_leads(body.source, body.leads),
         )
 
     if is_linkedin:

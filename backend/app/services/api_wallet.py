@@ -29,6 +29,22 @@ def inr(paise: int | float | None) -> float:
     return round(int(paise or 0) / 100.0, 2)
 
 
+def price_per_lead_usd(source: str) -> float:
+    settings = get_settings()
+    return float(settings.api_price_linkedin_usd if source == "linkedin" else settings.api_price_maps_usd)
+
+
+def usd_for_leads(source: str, leads: int | float | None) -> float:
+    """USD equivalent of N leads at the source's per-lead USD price."""
+    return round(float(leads or 0) * price_per_lead_usd(source), 3)
+
+
+def usd_from_paise(source: str, paise: int | float | None) -> float:
+    """USD equivalent of an INR amount charged for a source (via lead count)."""
+    per_lead = price_per_lead_paise(source)
+    return usd_for_leads(source, (int(paise or 0) / per_lead) if per_lead else 0)
+
+
 def get_wallet(supabase, user_id: str, ledger_limit: int = 20) -> dict[str, Any]:
     row = (
         supabase.table("api_wallets").select("balance_paise,held_paise,updated_at")
@@ -63,6 +79,8 @@ def get_wallet(supabase, user_id: str, ledger_limit: int = 20) -> dict[str, Any]
         "prices": {
             "linkedin_per_lead_inr": inr(price_per_lead_paise("linkedin")),
             "google_maps_per_lead_inr": inr(price_per_lead_paise("google_maps")),
+            "linkedin_per_lead_usd": price_per_lead_usd("linkedin"),
+            "google_maps_per_lead_usd": price_per_lead_usd("google_maps"),
         },
         "ledger": ledger,
     }

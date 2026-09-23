@@ -8,9 +8,12 @@ import { GlassCard } from '@/components/shared/GlassCard';
 import { LoadingButton } from '@/components/shared/LoadingButton';
 import { formatDateTime } from '@/lib/utils';
 import {
-  AlertCircle, Bot, CalendarClock, Check, ExternalLink, FileText, Image as ImageIcon, Layers,
-  Linkedin, Lock, Plus, RefreshCw, Send, Sparkles, Trash2, Wand2, X,
+  Bot, Brain, CalendarClock, ClipboardCheck, ExternalLink, FileText, Image as ImageIcon, Layers,
+  Linkedin, Lock, Plus, RefreshCw, Send, ShieldCheck, Sparkles, Trash2, UserRound, Wand2, X,
 } from 'lucide-react';
+import { Banner, Checks, CopyButton, IssueList, VerdictBadge, errText, inputCls } from './_components/shared';
+import { BrandModal, BrandTab } from './_components/BrandProfile';
+import { Seed, SkillsPanel } from './_components/SkillsPanel';
 
 /* ----------------------------------------------------------------- types */
 
@@ -19,7 +22,7 @@ interface Account {
   app: string; status: string; days_left: number | null; needs_reconnect_soon: boolean;
 }
 interface PlanInfo { plan_id: string; enabled: boolean; limit: number; used: number; scheduled: number; remaining: number }
-interface Status { plan: PlanInfo; accounts: Account[]; member_app_configured: boolean; pages_enabled: boolean }
+interface Status { plan: PlanInfo; accounts: Account[]; brand_complete: boolean; member_app_configured: boolean; pages_enabled: boolean }
 interface Media { type: 'image' | 'document'; storage_path: string; title: string; alt: string; preview?: string }
 interface Post {
   id: string; account_id: string | null; status: string; commentary: string; media: Media[];
@@ -27,6 +30,9 @@ interface Post {
   post_url: string | null; error: string | null; source: string;
 }
 interface Slide { title: string; body: string }
+type Goal = 'comments' | 'reposts' | 'likes' | 'saves' | 'leads';
+const GOALS: [Goal, string][] = [['comments', 'comments & discussion'], ['saves', 'saves (frameworks, data)'], ['reposts', 'reposts & reach'], ['likes', 'likes (story, emotion)'], ['leads', 'inbound leads']];
+interface Variant { hook_style: string; post: string; why?: string; first_comment?: string; chars?: number; checks?: Checks }
 interface Autopilot {
   enabled: boolean; auto_approve: boolean; consent_at?: string | null; account_id?: string | null;
   timezone: string; slots: { dow: number; time: string }[]; pillars: string[];
@@ -46,13 +52,6 @@ const STATUS_STYLE: Record<string, string> = {
   cancelled: 'bg-white/5 text-ice/40 border-white/10',
 };
 
-function errText(e: unknown, fallback: string): string {
-  const d = (e as { response?: { data?: { detail?: unknown } } })?.response?.data?.detail;
-  if (typeof d === 'string') return d;
-  if (d && typeof d === 'object' && 'message' in d) return String((d as { message: string }).message);
-  return fallback;
-}
-
 function toLocalInput(iso: string | null): string {
   if (!iso) return '';
   const d = new Date(iso);
@@ -66,15 +65,15 @@ function defaultScheduleInput(): string {
   return toLocalInput(d.toISOString());
 }
 
-const inputCls = 'w-full px-3 py-2 rounded-xl border border-ocean/30 bg-navy/60 text-offwhite text-sm outline-none focus:ring-2 focus:ring-steel/40 placeholder-ice/30';
-
 /* ------------------------------------------------------------------ page */
 
 function Studio() {
   const params = useSearchParams();
   const [status, setStatus] = useState<Status | null>(null);
   const [loading, setLoading] = useState(true);
-  const [tab, setTab] = useState<'compose' | 'queue' | 'autopilot'>('compose');
+  const [tab, setTab] = useState<'compose' | 'queue' | 'autopilot' | 'skills' | 'brand'>('compose');
+  const [brandFor, setBrandFor] = useState<'member' | 'pages' | null>(null);
+  const [seed, setSeed] = useState<Seed | null>(null);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const [posts, setPosts] = useState<Post[]>([]);
@@ -111,14 +110,24 @@ function Studio() {
   const activeAccounts = (status?.accounts || []).filter((a) => a.status === 'active');
   const plan = status?.plan;
 
-  async function connect(app: 'member' | 'pages') {
+  async function connect(app: 'member' | 'pages', skipCheck = false) {
     setError('');
+    // "On whose behalf" form first: the AI needs it and it records the user's authorization.
+    if (!skipCheck && !status?.brand_complete) { setBrandFor(app); return; }
     try {
       const r = await api.get(`/api/linkedin/connect?app=${app}`);
       window.location.href = r.data.url;
     } catch (e) {
+      if ((e as { response?: { status?: number } })?.response?.status === 409) { setBrandFor(app); return; }
       setError(errText(e, 'Could not start the LinkedIn connection.'));
     }
+  }
+
+  function draftFrom(s: Omit<Seed, 'nonce'>) {
+    if (s.text) { setText(s.text); setEditingId(null); }
+    setSeed({ ...s, nonce: Date.now() });
+    setTab('compose');
+    window.scrollTo({ top: 0, behavior: 'smooth' });
   }
 
   async function disconnect(id: string) {
@@ -218,53 +227,54 @@ function Studio() {
         </Banner>
       ))}
 
-      <AccountsCard status={status} onConnect={connect} onDisconnect={disconnect} />
+      {brandFor && (
+        <BrandModal onClose={() => setBrandFor(null)}
+                    onSaved={() => { const app = brandFor; setBrandFor(null); refresh(); connect(app, true); }} />
+      )}
 
-      <div className="flex gap-1.5">
-        {([['compose', 'Compose', Wand2], ['queue', 'Queue & calendar', CalendarClock], ['autopilot', 'Autopilot', Bot]] as const).map(([k, label, Icon]) => (
+      <AccountsCard status={status} onConnect={connect} onDisconnect={disconnect} onBrand={() => setTab('brand')} />
+
+      <div className="flex gap-1.5 overflow-x-auto pb-1">
+        {([['compose', 'Compose', Wand2], ['queue', 'Queue & calendar', CalendarClock], ['autopilot', 'Autopilot', Bot],
+           ['skills', 'AI skills', Brain], ['brand', 'Brand & voice', UserRound]] as const).map(([k, label, Icon]) => (
           <button key={k} onClick={() => setTab(k)}
-                  className={`inline-flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-semibold border ${tab === k ? 'bg-steel/20 border-steel/40 text-offwhite' : 'bg-navy/60 border-ocean/25 text-ice/55 hover:text-offwhite'}`}>
+                  className={`shrink-0 inline-flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-semibold border ${tab === k ? 'bg-steel/20 border-steel/40 text-offwhite' : 'bg-navy/60 border-ocean/25 text-ice/55 hover:text-offwhite'}`}>
             <Icon className="w-4 h-4" /> {label}
           </button>
         ))}
       </div>
 
       {tab === 'compose' && (
-        <Composer
+        <Composer key={seed?.nonce || 0}
           accounts={activeAccounts} accountId={accountId} setAccountId={setAccountId}
           text={text} setText={setText} media={media} setMedia={setMedia}
           visibility={visibility} setVisibility={setVisibility} when={when} setWhen={setWhen}
-          editing={!!editingId} onReset={resetComposer} onSave={save} busy={busy} setError={setError}
+          editing={!!editingId} onReset={resetComposer} onSave={save} busy={busy} setError={setError} seed={seed}
         />
       )}
       {tab === 'queue' && <Queue posts={posts} accounts={status?.accounts || []} onEdit={editPost} onChanged={refresh} setError={setError} setNotice={setNotice} />}
       {tab === 'autopilot' && <AutopilotPanel accounts={activeAccounts} setError={setError} setNotice={setNotice} onChanged={refresh} />}
+      {tab === 'skills' && <SkillsPanel onDraft={draftFrom} setError={setError} setNotice={setNotice} />}
+      {tab === 'brand' && <BrandTab setError={setError} setNotice={setNotice} onSaved={refresh} />}
     </div>
   );
 }
 
 /* ------------------------------------------------------------ components */
 
-function Banner({ kind, children, onClose }: { kind: 'ok' | 'error'; children: React.ReactNode; onClose?: () => void }) {
-  const cls = kind === 'ok' ? 'bg-emerald-500/10 border-emerald-500/25 text-emerald-300' : 'bg-rose-500/10 border-rose-500/25 text-rose-300';
-  return (
-    <div className={`flex items-start gap-2 p-3 rounded-xl border text-sm ${cls}`}>
-      {kind === 'ok' ? <Check className="w-4 h-4 mt-0.5 shrink-0" /> : <AlertCircle className="w-4 h-4 mt-0.5 shrink-0" />}
-      <div className="flex-1">{children}</div>
-      {onClose && <button onClick={onClose} className="opacity-60 hover:opacity-100"><X className="w-4 h-4" /></button>}
-    </div>
-  );
-}
-
-function AccountsCard({ status, onConnect, onDisconnect }: {
-  status: Status | null; onConnect: (a: 'member' | 'pages') => void; onDisconnect: (id: string) => void;
+function AccountsCard({ status, onConnect, onDisconnect, onBrand }: {
+  status: Status | null; onConnect: (a: 'member' | 'pages') => void; onDisconnect: (id: string) => void; onBrand: () => void;
 }) {
   const accounts = status?.accounts || [];
   return (
     <GlassCard className="p-5">
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
         <div className="flex flex-wrap gap-2">
-          {accounts.length === 0 && <p className="text-sm text-ice/50">Connect your LinkedIn profile to start posting.</p>}
+          {accounts.length === 0 && (
+            <p className="text-sm text-ice/50">
+              {status?.brand_complete ? 'Connect your LinkedIn profile to start posting.' : 'Step 1: tell the AI whose LinkedIn it manages. Step 2: connect LinkedIn.'}
+            </p>
+          )}
           {accounts.map((a) => (
             <div key={a.id} className="flex items-center gap-2 pl-1.5 pr-2 py-1.5 rounded-xl bg-navy/60 border border-ocean/25">
               {a.avatar_url
@@ -278,10 +288,14 @@ function AccountsCard({ status, onConnect, onDisconnect }: {
             </div>
           ))}
         </div>
-        <div className="flex gap-2 shrink-0">
+        <div className="flex flex-wrap gap-2 shrink-0">
+          <button onClick={onBrand} title="Brand profile the AI reads before every task"
+                  className={`inline-flex items-center gap-2 px-3 py-2 rounded-xl text-sm font-semibold border ${status?.brand_complete ? 'bg-emerald-500/10 text-emerald-300 border-emerald-500/25' : 'bg-amber-500/10 text-amber-300 border-amber-500/25'}`}>
+            <ShieldCheck className="w-4 h-4" /> {status?.brand_complete ? 'Brand profile' : 'Brand profile needed'}
+          </button>
           <button onClick={() => onConnect('member')}
                   className="inline-flex items-center gap-2 px-3 py-2 rounded-xl text-sm font-semibold bg-sky-500/15 text-sky-300 border border-sky-500/30 hover:bg-sky-500/25">
-            <Plus className="w-4 h-4" /> Connect profile
+            <Linkedin className="w-4 h-4" /> {accounts.some((a) => a.kind === 'person') ? 'Reconnect LinkedIn' : 'Connect LinkedIn'}
           </button>
           <button onClick={() => status?.pages_enabled && onConnect('pages')} disabled={!status?.pages_enabled}
                   title={status?.pages_enabled ? '' : 'Company pages are awaiting LinkedIn approval'}
@@ -300,14 +314,33 @@ function Composer(props: {
   visibility: 'PUBLIC' | 'CONNECTIONS'; setVisibility: (v: 'PUBLIC' | 'CONNECTIONS') => void;
   when: string; setWhen: (v: string) => void; editing: boolean; onReset: () => void;
   onSave: (a: 'draft' | 'schedule' | 'publish_now') => void; busy: string; setError: (s: string) => void;
+  seed: Seed | null;
 }) {
-  const { text, setText, media, setMedia, setError } = props;
-  const [topic, setTopic] = useState('');
-  const [goal, setGoal] = useState<'engagement' | 'authority' | 'leads'>('engagement');
-  const [variants, setVariants] = useState<{ hook_style: string; post: string }[]>([]);
+  const { text, setText, media, setMedia, setError, seed } = props;
+  // a seed (from the AI skills tab / planner) remounts the composer via `key`
+  const [topic, setTopic] = useState(seed?.topic?.slice(0, 600) || '');
+  const [goal, setGoal] = useState<Goal>(GOALS.find(([v]) => v === seed?.goal)?.[0] || 'comments');
+  const [length, setLength] = useState<'short' | 'medium' | 'long'>('medium');
+  const [formula, setFormula] = useState(seed?.formula || '');
+  const [variants, setVariants] = useState<Variant[]>([]);
   const [instruction, setInstruction] = useState('');
+  const [tier, setTier] = useState<'all' | 'forensic' | 'strict' | 'aesthetic'>('all');
   const [aiBusy, setAiBusy] = useState('');
   const [changes, setChanges] = useState<string[]>([]);
+  const [humanInfo, setHumanInfo] = useState<{ reader_confidence: string; notes: string } | null>(null);
+  const [firstComment, setFirstComment] = useState('');
+  const [audit, setAudit] = useState<(Checks & { score: number; summary: string; info?: { timing: string } }) | null>(null);
+  const [liveRaw, setLive] = useState<(Checks & { hook_chars: number }) | null>(null);
+  const live = text.trim().length >= 20 ? liveRaw : null;
+
+  // free, instant rule check (no AI credit) while typing
+  useEffect(() => {
+    if (text.trim().length < 20) return;
+    const t = setTimeout(() => {
+      api.post('/api/linkedin/lint', { post: text }).then((r) => setLive(r.data)).catch(() => undefined);
+    }, 900);
+    return () => clearTimeout(t);
+  }, [text]);
   const [slides, setSlides] = useState<Slide[]>([]);
   const [deckTitle, setDeckTitle] = useState('');
   const account = props.accounts.find((a) => a.id === props.accountId);
@@ -318,13 +351,21 @@ function Composer(props: {
   }
 
   const generate = () => run('draft', async () => {
-    const r = await api.post('/api/linkedin/ai/draft', { topic, goal, variants: 3 });
+    const r = await api.post('/api/linkedin/ai/draft', { topic, goal, length, formula, variants: 3 });
     setVariants(r.data.variants || []);
   });
   const humanize = () => run('humanize', async () => {
-    const r = await api.post('/api/linkedin/ai/humanize', { post: text });
+    const r = await api.post('/api/linkedin/ai/humanize', { post: text, tier });
     setText(r.data.post); setChanges(r.data.changes || []);
+    setHumanInfo({ reader_confidence: r.data.reader_confidence, notes: r.data.notes });
   });
+  const runAudit = () => run('audit', async () => {
+    const r = await api.post('/api/linkedin/ai/audit', { post: text, goal });
+    setAudit(r.data);
+  });
+  const pickVariant = (v: Variant) => {
+    setText(v.post); setChanges([]); setHumanInfo(null); setAudit(null); setFirstComment(v.first_comment || '');
+  };
   const rewrite = () => run('rewrite', async () => {
     const r = await api.post('/api/linkedin/ai/rewrite', { post: text, instruction });
     setText(r.data.post);
@@ -372,22 +413,37 @@ function Composer(props: {
                     placeholder="What should the post be about? e.g. 3 mistakes I see founders make when hiring a video editor"
                     className={inputCls} />
           <div className="flex flex-wrap gap-2 items-center">
-            <select value={goal} onChange={(e) => setGoal(e.target.value as typeof goal)} className={`${inputCls} w-auto`}>
-              <option value="engagement">Goal: comments &amp; discussion</option>
-              <option value="authority">Goal: authority &amp; saves</option>
-              <option value="leads">Goal: inbound leads</option>
+            <select value={goal} onChange={(e) => setGoal(e.target.value as Goal)} className={`${inputCls} w-auto`}>
+              {GOALS.map(([v, l]) => <option key={v} value={v}>Goal: {l}</option>)}
+            </select>
+            <select value={length} onChange={(e) => setLength(e.target.value as typeof length)} className={`${inputCls} w-auto`}>
+              <option value="short">Short (300-500)</option>
+              <option value="medium">Medium (900-1,300)</option>
+              <option value="long">Long (1,500-1,900)</option>
             </select>
             <LoadingButton isLoading={aiBusy === 'draft'} disabled={topic.trim().length < 3} onClick={generate} icon={<Sparkles className="w-4 h-4" />}>Generate 3 posts</LoadingButton>
             <LoadingButton variant="secondary" isLoading={aiBusy === 'carousel'} disabled={topic.trim().length < 3} onClick={carousel} icon={<Layers className="w-4 h-4" />}>AI carousel</LoadingButton>
           </div>
+          {formula && (
+            <p className="text-[11px] text-ice/55">Formula from planner: <b className="text-offwhite">{formula}</b>
+              <button onClick={() => setFormula('')} className="ml-2 text-ice/40 hover:text-rose-300">clear</button></p>
+          )}
+          <p className="text-[10px] text-ice/35">Uses the post-writer skill (20 hook formulas picked by goal) + your brand profile, voice and story bank. Every draft is audited; numbers not in your data are flagged.</p>
           {variants.length > 0 && (
             <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
               {variants.map((v, i) => (
-                <button key={i} onClick={() => { setText(v.post); setChanges([]); }}
-                        className="text-left p-3 rounded-xl bg-navy/60 border border-ocean/25 hover:border-steel/40 transition-colors">
-                  <p className="text-[10px] uppercase tracking-wide text-steel mb-1">{v.hook_style || `Variant ${i + 1}`}</p>
-                  <p className="text-xs text-ice/70 line-clamp-6 whitespace-pre-line">{v.post}</p>
-                  <p className="text-[11px] text-emerald-300 mt-2 font-semibold">Use this</p>
+                <button key={i} onClick={() => pickVariant(v)}
+                        className="text-left p-3 rounded-xl bg-navy/60 border border-ocean/25 hover:border-steel/40 transition-colors flex flex-col">
+                  <div className="flex items-center justify-between gap-1 mb-1">
+                    <p className="text-[10px] uppercase tracking-wide text-steel truncate">{v.hook_style || `Variant ${i + 1}`}</p>
+                    {v.checks && <VerdictBadge verdict={v.checks.verdict} />}
+                  </div>
+                  <p className="text-xs text-ice/70 line-clamp-6 whitespace-pre-line flex-1">{v.post}</p>
+                  {v.why && <p className="text-[10px] text-ice/40 mt-1.5 line-clamp-2">{v.why}</p>}
+                  <div className="flex items-center justify-between mt-2">
+                    <p className="text-[11px] text-emerald-300 font-semibold">Use this</p>
+                    <p className="text-[10px] text-ice/40">{v.chars ?? v.post.length} chars{v.checks?.blockers.length ? ` · ${v.checks.blockers.length} blocker(s)` : ''}</p>
+                  </div>
                 </button>
               ))}
             </div>
@@ -405,13 +461,49 @@ function Composer(props: {
                     className={`${inputCls} font-[inherit] leading-relaxed`} />
           <div className="flex flex-wrap items-center gap-2">
             <span className={`text-xs ${over ? 'text-rose-300' : 'text-ice/45'}`}>{text.length}/{MAX}</span>
+            {live && <VerdictBadge verdict={live.verdict} />}
+            {live && <span className={`text-[10px] ${live.hook_chars > SEE_MORE ? 'text-amber-300' : 'text-ice/40'}`}>hook {live.hook_chars}/{SEE_MORE}</span>}
+            <select value={tier} onChange={(e) => setTier(e.target.value as typeof tier)} className={`${inputCls} w-auto py-1 text-xs`} title="Humanizer tier">
+              <option value="all">All passes</option><option value="forensic">Forensic</option><option value="strict">Strict</option><option value="aesthetic">Aesthetic</option>
+            </select>
             <LoadingButton size="sm" variant="secondary" isLoading={aiBusy === 'humanize'} disabled={text.trim().length < 10} onClick={humanize} icon={<Wand2 className="w-3.5 h-3.5" />}>Humanize</LoadingButton>
-            <input value={instruction} onChange={(e) => setInstruction(e.target.value)} placeholder="Rewrite: e.g. shorter, more casual"
+            <LoadingButton size="sm" variant="secondary" isLoading={aiBusy === 'audit'} disabled={text.trim().length < 10} onClick={runAudit} icon={<ClipboardCheck className="w-3.5 h-3.5" />}>Audit</LoadingButton>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <input value={instruction} onChange={(e) => setInstruction(e.target.value)} placeholder="Rewrite: e.g. shorter, more casual, stronger hook"
                    className={`${inputCls} flex-1 min-w-[160px]`} />
             <LoadingButton size="sm" variant="secondary" isLoading={aiBusy === 'rewrite'} disabled={text.trim().length < 10 || instruction.trim().length < 2} onClick={rewrite}>Rewrite</LoadingButton>
           </div>
+          {live && !audit && (live.blockers.length + live.warnings.length > 0) && (
+            <details className="rounded-xl bg-navy/40 border border-ocean/20 p-3">
+              <summary className="text-xs text-ice/60 cursor-pointer">Quick check: {live.blockers.length} blocker(s), {live.warnings.length} warning(s)</summary>
+              <div className="mt-2"><IssueList blockers={live.blockers} warnings={live.warnings} /></div>
+            </details>
+          )}
+          {audit && (
+            <div className="rounded-xl bg-navy/40 border border-ocean/20 p-3 space-y-2">
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className={`text-sm font-bold ${audit.verdict === 'pass' ? 'text-emerald-300' : 'text-rose-300'}`}>{audit.verdict === 'pass' ? 'PASS' : 'FAIL'}</span>
+                <span className="text-[11px] text-ice/50">score {audit.score}/100 · {audit.summary}</span>
+                <button onClick={() => setAudit(null)} className="ml-auto text-ice/40 hover:text-offwhite"><X className="w-3.5 h-3.5" /></button>
+              </div>
+              <IssueList blockers={audit.blockers} warnings={audit.warnings} />
+              {audit.info?.timing && <p className="text-[11px] text-ice/50">Best time: {audit.info.timing}</p>}
+            </div>
+          )}
           {changes.length > 0 && (
-            <ul className="text-[11px] text-ice/50 list-disc pl-5">{changes.map((c, i) => <li key={i}>{c}</li>)}</ul>
+            <div className="rounded-xl bg-navy/40 border border-ocean/20 p-3">
+              <p className="text-[11px] text-ice/60 mb-1">Humanizer edits{humanInfo && <> · reads as AI: <b className={humanInfo.reader_confidence === 'low' ? 'text-emerald-300' : 'text-amber-300'}>{humanInfo.reader_confidence}</b></>}</p>
+              <ul className="text-[11px] text-ice/50 list-disc pl-5">{changes.map((c, i) => <li key={i}>{c}</li>)}</ul>
+              {humanInfo?.notes && <p className="text-[11px] text-amber-300 mt-1">{humanInfo.notes}</p>}
+            </div>
+          )}
+          {firstComment && (
+            <div className="flex items-start gap-2 rounded-xl bg-sky-500/5 border border-sky-500/20 p-3">
+              <p className="text-[11px] text-ice/65 flex-1"><b className="text-sky-300">First comment</b> (links go here, not in the post - add it right after publishing): {firstComment}</p>
+              <CopyButton text={firstComment} />
+              <button onClick={() => setFirstComment('')} className="text-ice/40 hover:text-rose-300"><X className="w-3.5 h-3.5" /></button>
+            </div>
           )}
 
           {/* Media */}

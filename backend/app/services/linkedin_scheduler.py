@@ -85,9 +85,10 @@ def plan_autopilot(supabase, cfg: dict[str, Any], now: datetime | None = None) -
         return 0
     recent = (supabase.table("linkedin_posts").select("commentary").eq("user_id", user_id)
               .order("created_at", desc=True).limit(15).execute().data or [])
+    from app.services.linkedin_context import user_context
+
     posts = linkedin_writer.plan_posts(
-        list(cfg.get("pillars") or []), len(free), audience=cfg.get("audience"),
-        voice_profile=cfg.get("voice_profile"),
+        list(cfg.get("pillars") or []), len(free), ctx=user_context(supabase, user_id),
         avoid=[(r.get("commentary") or "")[:120] for r in recent])
     status = "scheduled" if cfg.get("auto_approve") and cfg.get("consent_at") else "draft"
     rows = [{

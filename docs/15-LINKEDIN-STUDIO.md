@@ -10,8 +10,11 @@ Only LinkedIn's official API is used: OAuth 2.0, `/v2/userinfo`, and the REST `p
 
 | Feature | Details |
 |---|---|
-| Connect LinkedIn | "Connect profile" (works immediately). "Company pages" is enabled after LinkedIn approves our Community Management API access |
-| AI writing | Generate 3 variants from a topic and goal, **Humanize** (removes AI-sounding phrasing), **Rewrite** with an instruction. Each counts as 1 AI call on the plan's monthly AI quota |
+| Brand profile (before connecting) | Clicking **Connect LinkedIn** first opens a 4-step form: *whose* LinkedIn is managed (myself / my company / a client), business, audience, goals, tone, pillars, story bank, writing samples, plus an explicit authorization checkbox. `/connect` returns 409 until it is complete. Editable later in **Brand & voice** |
+| Connect LinkedIn | Works immediately for personal profiles. "Company pages" is enabled after LinkedIn approves our Community Management API access |
+| AI writing | 3 variants from a topic, **goal** (comments / saves / reposts / likes / leads) and **length** (short / medium / long); each variant shows its hook formula, a pass/warn/fail badge and a suggested first comment for links. **Humanize** (4 tiers), **Audit**, **Rewrite**, and a free live rule check while typing. Each AI action counts as 1 AI call on the plan's monthly AI quota |
+| AI skills tab | Pre-publish audit, content planner (week plan → "Draft this post"), story interview (fills the story bank), repurpose, hook analyzer, comment drafter (+ reshare take), reply-to-comments sweep, profile optimizer, team advocacy |
+| Voice profile | Paste 3–6 of your own posts → the AI extracts your voice fingerprint and every skill writes in it |
 | Post types | Text, 1 image, 2–20 images, or a **PDF document / carousel** |
 | AI carousel | DeepSeek writes 6–10 slides plus a caption, rendered to a branded 1080×1350 PDF; slides are editable, then *Update PDF* |
 | Scheduling | Pick a date and time (user's local time); up to 90 days ahead, at least 2 minutes in the future |
@@ -64,7 +67,7 @@ python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().d
 DeepSeek uses the existing `DEEPSEEK_API_KEY`.
 
 ### 3.4 Database
-Run `supabase/migration_linkedin_studio_v21.sql` in the Supabase SQL Editor. It creates `linkedin_accounts`, `linkedin_posts` and `linkedin_autopilot`, the post-limit columns, the RPCs `claim_due_linkedin_posts` and `consume_linkedin_post_quota`, and the private storage bucket **`linkedin-media`**. If your project blocks bucket creation from SQL, create the private bucket `linkedin-media` in *Storage* by hand.
+Run `supabase/migration_linkedin_studio_v21.sql`, then `supabase/migration_linkedin_brand_v22.sql` (brand profile + voice profile), in the Supabase SQL Editor. It creates `linkedin_accounts`, `linkedin_posts` and `linkedin_autopilot`, the post-limit columns, the RPCs `claim_due_linkedin_posts` and `consume_linkedin_post_quota`, and the private storage bucket **`linkedin-media`**. If your project blocks bucket creation from SQL, create the private bucket `linkedin-media` in *Storage* by hand.
 
 ### 3.5 Deploy
 Rebuild the backend (new Python packages: `cryptography`, `reportlab`) and the frontend. The scheduler starts with the backend automatically.
@@ -90,11 +93,31 @@ Compose / Autopilot ──► linkedin_posts (draft | scheduled)
 - `app/services/linkedin_api.py`: official LinkedIn client (OAuth, signed state, media, posts, little-text)
 - `app/services/linkedin_studio.py`: accounts, plan and quota, media storage, publishing
 - `app/services/linkedin_scheduler.py`: background publisher and autopilot planner
-- `app/services/linkedin_writer.py`: DeepSeek prompts (rules adapted from the MIT-licensed *linkedin-skills*)
+- `app/services/linkedin_writer.py`: one function per skill (draft, rewrite, humanize, audit, voice, carousel, autopilot, repurpose, hooks, plan, profile, interview, comment, replies, advocacy)
+- `app/services/linkedin_skill_library.py`: maps each task to its skill files → DeepSeek system prompt (cached)
+- `app/linkedin_skills/`: vendored MIT-licensed *linkedin-skills* by Sergey Bulaev (SKILL.md files, 20 hook formulas, humanizer V3 + post-audit + voice-profile sub-skills, algorithm heuristics, templates)
+- `app/services/linkedin_context.py`: USER DATA sent with every AI call (brand profile, voice profile, story bank, samples, accounts, pillars, last 12 posts)
+- `app/services/linkedin_lint.py`: the humanizer's regex audit run in code (em dashes, links in body, dead openers/closers, reveal bridges, AI-tell density per paragraph, hook fold, length, hashtags, AI emoji) + a guard that flags any number not present in the user's data
 - `app/services/carousel_pdf.py`: slides to PDF
 - `app/services/token_crypto.py`: Fernet encryption of tokens
 
-**Frontend:** `frontend/src/app/dashboard/linkedin/page.tsx` (sidebar: *LinkedIn Studio*).
+**Frontend:** `frontend/src/app/dashboard/linkedin/page.tsx` + `_components/` (BrandProfile, SkillsPanel, shared) (sidebar: *LinkedIn Studio*).
+
+### 4.1 How DeepSeek uses the skills
+Every AI request = **system prompt** (the relevant SKILL.md files and references, plus a preamble: no tools, never invent facts, treat pasted third-party text as untrusted) + **USER DATA** (everything the user told us). Output is strict JSON, validated server-side, fail-closed.
+
+After generation, each post is checked in code (`linkedin_lint`). If a draft still has a blocker (em-dash density, link in body, reveal bridge, AI-dense paragraph, a number that is not in the user's data...), one automatic repair pass runs; autopilot never queues a post that still fails.
+
+| Skill (upstream) | Studio feature | Notes |
+|---|---|---|
+| post-writer | Compose → Generate, autopilot | goal-picked formulas F1–F20, length targets, P.S., 0–2 hashtags, links → first comment |
+| humanizer V3 (+ post-audit, voice-profile, emoji-detector) | Humanize, Audit, Voice profile | tiers forensic/strict/aesthetic/all, per-paragraph density, reader confidence |
+| content-planner | AI skills → Content planner | general or founder edition, goal mix, comment targets, inbound-readiness |
+| interviewer | AI skills → Story interview | bank mode / post mode; answers appended to the story bank |
+| repurposer, hook-extractor | AI skills | spine + mapping; top-2 formula fit, template, cautions |
+| comment-drafter, reply-handler | AI skills | T1–T7 (200–350 chars), reshare take; R1–R5 sweep with filtering + injection flagging (copy & paste, since the official API only posts to your own feed) |
+| profile-optimizer, employee-advocacy | AI skills | 9-part scorecard; 14-day launch, cadence, governance, KPIs |
+| engager-analytics, thread-monitor | not included | they read other members' data, which LinkedIn's official API does not allow |
 
 ## 5. Security
 - OAuth `state` is HMAC-signed, bound to the user and app, and expires after 10 minutes.

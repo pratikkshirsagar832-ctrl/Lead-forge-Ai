@@ -5,7 +5,11 @@ LinkedIn's official API. Pro and Agency plans only.
   GET    /api/linkedin/connect?app=member|pages   -> LinkedIn authorize URL
   GET    /api/linkedin/callback               OAuth redirect target (signed state)
   DELETE /api/linkedin/accounts/{id}
-  POST   /api/linkedin/ai/{draft,rewrite,humanize,carousel}
+  GET    /api/linkedin/brand  ·  PUT /api/linkedin/brand   brand profile (required before connect)
+  PUT    /api/linkedin/brand/voice            edit the learned voice profile
+  POST   /api/linkedin/ai/{draft,rewrite,humanize,audit,voice,carousel,repurpose,hook,plan,profile,
+                          interview,interview/digest,comment,reply,replies,advocacy}
+  POST   /api/linkedin/lint                   instant rule check (no AI)
   POST   /api/linkedin/carousel/render        edited slides -> PDF media
   POST   /api/linkedin/media                  upload image / PDF
   GET    /api/linkedin/media/url?path=        short-lived preview URL
@@ -35,6 +39,7 @@ from app.database import get_supabase_admin
 from app.middleware.auth_middleware import get_current_user
 from app.services import carousel_pdf, linkedin_studio as studio, linkedin_writer as writer
 from app.services import linkedin_api as li
+from app.services.linkedin_context import brand_profile, profile_complete, user_context
 
 logger = logging.getLogger(__name__)
 
@@ -78,10 +83,13 @@ async def _refund_ai(user: dict[str, Any]) -> None:
     await refund_monthly_quota(supabase, quota_owner_id(eff, user["id"]), "ai")
 
 
-def _voice(user_id: str) -> dict[str, Any]:
-    rows = _db().table("linkedin_autopilot").select("voice_profile,audience").eq("user_id", user_id) \
-        .limit(1).execute().data or []
-    return rows[0] if rows else {}
+def _ctx(user_id: str) -> str:
+    """USER DATA for DeepSeek: brand profile, story bank, voice, recent posts."""
+    return user_context(_db(), user_id)
+
+
+def _brand(user_id: str) -> dict[str, Any] | None:
+    return brand_profile(_db(), user_id)
 
 
 # ------------------------------------------------------------ accounts
@@ -94,16 +102,74 @@ async def status(user: dict = Depends(get_current_user)) -> dict[str, Any]:
     accounts = await asyncio.to_thread(
         lambda: supabase.table("linkedin_accounts").select("*").eq("user_id", user["id"])
         .order("created_at").execute().data or [])
+    brand = await asyncio.to_thread(_brand, user["id"])
     return {
         "plan": {k: info[k] for k in ("plan_id", "enabled", "limit", "used", "scheduled", "remaining")},
         "accounts": [studio.public_account(a) for a in accounts],
+        "brand_complete": profile_complete(brand),
         "member_app_configured": bool(settings.linkedin_client_id and settings.linkedin_client_secret),
         "pages_enabled": bool(settings.linkedin_pages_enabled and settings.linkedin_pages_client_id),
     }
 
 
+# ---------------------------------------------------------- brand profile
+
+class BrandIn(BaseModel):
+    managed_for: Literal["self", "company", "client"] = "self"
+    full_name: str = Field(..., min_length=2, max_length=120)
+    headline: str | None = Field(None, max_length=220)
+    company: str | None = Field(None, max_length=160)
+    website: str | None = Field(None, max_length=300)
+    industry: str | None = Field(None, max_length=120)
+    location: str | None = Field(None, max_length=120)
+    language: str = Field("English", max_length=40)
+    services: str = Field(..., min_length=3, max_length=1500)
+    offer: str | None = Field(None, max_length=1500)
+    target_audience: str = Field(..., min_length=3, max_length=800)
+    ideal_client: str | None = Field(None, max_length=800)
+    goals: list[str] = Field(default_factory=list, max_length=8)
+    tone: list[str] = Field(default_factory=list, max_length=8)
+    topics: list[str] = Field(default_factory=list, max_length=10)
+    expertise: str | None = Field(None, max_length=2000)
+    story_bank: str | None = Field(None, max_length=8000)
+    writing_samples: str | None = Field(None, max_length=6000)
+    cta_preference: str | None = Field(None, max_length=300)
+    avoid: str | None = Field(None, max_length=800)
+    posting_frequency: str | None = Field(None, max_length=60)
+    notes: str | None = Field(None, max_length=2000)
+    authorized: bool = False
+
+    @field_validator("goals", "tone", "topics")
+    @classmethod
+    def _clean_list(cls, v: list[str]) -> list[str]:
+        return [x.strip()[:120] for x in v if x and x.strip()]
+
+
+@router.get("/brand")
+async def get_brand(user: dict = Depends(get_current_user)) -> dict[str, Any]:
+    row = await asyncio.to_thread(_brand, user["id"])
+    return {"profile": row, "complete": profile_complete(row)}
+
+
+@router.put("/brand")
+async def put_brand(body: BrandIn, user: dict = Depends(require_studio)) -> dict[str, Any]:
+    if not body.authorized:
+        raise HTTPException(status_code=400, detail=(
+            "Please confirm you authorize Hyperclients to create, schedule and publish LinkedIn "
+            "posts on this profile's behalf."))
+    existing = await asyncio.to_thread(_brand, user["id"]) or {}
+    now = datetime.now(timezone.utc).isoformat()
+    row = {**body.model_dump(), "user_id": user["id"], "updated_at": now,
+           "authorized_at": existing.get("authorized_at") or now}
+    saved = (await asyncio.to_thread(lambda: _db().table("linkedin_brand_profiles")
+                                     .upsert(row, on_conflict="user_id").execute())).data[0]
+    return {"profile": saved, "complete": profile_complete(saved)}
+
+
 @router.get("/connect")
 async def connect(app: Literal["member", "pages"] = "member", user: dict = Depends(require_studio)) -> dict[str, str]:
+    if not profile_complete(await asyncio.to_thread(_brand, user["id"])):
+        raise HTTPException(status_code=409, detail="Complete your brand profile before connecting LinkedIn.")
     try:
         return {"url": li.authorize_url(user["id"], app)}
     except li.LinkedInError as exc:
@@ -162,10 +228,15 @@ async def disconnect(account_id: str, user: dict = Depends(get_current_user)) ->
 
 # ------------------------------------------------------------------ AI
 
+Goal = Literal["comments", "reposts", "likes", "saves", "leads", "engagement", "authority"]
+
+
 class DraftIn(BaseModel):
     topic: str = Field(..., min_length=3, max_length=600)
-    goal: Literal["engagement", "authority", "leads"] = "engagement"
-    tone: str = Field("conversational", max_length=40)
+    goal: Goal = "comments"
+    tone: str = Field("", max_length=40)
+    length: Literal["short", "medium", "long"] = "medium"
+    formula: str = Field("", max_length=40)
     variants: int = Field(3, ge=1, le=3)
 
 
@@ -176,11 +247,97 @@ class RewriteIn(BaseModel):
 
 class HumanizeIn(BaseModel):
     post: str = Field(..., min_length=10, max_length=3000)
+    tier: Literal["forensic", "strict", "aesthetic", "all"] = "all"
+
+
+class PostTextIn(BaseModel):
+    post: str = Field(..., min_length=10, max_length=6000)
+
+
+class AuditIn(BaseModel):
+    post: str = Field(..., min_length=10, max_length=3000)
+    goal: Literal["", "comments", "reposts", "likes", "saves", "leads"] = ""
+    scheduled_for: str = Field("", max_length=60)
+
+
+class VoiceIn(BaseModel):
+    samples: str = Field(..., min_length=200, max_length=12000)
+
+
+class VoiceSaveIn(BaseModel):
+    voice_profile: str = Field("", max_length=5000)
 
 
 class CarouselIn(BaseModel):
     topic: str = Field(..., min_length=3, max_length=600)
     slides: int = Field(8, ge=4, le=12)
+
+
+class RepurposeIn(BaseModel):
+    source: str = Field(..., min_length=40, max_length=12000)
+    source_type: Literal["article", "blog", "tweet", "thread", "newsletter", "video transcript", "notes"] = "article"
+    goal: Literal["comments", "reposts", "likes", "saves", "leads"] = "comments"
+
+
+class PlanIn(BaseModel):
+    theme: str = Field("", max_length=400)
+    days: int = Field(7, ge=3, le=14)
+    edition: Literal["general", "founder"] = "general"
+    posts_per_week: int = Field(4, ge=3, le=5)
+
+
+class ProfileIn(BaseModel):
+    headline: str = Field("", max_length=300)
+    about: str = Field("", max_length=4000)
+    extra: str = Field("", max_length=1500)
+    goal: Literal["clients", "job", "authority"] = "clients"
+
+
+class InterviewIn(BaseModel):
+    topic: str = Field("", max_length=200)
+    mode: Literal["", "bank", "post"] = ""
+
+
+class QA(BaseModel):
+    q: str = Field(..., max_length=300)
+    a: str = Field("", max_length=1500)
+
+
+class InterviewDigestIn(BaseModel):
+    answers: list[QA] = Field(..., min_length=1, max_length=12)
+    save_to_story_bank: bool = True
+    mode: Literal["bank", "post"] = "bank"
+    topic: str = Field("", max_length=200)
+
+
+class CommentIn(BaseModel):
+    post: str = Field(..., min_length=10, max_length=5000)
+    author: str = Field("", max_length=80)
+    goal: Literal["visibility", "relationship", "authority"] = "visibility"
+    mode: Literal["comment", "reshare"] = "comment"
+
+
+class ReplyIn(BaseModel):
+    post: str = Field(..., min_length=10, max_length=4000)
+    comment: str = Field(..., min_length=2, max_length=2000)
+    commenter: str = Field("", max_length=80)
+
+
+class ThreadComment(BaseModel):
+    name: str = Field("", max_length=80)
+    text: str = Field(..., min_length=1, max_length=1500)
+    is_reply: bool = False
+
+
+class RepliesIn(BaseModel):
+    post: str = Field(..., min_length=10, max_length=4000)
+    comments: list[ThreadComment] = Field(..., min_length=1, max_length=100)
+
+
+class AdvocacyIn(BaseModel):
+    team_size: int = Field(..., ge=2, le=500)
+    goals: str = Field(..., min_length=3, max_length=400)
+    current_state: str = Field("", max_length=300)
 
 
 class Slide(BaseModel):
@@ -194,9 +351,12 @@ class RenderIn(BaseModel):
 
 
 async def _run_ai(user: dict[str, Any], fn, *args, **kwargs):
+    """One AI call on the plan's monthly quota; the user's full context is
+    always attached (ctx=...) so DeepSeek knows who it writes for."""
     await _ai_unit(user)
     try:
-        return await asyncio.to_thread(fn, *args, **kwargs)
+        ctx = await asyncio.to_thread(_ctx, user["id"])
+        return await asyncio.to_thread(fn, *args, ctx=ctx, **kwargs)
     except writer.WriterError as exc:
         await _refund_ai(user)
         raise HTTPException(status_code=502, detail=str(exc))
@@ -204,34 +364,139 @@ async def _run_ai(user: dict[str, Any], fn, *args, **kwargs):
 
 @router.post("/ai/draft")
 async def ai_draft(body: DraftIn, user: dict = Depends(require_studio)) -> dict[str, Any]:
-    v = await asyncio.to_thread(_voice, user["id"])
-    variants = await _run_ai(user, writer.draft_post, body.topic, goal=body.goal, tone=body.tone,
-                             audience=v.get("audience"), voice_profile=v.get("voice_profile"),
-                             variants=body.variants)
-    return {"variants": variants}
+    return {"variants": await _run_ai(user, writer.draft_post, body.topic, goal=body.goal, tone=body.tone,
+                                      length=body.length, formula=body.formula, variants=body.variants)}
 
 
 @router.post("/ai/rewrite")
 async def ai_rewrite(body: RewriteIn, user: dict = Depends(require_studio)) -> dict[str, Any]:
-    v = await asyncio.to_thread(_voice, user["id"])
-    return {"post": await _run_ai(user, writer.rewrite, body.post, body.instruction, v.get("voice_profile"))}
+    return {"post": await _run_ai(user, writer.rewrite, body.post, body.instruction)}
 
 
 @router.post("/ai/humanize")
 async def ai_humanize(body: HumanizeIn, user: dict = Depends(require_studio)) -> dict[str, Any]:
-    return await _run_ai(user, writer.humanize, body.post)
+    return await _run_ai(user, writer.humanize, body.post, tier=body.tier)
+
+
+@router.post("/ai/audit")
+async def ai_audit(body: AuditIn, user: dict = Depends(require_studio)) -> dict[str, Any]:
+    return await _run_ai(user, writer.audit, body.post, goal=body.goal, scheduled_for=body.scheduled_for)
+
+
+@router.post("/lint")
+async def lint_post(body: PostTextIn, user: dict = Depends(require_studio)) -> dict[str, Any]:
+    """Instant, free rule check (no AI call) for the live editor."""
+    from app.services.linkedin_lint import lint
+
+    return lint(body.post)
+
+
+def _save_voice(user_id: str, text: str, samples: str | None = None) -> bool:
+    if not _brand(user_id):
+        return False
+    now = datetime.now(timezone.utc).isoformat()
+    row: dict[str, Any] = {"voice_profile": text, "voice_updated_at": now, "updated_at": now}
+    if samples is not None:
+        row["writing_samples"] = samples[:6000]
+    _db().table("linkedin_brand_profiles").update(row).eq("user_id", user_id).execute()
+    return True
+
+
+@router.post("/ai/voice")
+async def ai_voice(body: VoiceIn, user: dict = Depends(require_studio)) -> dict[str, Any]:
+    """Learn the user's voice from their own posts and save it to the brand profile."""
+    prof = await _run_ai(user, writer.build_voice_profile, body.samples)
+    prof["saved"] = await asyncio.to_thread(_save_voice, user["id"], prof["text"], body.samples)
+    return prof
+
+
+@router.put("/brand/voice")
+async def put_voice(body: VoiceSaveIn, user: dict = Depends(require_studio)) -> dict[str, Any]:
+    if not await asyncio.to_thread(_save_voice, user["id"], body.voice_profile.strip()):
+        raise HTTPException(status_code=409, detail="Complete your brand profile first.")
+    return {"saved": True}
 
 
 @router.post("/ai/carousel")
 async def ai_carousel(body: CarouselIn, user: dict = Depends(require_studio)) -> dict[str, Any]:
-    v = await asyncio.to_thread(_voice, user["id"])
-    deck = await _run_ai(user, writer.carousel, body.topic, slides=body.slides, audience=v.get("audience"))
+    deck = await _run_ai(user, writer.carousel, body.topic, slides=body.slides)
     media = await _render_and_store(user, deck["title"], deck["slides"])
     return {**deck, "media": media}
 
 
+@router.post("/ai/repurpose")
+async def ai_repurpose(body: RepurposeIn, user: dict = Depends(require_studio)) -> dict[str, Any]:
+    return await _run_ai(user, writer.repurpose, body.source, source_type=body.source_type, goal=body.goal)
+
+
+@router.post("/ai/hook")
+async def ai_hook(body: PostTextIn, user: dict = Depends(require_studio)) -> dict[str, Any]:
+    return await _run_ai(user, writer.extract_hook, body.post)
+
+
+@router.post("/ai/plan")
+async def ai_plan(body: PlanIn, user: dict = Depends(require_studio)) -> dict[str, Any]:
+    return await _run_ai(user, writer.content_plan, body.theme, days=body.days, edition=body.edition,
+                         posts_per_week=body.posts_per_week)
+
+
+@router.post("/ai/profile")
+async def ai_profile(body: ProfileIn, user: dict = Depends(require_studio)) -> dict[str, Any]:
+    return await _run_ai(user, writer.optimize_profile, body.headline, body.about, extra=body.extra, goal=body.goal)
+
+
+@router.post("/ai/interview")
+async def ai_interview(body: InterviewIn, user: dict = Depends(require_studio)) -> dict[str, Any]:
+    return await _run_ai(user, writer.interview_questions, body.topic, mode=body.mode)
+
+
+@router.post("/ai/interview/digest")
+async def ai_interview_digest(body: InterviewDigestIn, user: dict = Depends(require_studio)) -> dict[str, Any]:
+    result = await _run_ai(user, writer.interview_digest, [a.model_dump() for a in body.answers],
+                           mode=body.mode, topic=body.topic)
+    if body.save_to_story_bank and result["entries"]:
+        def _append():
+            brand = _brand(user["id"])
+            if not brand:
+                return False
+            stamp = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+            add = "\n".join(f"- [{stamp}] ({e.get('section') or 'Notes'}) {e['title']}: {e['detail']}"
+                            for e in result["entries"])
+            bank = ((brand.get("story_bank") or "").rstrip() + "\n" + add).strip()[-8000:]
+            _db().table("linkedin_brand_profiles").update(
+                {"story_bank": bank, "updated_at": datetime.now(timezone.utc).isoformat()}
+            ).eq("user_id", user["id"]).execute()
+            return True
+        result["saved_to_story_bank"] = await asyncio.to_thread(_append)
+    return result
+
+
+@router.post("/ai/comment")
+async def ai_comment(body: CommentIn, user: dict = Depends(require_studio)) -> dict[str, Any]:
+    return await _run_ai(user, writer.draft_comment, body.post, author=body.author, goal=body.goal, mode=body.mode)
+
+
+@router.post("/ai/reply")
+async def ai_reply(body: ReplyIn, user: dict = Depends(require_studio)) -> dict[str, Any]:
+    return await _run_ai(user, writer.draft_reply, body.post, body.comment, commenter=body.commenter)
+
+
+@router.post("/ai/replies")
+async def ai_replies(body: RepliesIn, user: dict = Depends(require_studio)) -> dict[str, Any]:
+    """Whole-thread sweep: filter low-value comments, draft a reply to every one worth answering."""
+    return await _run_ai(user, writer.draft_replies, body.post, [c.model_dump() for c in body.comments])
+
+
+@router.post("/ai/advocacy")
+async def ai_advocacy(body: AdvocacyIn, user: dict = Depends(require_studio)) -> dict[str, Any]:
+    return await _run_ai(user, writer.advocacy_plan, body.team_size, body.goals, current_state=body.current_state)
+
+
 async def _render_and_store(user: dict[str, Any], title: str, slides: list[dict[str, Any]]) -> dict[str, Any]:
-    pdf = await asyncio.to_thread(carousel_pdf.render_carousel, slides, author=user.get("name") or "")
+    brand = await asyncio.to_thread(_brand, user["id"]) or {}
+    author = brand.get("full_name") or user.get("name") or ""
+    pdf = await asyncio.to_thread(carousel_pdf.render_carousel, slides, author=author,
+                                  handle=brand.get("company") or "")
     item = await asyncio.to_thread(studio.store_media, _db(), user["id"], pdf, "application/pdf", f"{title}.pdf")
     item["title"] = title[:200]
     return item
@@ -549,8 +814,11 @@ async def put_autopilot(body: AutopilotIn, user: dict = Depends(require_studio))
         await asyncio.to_thread(_own_account, uid, body.account_id)
         if not body.slots:
             raise HTTPException(status_code=400, detail="Add at least one posting day and time.")
-        if not body.pillars:
+        brand_topics = ((await asyncio.to_thread(_brand, uid)) or {}).get("topics") or []
+        if not body.pillars and not brand_topics:
             raise HTTPException(status_code=400, detail="Add at least one content topic (pillar).")
+        if not body.pillars:
+            body.pillars = list(brand_topics)
     existing = (await asyncio.to_thread(lambda: _db().table("linkedin_autopilot").select("consent_at")
                                         .eq("user_id", uid).limit(1).execute().data or [])) or [{}]
     consent_at = existing[0].get("consent_at")

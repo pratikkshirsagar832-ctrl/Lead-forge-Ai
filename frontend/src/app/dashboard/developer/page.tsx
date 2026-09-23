@@ -67,6 +67,13 @@ const inr = (n: number | null | undefined) =>
   `₹${Number(n ?? 0).toLocaleString('en-IN', { maximumFractionDigits: 2 })}`;
 
 const usd = (n: number | null | undefined) => `$${Number(n ?? 0).toLocaleString('en-US', { maximumFractionDigits: 3 })}`;
+// Wallet balances are stored in INR paise; display USD-primary using the
+// LinkedIn per-lead rate as the conversion basis (display only — billing
+// and Razorpay top-ups stay INR).
+const usdFromInr = (inrVal: number | null | undefined, liInr = 50, liUsd = 0.52) => {
+  const rate = liInr > 0 ? liUsd / liInr : 0.0104;
+  return usd(Number(inrVal ?? 0) * rate);
+};
 
 const TOPUP_PRESETS = [10000, 25000, 50000, 100000];
 
@@ -234,7 +241,7 @@ while (!["completed", "failed", "cancelled"].includes(s.status)) {
   s = await fetch(\`\${BASE}/searches/\${search.id}\`, { headers }).then((r) => r.json());
 }
 const { data: leads } = await fetch(\`\${BASE}/searches/\${search.id}/leads\`, { headers }).then((r) => r.json());
-console.log(s.delivered, "leads, charged ₹" + s.charged_inr, leads);`,
+console.log(s.delivered, "leads, charged $" + s.charged_usd, leads);`,
     python: `import os, time, requests
 
 BASE = "${origin}/v1"
@@ -251,7 +258,7 @@ while True:
     time.sleep(5)
 
 leads = requests.get(f"{BASE}/searches/{search['id']}/leads", headers=H).json()["data"]
-print(s["delivered"], "leads, charged", s["charged_inr"])`,
+print(s["delivered"], "leads, charged $", s["charged_usd"])`,
     webhook: `// Verify a webhook (Node / Express). Use the RAW request body.
 import crypto from "crypto";
 
@@ -312,15 +319,15 @@ app.post("/hooks/hyperclients", express.raw({ type: "application/json" }), (req,
             <div className="flex items-center justify-between">
               <span className="flex items-center gap-2 text-sm text-offwhite"><Linkedin className="w-4 h-4 text-sky-400" /> LinkedIn lead</span>
               <span className="text-right">
-                <span className="text-lg font-bold text-offwhite">{inr(wallet?.prices.linkedin_per_lead_inr ?? 50)}</span>
-                <span className="block text-[11px] text-ice/50">{usd(wallet?.prices.linkedin_per_lead_usd ?? 0.52)} per lead</span>
+                <span className="text-lg font-bold text-offwhite">{usd(wallet?.prices.linkedin_per_lead_usd ?? 0.52)} <span className="text-[11px] font-semibold text-ice/50">per lead</span></span>
+                <span className="block text-[11px] text-ice/50">{inr(wallet?.prices.linkedin_per_lead_inr ?? 50)} in wallet</span>
               </span>
             </div>
             <div className="flex items-center justify-between">
               <span className="flex items-center gap-2 text-sm text-offwhite"><MapPin className="w-4 h-4 text-emerald-400" /> Google Maps lead</span>
               <span className="text-right">
-                <span className="text-lg font-bold text-offwhite">{inr(wallet?.prices.google_maps_per_lead_inr ?? 5)}</span>
-                <span className="block text-[11px] text-ice/50">{usd(wallet?.prices.google_maps_per_lead_usd ?? 0.052)} per lead</span>
+                <span className="text-lg font-bold text-offwhite">{usd(wallet?.prices.google_maps_per_lead_usd ?? 0.052)} <span className="text-[11px] font-semibold text-ice/50">per lead</span></span>
+                <span className="block text-[11px] text-ice/50">{inr(wallet?.prices.google_maps_per_lead_inr ?? 5)} in wallet</span>
               </span>
             </div>
           </div>
@@ -344,7 +351,10 @@ app.post("/hooks/hyperclients", express.raw({ type: "application/json" }), (req,
             ].map((s) => (
               <div key={s.label} className="rounded-xl bg-navy/60 border border-ocean/25 p-3">
                 <p className="text-[11px] text-ice/45">{s.label}</p>
-                <p className={`mt-1 font-bold ${s.strong ? 'text-2xl text-emerald-300' : 'text-lg text-offwhite'}`}>{inr(s.value)}</p>
+                <p className={`mt-1 font-bold ${s.strong ? 'text-2xl text-emerald-300' : 'text-lg text-offwhite'}`}>
+                  {usdFromInr(s.value, wallet?.prices.linkedin_per_lead_inr ?? 50, wallet?.prices.linkedin_per_lead_usd ?? 0.52)}
+                </p>
+                <p className="text-[11px] text-ice/45">{inr(s.value)}</p>
               </div>
             ))}
           </div>
@@ -367,7 +377,8 @@ app.post("/hooks/hyperclients", express.raw({ type: "application/json" }), (req,
             </LoadingButton>
           </div>
           <p className="text-[11px] text-ice/40 mt-2">
-            Top-ups from {inr(limits.min)} to {inr(limits.max)} per payment, via Razorpay.
+            Top-ups from {inr(limits.min)} to {inr(limits.max)} per payment, via Razorpay (charged in INR
+            ≈ {usdFromInr(limits.min, wallet?.prices.linkedin_per_lead_inr ?? 50, wallet?.prices.linkedin_per_lead_usd ?? 0.52)}–{usdFromInr(limits.max, wallet?.prices.linkedin_per_lead_inr ?? 50, wallet?.prices.linkedin_per_lead_usd ?? 0.52)}).
           </p>
         </GlassCard>
       </div>
@@ -501,8 +512,8 @@ app.post("/hooks/hyperclients", express.raw({ type: "application/json" }), (req,
                     <td className="py-2 pr-3 text-right">{s.delivered}/{s.requested}</td>
                     <td className="py-2 text-right whitespace-nowrap">
                       {s.charged_inr == null
-                        ? <span className="text-ice/40">held {inr(s.max_charge_inr)} ({usd(s.max_charge_usd)})</span>
-                        : <>{inr(s.charged_inr)} <span className="text-ice/45 text-[11px]">({usd(s.charged_usd)})</span></>}
+                        ? <span className="text-ice/40">held {usd(s.max_charge_usd)} <span className="text-[11px]">({inr(s.max_charge_inr)})</span></span>
+                        : <>{usd(s.charged_usd)} <span className="text-ice/45 text-[11px]">({inr(s.charged_inr)})</span></>}
                     </td>
                   </tr>
                 ))}
@@ -518,7 +529,8 @@ app.post("/hooks/hyperclients", express.raw({ type: "application/json" }), (req,
                 <div key={i} className="flex justify-between py-1.5 text-ice/65">
                   <span className="capitalize">{l.type}{l.note ? ` — ${l.note}` : ''}</span>
                   <span className={l.amount_inr < 0 ? 'text-rose-300' : 'text-emerald-300'}>
-                    {l.amount_inr < 0 ? '−' : '+'}{inr(Math.abs(l.amount_inr))}
+                    {l.amount_inr < 0 ? '−' : '+'}{usdFromInr(Math.abs(l.amount_inr), wallet?.prices.linkedin_per_lead_inr ?? 50, wallet?.prices.linkedin_per_lead_usd ?? 0.52)}{' '}
+                    <span className="text-[11px] opacity-70">({inr(Math.abs(l.amount_inr))})</span>
                   </span>
                 </div>
               ))}

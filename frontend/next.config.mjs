@@ -21,6 +21,11 @@ const nextConfig = {
         source: '/api/:path((?!admin/|tools/).*)',
         destination: `${apiUrl}/api/:path`,
       },
+      // Public API v1 + its reference docs (/v1/docs, /v1/redoc, /v1/openapi.json).
+      {
+        source: '/v1/:path*',
+        destination: `${apiUrl}/v1/:path*`,
+      },
     ];
   },
 };

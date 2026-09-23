@@ -22,6 +22,7 @@ import {
   ArrowUpRight,
   Kanban,
   UsersRound,
+  Code2,
 } from 'lucide-react';
 import { motion } from 'framer-motion';
 import { ThemeToggle } from '@/components/ThemeToggle';
@@ -35,6 +36,7 @@ const navItems = [
   { name: 'History', href: '/dashboard/history', icon: History },
   { name: 'Export', href: '/dashboard/export', icon: Download },
   { name: 'Billing', href: '/dashboard/billing', icon: CreditCard },
+  { name: 'Developer API', href: '/dashboard/developer', icon: Code2 },
   { name: 'Settings', href: '/dashboard/settings', icon: Settings },
 ];
 

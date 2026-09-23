@@ -4,6 +4,10 @@
 
 ---
 
+> **Looking for the public developer API (API keys, pay-per-lead)?** See
+> [14-PUBLIC-API.md](14-PUBLIC-API.md) and the live reference at `/v1/docs`.
+> This file documents the internal dashboard API (Supabase JWT).
+
 ## Base URL
 
 ```

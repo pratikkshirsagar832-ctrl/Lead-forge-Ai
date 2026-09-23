@@ -532,6 +532,19 @@ async def razorpay_webhook(request: Request):
                     if not plan_id:
                         logger.warning("Ignoring payment without plan metadata: %s", order_id)
                         return {"status": "ok"}
+                    if plan_id == "api_wallet":
+                        # Public-API wallet top-up (not a plan): credit the
+                        # wallet - idempotent, so a browser verify that
+                        # already credited it makes this a no-op.
+                        from app.routers.developer import WalletPaymentError, credit_wallet_from_payment
+                        try:
+                            credit_wallet_from_payment(
+                                supabase, _get_razorpay_client(settings), order_id, payment_id)
+                        except WalletPaymentError as wallet_exc:
+                            if wallet_exc.status >= 500:
+                                raise  # Razorpay unreachable: non-2xx -> redelivered later
+                            logger.warning("Wallet top-up webhook ignored for %s: %s", order_id, wallet_exc)
+                        return {"status": "ok"}
                     # Amount + capture verification: never activate a plan unless
                     # the captured amount matches the configured price and the
                     # payment actually succeeded with Razorpay.

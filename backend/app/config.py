@@ -79,6 +79,15 @@ class Settings(BaseSettings):
     hyperagent_min_service_match: float = 50.0
     hyperagent_min_intent_strength: str = "recommendation"
 
+    # Public API v1 — pay per DELIVERED lead from a prepaid wallet (INR).
+    api_price_linkedin_inr: int = 50
+    api_price_maps_inr: int = 5
+    api_min_topup_inr: int = 10000
+    api_max_topup_inr: int = 100000
+    api_rate_create_per_min: int = 20
+    api_rate_read_per_min: int = 120
+    public_api_base_url: str = "https://hyperclients.online"
+
     razorpay_key_id: str = ""
     razorpay_key_secret: str = ""
     razorpay_solo_amount_inr: int = 0

@@ -564,6 +564,30 @@ async def record_monthly_generated(supabase, user_id: str, source: str, count: i
     return await asyncio.to_thread(record_monthly_generated_sync, supabase, user_id, source, count)
 
 
+def _settle_api_wallet(supabase, search_id: str, generated: int) -> bool:
+    """True when this is an API-billed search (then it is fully handled here:
+    wallet charged for delivered leads, unused hold released, webhook sent).
+    False for normal web-plan searches (or before migration v20)."""
+    try:
+        row = (
+            supabase.table("searches").select("billing,wallet_settled_at")
+            .eq("id", search_id).limit(1).execute()
+        )
+    except Exception:  # billing column missing (pre-v20) -> plan billing
+        return False
+    data = (row.data or [None])[0]
+    if not data or data.get("billing") != "api":
+        return False
+    if data.get("wallet_settled_at"):
+        return True  # idempotent: already charged + webhook already queued
+    from app.services import api_public, api_wallet
+
+    charged = api_wallet.settle(supabase, search_id, generated)
+    logger.info("[Settle:%s] API wallet: %d delivered, %d paise charged", search_id, generated, charged)
+    api_public.deliver_search_webhook_async(supabase, search_id)
+    return True
+
+
 def _settle_sync(supabase, search_id: str, user_id: str, generated: int) -> bool:
     """One synchronous settlement attempt. Returns True on success/complete,
     False when the search is not settleable (missing row / already settled).
@@ -571,6 +595,10 @@ def _settle_sync(supabase, search_id: str, user_id: str, generated: int) -> bool
     Must only be called from a worker thread or an asyncio.to_thread wrapper —
     it performs blocking Supabase calls.
     """
+    # Public-API searches are paid from the prepaid wallet (per delivered
+    # lead), never from the web plan's monthly quota.
+    if _settle_api_wallet(supabase, search_id, generated):
+        return True
     try:
         row = (
             supabase.table("searches")

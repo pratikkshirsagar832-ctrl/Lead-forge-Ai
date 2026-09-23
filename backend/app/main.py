@@ -2,13 +2,17 @@ import logging
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone, timedelta
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
 from app.config import get_settings
 from app.database import get_supabase_admin
 
-from app.routers import search, leads, dashboard, ai, auth, subscriptions, posts
+from app.routers import search, leads, dashboard, ai, auth, subscriptions, posts, developer, public_api
+from app.middleware.api_key_auth import ApiError
+from app.public_docs import register_public_docs
 
 logging.basicConfig(
     level=logging.INFO,
@@ -91,6 +95,25 @@ def create_app() -> FastAPI:
     app.include_router(ai.router)
     app.include_router(posts.router)
     posts.register_lead_posts_endpoint(app)
+    app.include_router(developer.router)
+    app.include_router(public_api.router)
+    register_public_docs(app)
+
+    # Public API (/v1): every error is {"error": {"code", "message", ...}}.
+    @app.exception_handler(ApiError)
+    async def _api_error(_request: Request, exc: ApiError):
+        return JSONResponse(status_code=exc.status, content=exc.body(), headers=exc.headers)
+
+    @app.exception_handler(RequestValidationError)
+    async def _validation_error(request: Request, exc: RequestValidationError):
+        if request.url.path.startswith("/v1"):
+            first = (exc.errors() or [{}])[0]
+            loc = [str(p) for p in first.get("loc", []) if p not in ("body", "query", "path")]
+            msg = str(first.get("msg", "Invalid request")).removeprefix("Value error, ")
+            return JSONResponse(status_code=400, content={"error": {
+                "code": "invalid_request", "message": msg, "param": ".".join(loc) or None}})
+        from fastapi.exception_handlers import request_validation_exception_handler
+        return await request_validation_exception_handler(request, exc)
 
     @app.get("/", tags=["Root"])
     async def root():

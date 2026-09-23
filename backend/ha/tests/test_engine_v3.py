@@ -313,3 +313,79 @@ def test_needs_full_text_is_optional_in_model_output():
     v = _verdict()
     assert v.needs_full_text is False
     assert LeadType.NEED_AGENCY.value == "need_agency"
+
+
+# --------------------------------------------------------------- liveness
+
+def test_deleted_post_is_replaced_and_never_delivered():
+    """Google still indexes deleted posts: a dead accepted post must be
+    swapped for the next live one, keeping exactly N."""
+    from liveness import PostCheck
+
+    posts = [_post(i, text=f"need a video editor {i}", hours_ago=i + 1) for i in range(4)]
+    dead_url = posts[0].post_url  # the NEWEST one is deleted
+    checked: list[str] = []
+
+    def checker(url):
+        checked.append(url)
+        return PostCheck("dead") if url == dead_url else PostCheck("alive")
+
+    store = MemoryStore()
+    sid = _mk_search(store, needed=3)
+    summary = run_search(sid, store=store, discovery=ListDiscovery([posts]),
+                         classifier=TextClassifier(lambda c: _verdict()),
+                         settings=_settings(freshness_ladder="", engine_prefetch=False),
+                         post_checker=checker)
+    urls = [l["post_url"] for l in store.list_leads(search_id=sid)]
+    assert summary.accepted == 3 and len(urls) == 3
+    assert dead_url not in urls
+    assert set(checked) == {p.post_url for p in posts}  # only accepted posts are checked
+
+
+def test_filled_post_is_dropped_and_live_full_text_is_saved():
+    from liveness import PostCheck
+
+    a = _post(1, text="Looking for a web designer for our site")
+    b = _post(2, text="Need a video editor for reels")
+    full_b = "Need a video editor for reels - 10 reels a month, paid per reel, starting this week."
+
+    def checker(url):
+        if url == a.post_url:
+            return PostCheck("alive", "UPDATE: CONTRACT NOW AWARDED. Looking for a web designer for our site")
+        return PostCheck("alive", full_b)
+
+    store = MemoryStore()
+    sid = _mk_search(store, needed=2)
+    summary = run_search(sid, store=store, discovery=ListDiscovery([[a, b]]),
+                         classifier=TextClassifier(lambda c: _verdict()),
+                         settings=_settings(freshness_ladder="", engine_prefetch=False, engine_max_iterations=1),
+                         post_checker=checker)
+    leads = store.list_leads(search_id=sid)
+    assert summary.accepted == 1
+    assert [l["post_url"] for l in leads] == [b.post_url]
+    assert leads[0]["post_text"] == full_b
+
+
+def test_unknown_liveness_keeps_the_lead():
+    from liveness import PostCheck
+
+    store = MemoryStore()
+    sid = _mk_search(store, needed=1)
+    summary = run_search(sid, store=store, discovery=ListDiscovery([[_post(1)]]),
+                         classifier=TextClassifier(lambda c: _verdict()),
+                         settings=_settings(freshness_ladder="", engine_prefetch=False),
+                         post_checker=lambda url: PostCheck("unknown"))
+    assert summary.accepted == 1
+
+
+def test_crashing_checker_keeps_the_lead():
+    def boom(url):
+        raise RuntimeError("linkedin down")
+
+    store = MemoryStore()
+    sid = _mk_search(store, needed=1)
+    summary = run_search(sid, store=store, discovery=ListDiscovery([[_post(1)]]),
+                         classifier=TextClassifier(lambda c: _verdict()),
+                         settings=_settings(freshness_ladder="", engine_prefetch=False),
+                         post_checker=boom)
+    assert summary.accepted == 1

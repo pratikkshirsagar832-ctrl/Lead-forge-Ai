@@ -156,6 +156,19 @@ _ACTIVITY_ID = re.compile(r"(?:activity|ugcpost|share)(?:[-:]|%3a)(\d{18,20})", 
 _LINKEDIN_EPOCH_FLOOR = datetime(2014, 1, 1, tzinfo=UTC)
 
 
+_ACTIVITY_KIND = re.compile(r"(activity|ugcpost|share)(?:[-:]|%3a)(\d{18,20})", re.IGNORECASE)
+_URN_KIND = {"activity": "activity", "ugcpost": "ugcPost", "share": "share"}
+
+
+def activity_urn(url: str | None) -> tuple[str, str] | None:
+    """(urn kind, id) from a LinkedIn post URL - e.g. ("activity", "7507...")
+    - or None when the URL carries no post id."""
+    m = _ACTIVITY_KIND.search(url or "")
+    if not m:
+        return None
+    return _URN_KIND[m.group(1).lower()], m.group(2)
+
+
 def posted_at_from_url(url: str | None, now: datetime | None = None) -> datetime | None:
     """Exact publish time decoded from a LinkedIn post URL's activity id.
 

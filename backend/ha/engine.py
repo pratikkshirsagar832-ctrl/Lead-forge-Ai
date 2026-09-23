@@ -54,12 +54,15 @@ from query_builder import (
     seed_phrases,
     service_phrases,
 )
+from liveness import is_filled
 from scoring import ScoreConfig, compute_score
 
 log = logging.getLogger(__name__)
 
 ProgressFn = Callable[[str, int, int, int, str], None]
 FullTextFn = Callable[[str], "str | None"]
+# url -> object with .status ("alive" | "dead" | "unknown") and .text (liveness.PostCheck)
+PostCheckFn = Callable[[str], Any]
 
 CRAWL_LAG_NOTE = (
     "Google's coverage of LinkedIn posts is partial and typically lags 1-3 days, "
@@ -130,6 +133,7 @@ def run_search(
     content_filter: Callable[[str], bool] | None = None,
     query_expander: Callable[[str], list[str]] | None = None,
     full_text_fetcher: FullTextFn | None = None,
+    post_checker: PostCheckFn | None = None,
 ) -> EngineSummary:
     """Synchronous orchestrator. Runs inside a background task/thread.
 
@@ -154,7 +158,7 @@ def run_search(
             search_id, store=store, discovery=discovery, classifier=classifier,
             settings=settings, progress=progress or _noop_progress, should_stop=should_stop,
             content_filter=content_filter, query_expander=query_expander,
-            full_text_fetcher=full_text_fetcher, side_pool=side_pool,
+            full_text_fetcher=full_text_fetcher, post_checker=post_checker, side_pool=side_pool,
         )
     finally:
         side_pool.shutdown(wait=False, cancel_futures=True)
@@ -172,6 +176,7 @@ def _run_search(
     content_filter: Callable[[str], bool] | None,
     query_expander: Callable[[str], list[str]] | None,
     full_text_fetcher: FullTextFn | None,
+    post_checker: PostCheckFn | None,
     side_pool: ThreadPoolExecutor,
 ) -> EngineSummary:
     row = store.get_search(search_id)
@@ -267,6 +272,9 @@ def _run_search(
     stale_dropped = 0  # STRICT freshness: dated older than the window -> no lead
     enriched = 0  # posts re-classified on their full text
     enrich_flipped = 0  # ... of which the full text turned into an accepted lead
+    dead_dropped = 0  # accepted, but the post was deleted/removed on LinkedIn
+    filled_dropped = 0  # accepted, but the post says the need is already filled
+    liveness_unknown = 0  # liveness could not be confirmed (throttle) - kept
     reject_reasons: dict[str, int] = {}
     errors: list[str] = []
     accepted: list[EngineResult] = []  # NEW leads only (not already in the DB)
@@ -708,12 +716,54 @@ def _run_search(
                         if outcomes[i][0] == "accept" and before != "accept":
                             enrich_flipped += 1
 
+        # LIVENESS: Google keeps deleted LinkedIn posts in its index for days,
+        # so every would-be lead is checked BEFORE it counts toward N - a dead
+        # post is replaced by the exact-N loop instead of reaching the user as
+        # "Post not found". Already-filled asks ("CONTRACT NOW AWARDED") are
+        # dropped the same way. Uncertain checks (throttle) keep the lead.
+        accept_idx = [i for i, (kind, _q) in enumerate(outcomes) if kind == "accept"]
+        for i in accept_idx:
+            if is_filled(candidates[i].text):
+                outcomes[i] = ("filled", None)
+        accept_idx = [i for i in accept_idx if outcomes[i][0] == "accept"]
+        if post_checker is not None and accept_idx:
+            workers = max(1, min(settings.liveness_concurrency, len(accept_idx)))
+            with ThreadPoolExecutor(max_workers=workers) as ex:
+                checks = list(ex.map(lambda i: _safe_check(post_checker, candidates[i].post_url), accept_idx))
+            for i, chk in zip(accept_idx, checks):
+                status = getattr(chk, "status", "unknown")
+                text = getattr(chk, "text", None)
+                post = candidates[i]
+                if status == "dead":
+                    outcomes[i] = ("dead", None)
+                elif status == "alive":
+                    if is_filled(text):
+                        outcomes[i] = ("filled", None)
+                    elif text and len(text) > len(post.text or "") + 20:
+                        # The live full post replaces the snippet on the saved
+                        # lead - same save-time direction gate applies.
+                        if content_filter is not None and not _gate_ok(content_filter, text):
+                            outcomes[i] = ("gate", None)
+                        else:
+                            post.text = text
+                            post.text_source = "full_post"
+                else:
+                    liveness_unknown += 1
+
         gained = 0
         for post, classification, (kind, qualified) in zip(candidates, classifications, outcomes):
             scanned += 1
             if kind == "none":
                 classify_failed += 1  # fail-closed: dropped
                 _record_reject(post, None, reason="classifier returned no verdict / parse failed")
+            elif kind == "dead":
+                dead_dropped += 1
+                _record_reject(post, classification, verdict_type=classification.lead_type,
+                               reason="post deleted/removed on LinkedIn")
+            elif kind == "filled":
+                filled_dropped += 1
+                _record_reject(post, classification, verdict_type=classification.lead_type,
+                               reason="need already filled (post says hired/awarded/closed)")
             elif kind == "gate":
                 dir_dropped += 1
                 _record_reject(post, classification, verdict_type=getattr(classification, "lead_type", None),
@@ -761,7 +811,7 @@ def _run_search(
                  f"accepted {len(accepted)}/{leads_needed} {lead_type} leads (scanned {scanned}, pref-dropped {pref_dropped}, "
                  f"content-dropped {dir_dropped}, classify-dropped {classify_failed}, type-mismatch {type_mismatch}, "
                  f"already-owned {dup_existing}, undated {undated_dropped}, stale {stale_dropped}, "
-                 f"full-text {enriched})")
+                 f"full-text {enriched}, deleted {dead_dropped}, filled {filled_dropped})")
         if len(accepted) >= leads_needed:
             stop_reason = "target_reached"
             break
@@ -887,14 +937,31 @@ def _run_search(
     newest = top[0].post.posted_at.isoformat() if top and top[0].post.posted_at else "-"
     log.info("Search %s done: status=%s found=%d accepted=%d scanned=%d (iterations=%d) "
              "pref_dropped=%d content_dropped=%d classify_failed=%d type_mismatch=%d dup_owned=%d "
-             "undated_dropped=%d stale_dropped=%d full_text=%d full_text_flipped=%d newest=%s "
+             "undated_dropped=%d stale_dropped=%d full_text=%d full_text_flipped=%d "
+             "dead_dropped=%d filled_dropped=%d liveness_unknown=%d newest=%s "
              "serper_requests=%d deepseek_calls=%d stop_reason=%s",
              search_id, status, raw_found, delivered, scanned, iterations,
              pref_dropped, dir_dropped, classify_failed, type_mismatch, dup_existing,
-             undated_dropped, stale_dropped, enriched, enrich_flipped, newest,
+             undated_dropped, stale_dropped, enriched, enrich_flipped,
+             dead_dropped, filled_dropped, liveness_unknown, newest,
              _s, _d, stop_reason)
     progress(status, raw_found, delivered, scanned, final_detail or "search finished")
     return _summary(search_id, status, raw_found, delivered, scanned, iterations, final_detail)
+
+
+def _safe_check(checker: PostCheckFn, url: str):
+    try:
+        return checker(url)
+    except Exception:  # noqa: BLE001 - a broken checker never costs a lead
+        log.debug("post_checker raised for %s (kept)", url, exc_info=True)
+        return None
+
+
+def _gate_ok(content_filter: Callable[[str], bool], text: str) -> bool:
+    try:
+        return bool(content_filter(text))
+    except Exception:  # noqa: BLE001
+        return True
 
 
 def _safe_fetch(fetcher: FullTextFn | None, url: str) -> str | None:

@@ -168,6 +168,7 @@ def _ha_settings() -> HaSettings:
     os.environ.setdefault("MAX_ENRICH_PER_SEARCH", "20")
     os.environ.setdefault("ENGINE_PREFETCH", "1")
     os.environ.setdefault("CLASSIFIER_CONCURRENCY", "16")
+    os.environ.setdefault("VERIFY_POST_ALIVE", "1")
     # EXACT-N: the user gets exactly the leads they asked for (never more,
     # and never fewer while genuine leads exist). Budgets scale with N -
     # requests up to ~13 leads keep the 80/150 base above; bigger requests
@@ -491,6 +492,15 @@ def _run_search_worker_body(search_id: str, user_id: str, settings: HaSettings, 
                 full_text_fetcher = fetch_full_text
             except Exception:  # noqa: BLE001 - enrichment is optional
                 log.debug("Full-text enrichment unavailable (snippets only)", exc_info=True)
+        # Liveness (env kill switch): never deliver a post that was deleted on
+        # LinkedIn but is still in Google's index ("Post not found").
+        post_checker = None
+        if settings.verify_post_alive:
+            try:
+                from liveness import check_post
+                post_checker = check_post
+            except Exception:  # noqa: BLE001 - optional, never blocks a search
+                log.debug("Liveness check unavailable", exc_info=True)
         summary = ha_run_search(
             search_id,
             store=store,
@@ -502,6 +512,7 @@ def _run_search_worker_body(search_id: str, user_id: str, settings: HaSettings, 
             content_filter=content_filter,
             query_expander=query_expander,
             full_text_fetcher=full_text_fetcher,
+            post_checker=post_checker,
         )
         _progress_push(search_id, summary.status, summary.found, summary.accepted, summary.scanned,
                        summary.detail or summary.status)

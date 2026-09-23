@@ -126,6 +126,12 @@ class Settings:
         default_factory=lambda: _str("FULLTEXT_ENRICH", "1") in {"1", "true", "yes"})
     max_enrich_per_search: int = field(default_factory=lambda: _int("MAX_ENRICH_PER_SEARCH", 20))
     enrich_concurrency: int = field(default_factory=lambda: _int("ENRICH_CONCURRENCY", 4))
+    # Liveness: every would-be lead is checked on LinkedIn's public embed
+    # endpoint before it counts - deleted posts (still in Google's index) and
+    # already-filled asks are replaced instead of delivered.
+    verify_post_alive: bool = field(
+        default_factory=lambda: _str("VERIFY_POST_ALIVE", "1") in {"1", "true", "yes"})
+    liveness_concurrency: int = field(default_factory=lambda: _int("LIVENESS_CONCURRENCY", 6))
     # Pipeline the next discovery round while the current one is classified.
     engine_prefetch: bool = field(
         default_factory=lambda: _str("ENGINE_PREFETCH", "1") in {"1", "true", "yes"})

@@ -14,3 +14,6 @@ scrapling[all]>=0.4.2
 # LinkedIn Studio: OAuth token encryption + AI carousel PDFs
 cryptography>=43.0.0
 reportlab>=4.2.0
+# Scheduler/autopilot use zoneinfo (Asia/Kolkata etc.); OS tzdata is not
+# guaranteed on slim/Windows hosts, so ship the database with the app.
+tzdata>=2024.1

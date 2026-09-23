@@ -91,6 +91,21 @@ class Settings(BaseSettings):
     api_rate_read_per_min: int = 120
     public_api_base_url: str = "https://hyperclients.online"
 
+    # LinkedIn Studio — official LinkedIn API only. Two LinkedIn apps:
+    #   member app: "Sign In with LinkedIn (OpenID Connect)" + "Share on LinkedIn"
+    #   pages app:  "Community Management API" (LinkedIn review; separate app)
+    linkedin_client_id: str = ""
+    linkedin_client_secret: str = ""
+    linkedin_pages_client_id: str = ""
+    linkedin_pages_client_secret: str = ""
+    linkedin_pages_enabled: bool = False
+    linkedin_redirect_uri: str = "https://hyperclients.online/api/linkedin/callback"
+    linkedin_api_version: str = "202608"
+    linkedin_token_key: str = ""          # Fernet key (base64, 32 bytes) for tokens at rest
+    linkedin_daily_post_cap: int = 5      # per connected account, safety cap
+    linkedin_scheduler_enabled: bool = True
+    linkedin_scheduler_interval_s: int = 30
+
     razorpay_key_id: str = ""
     razorpay_key_secret: str = ""
     razorpay_solo_amount_inr: int = 0

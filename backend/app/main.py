@@ -10,7 +10,7 @@ from fastapi.responses import JSONResponse
 from app.config import get_settings
 from app.database import get_supabase_admin
 
-from app.routers import search, leads, dashboard, ai, auth, subscriptions, posts, developer, public_api
+from app.routers import search, leads, dashboard, ai, auth, subscriptions, posts, developer, public_api, linkedin_studio
 from app.middleware.api_key_auth import ApiError
 from app.public_docs import register_public_docs
 
@@ -60,10 +60,35 @@ async def lifespan(app: FastAPI):
     settings = get_settings()
     logger.info(f"Environment: {settings.environment}")
     logger.info(f"Frontend URL: {settings.frontend_url}")
+
+    # LinkedIn Studio scheduler (LinkedIn has no native scheduling). Posts a
+    # restart interrupted mid-publish go back to the queue; the claim RPC
+    # guarantees a post is never published twice.
+    import asyncio
+
+    li_stop = asyncio.Event()
+    li_task = None
+    if settings.linkedin_scheduler_enabled:
+        try:
+            get_supabase_admin().table("linkedin_posts").update({"status": "scheduled"}) \
+                .eq("status", "publishing").lt(
+                    "updated_at", (datetime.now(timezone.utc) - timedelta(minutes=10)).isoformat()
+                ).execute()
+        except Exception as e:  # table missing before migration v21
+            logger.info(f"LinkedIn publishing recovery skipped: {e}")
+        from app.services.linkedin_scheduler import scheduler_loop
+
+        li_task = asyncio.create_task(scheduler_loop(li_stop))
     logger.info(f"Supabase URL: {settings.supabase_url}")
 
     yield
 
+    li_stop.set()
+    if li_task is not None:
+        try:
+            await asyncio.wait_for(li_task, timeout=10)
+        except Exception:  # noqa: BLE001 - shutdown must not hang
+            li_task.cancel()
     logger.info("Hyperclients Backend shutting down...")
 
 
@@ -96,6 +121,7 @@ def create_app() -> FastAPI:
     app.include_router(posts.router)
     posts.register_lead_posts_endpoint(app)
     app.include_router(developer.router)
+    app.include_router(linkedin_studio.router)
     app.include_router(public_api.router)
     register_public_docs(app)
 

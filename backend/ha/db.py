@@ -254,20 +254,24 @@ class SupabaseStore(Store):
         self._user_col_cache: dict[str, bool] = {}
 
     def _has_user_column(self, table: str) -> bool:
+        return self._has_column(table, "user_id")
+
+    def _has_column(self, table: str, column: str) -> bool:
         # Only cache positive probes. A negative probe means "migration not
         # applied YET" — caching it forever would pin the process to the
-        # degraded path even after v8/v12 is applied. Retrying negatives is
-        # one cheap indexed select per insert path.
-        if self._user_col_cache.get(table) is True:
+        # degraded path even after the migration is applied. Retrying
+        # negatives is one cheap indexed select per insert path.
+        key = table if column == "user_id" else f"{table}.{column}"
+        if self._user_col_cache.get(key) is True:
             return True
         try:
-            self._client.table(table).select("user_id").limit(1).execute()
+            self._client.table(table).select(column).limit(1).execute()
             ok = True
-        except Exception as exc:  # noqa: BLE001 - pre-v8 schema
-            log.info("Supabase %s.user_id missing (migration v8 not applied?): %s", table, exc)
+        except Exception as exc:  # noqa: BLE001 - pre-migration schema
+            log.info("Supabase %s.%s missing (migration not applied?): %s", table, column, exc)
             ok = False
         if ok:
-            self._user_col_cache[table] = True
+            self._user_col_cache[key] = True
         return ok
 
     # -- JSON-safe outbound values -----------------------------------------
@@ -329,10 +333,16 @@ class SupabaseStore(Store):
     # leads -----------------------------------------------------------------
     def insert_leads_many(self, rows: Iterable[dict[str, Any]],
                           user_id: str | None = None) -> int:
+        rows = list(rows)
         stamp = bool(user_id) and self._has_user_column("ha_leads")
+        # Exact publish time (migration v18); dropped on older schemas so a
+        # missing column never costs a lead.
+        keep_posted_at = any(r.get("posted_at") for r in rows) and self._has_column("ha_leads", "posted_at")
         payload = []
         for r in rows:
             item = self._jsonable(dict(r))
+            if not keep_posted_at:
+                item.pop("posted_at", None)
             # RLS on ha_leads scopes rows by user_id (migration v8). Stamp the
             # owner on every row; drop it again on a pre-v8 schema.
             if stamp:
@@ -342,13 +352,31 @@ class SupabaseStore(Store):
             payload.append(item)
         if not payload:
             return 0
+        # Migration v18 makes post_url unique PER USER (user_id, post_url), so
+        # two accounts can each own the same public post. Before v18 the
+        # constraint is global; Postgres then rejects the per-user conflict
+        # target ("no unique or exclusion constraint matching") and we fall
+        # back to the old target (remembered for the process lifetime).
+        targets = ["post_url"]
+        if stamp and self._user_col_cache.get("ha_leads.per_user_unique") is not False:
+            targets.insert(0, "user_id,post_url")
+        last_exc: Exception | None = None
+        for target in targets:
+            try:
+                resp = (
+                    self._client.table("ha_leads")
+                    .upsert(payload, on_conflict=target, ignore_duplicates=True)
+                    .execute()
+                )
+                return len(resp.data or [])
+            except Exception as exc:  # noqa: BLE001
+                last_exc = exc
+                if target != "post_url" and "constraint" in str(exc).lower():
+                    self._user_col_cache["ha_leads.per_user_unique"] = False
+                    continue
+                break
         try:
-            resp = (
-                self._client.table("ha_leads")
-                .upsert(payload, on_conflict="post_url", ignore_duplicates=True)
-                .execute()
-            )
-            return len(resp.data or [])
+            raise last_exc  # type: ignore[misc]
         except Exception as exc:  # noqa: BLE001
             # Older supabase-py may not support ignore_duplicates; fall back to
             # per-row inserts and skip conflicts (post_url unique).

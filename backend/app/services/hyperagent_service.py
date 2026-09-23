@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import sys
 import threading
 from datetime import UTC, datetime
@@ -143,9 +144,9 @@ def _ha_settings() -> HaSettings:
     # never burn unbounded Serper calls on a niche with no leads. Parallel
     # discovery + 4-page paging return candidates much faster per round, so
     # iterations stay generous while the deadline bounds total wall time.
-    os.environ["ENGINE_MAX_ITERATIONS"] = "20"
+    os.environ["ENGINE_MAX_ITERATIONS"] = "40"
     os.environ["ENGINE_DEADLINE_SECONDS"] = "540"
-    os.environ["ENGINE_EARLY_STOP_EMPTY_ROUNDS"] = "5"
+    os.environ["ENGINE_EARLY_STOP_EMPTY_ROUNDS"] = "8"
     # Independent per-search spend ceilings (safety net beyond iterations).
     # 4 pages/query burns more requests per round, so the Serper ceiling rises
     # to keep the same number of full discovery rounds.
@@ -156,6 +157,30 @@ def _ha_settings() -> HaSettings:
     # a hedged is_qualified=false kills the candidate. Strict > volume.
     os.environ["REQUIRE_MODEL_QUALIFIED"] = "1"
     os.environ["STRICT_COUNTRY"] = "0"
+    # Engine v3 (setdefault = env-overridable kill switches for A/B runs):
+    # quoted OR-packed queries, newest-first freshness ladder, snippet-first
+    # full-text enrichment, discovery prefetch, and wider DeepSeek fan-out
+    # (DeepSeek has no hard concurrency limit; the per-search ceiling above
+    # still bounds total spend).
+    os.environ.setdefault("QUERY_STYLE", "packed")
+    os.environ.setdefault("FRESHNESS_LADDER", "3d")
+    os.environ.setdefault("FULLTEXT_ENRICH", "1")
+    os.environ.setdefault("MAX_ENRICH_PER_SEARCH", "20")
+    os.environ.setdefault("ENGINE_PREFETCH", "1")
+    os.environ.setdefault("CLASSIFIER_CONCURRENCY", "16")
+    # EXACT-N: the user gets exactly the leads they asked for (never more,
+    # and never fewer while genuine leads exist). Budgets scale with N -
+    # requests up to ~13 leads keep the 80/150 base above; bigger requests
+    # get 6 Serper + 12 DeepSeek calls (and 12s) per lead, hard-capped. The
+    # iteration cap is generous because the ceilings, deadline and empty-round
+    # stop already bound the spend.
+    os.environ.setdefault("SERPER_REQUESTS_PER_LEAD", "6")
+    os.environ.setdefault("DEEPSEEK_CALLS_PER_LEAD", "12")
+    os.environ.setdefault("MAX_SERPER_REQUESTS_HARD", "400")
+    os.environ.setdefault("MAX_DEEPSEEK_CALLS_HARD", "1000")
+    os.environ.setdefault("ENGINE_DEADLINE_SECONDS_PER_LEAD", "12")
+    os.environ.setdefault("ENGINE_DEADLINE_HARD_SECONDS", "1200")
+    os.environ.setdefault("MAX_QUERY_REFILLS", "6")
     return HaSettings()
 
 
@@ -185,6 +210,7 @@ def build_discovery(settings: HaSettings, country_code: str = "") -> DiscoveryCl
             gl=gl,
             hl=settings.serper_hl,
             timeout_seconds=settings.serper_timeout_seconds,
+            date_mode=settings.serper_date_mode,
         )
     raise RuntimeError("SERPER_API_KEY is not set — cannot run LinkedIn search")
 
@@ -326,6 +352,9 @@ class _UserScopedStore:
             return self._inner.record_rejections(rows)
 
 
+_ORG_RE = re.compile(r"\b(?:firms?|consultancy|consultancies|studio|chambers|llp|outside team)\b")
+
+
 def _content_matches_requested_type(text: str, lead_type: str) -> bool:
     """Pure text gate: is this post's content compatible with the REQUESTED
     buyer direction?
@@ -354,7 +383,10 @@ def _content_matches_requested_type(text: str, lead_type: str) -> bool:
         return True
     emp_hiring = any(m in low for m in _ForceTypeStore._EMPLOYEE_HIRING)
     freelance = any(m in low for m in _ForceTypeStore._FREELANCER_WORDS)
-    agency = any(m in low for m in _ForceTypeStore._AGENCY_WORDS)
+    # Provider ORGANISATIONS count as the agency direction too - professional
+    # services are bought as firms ("need a law firm", "any good CA firm?").
+    agency = (any(m in low for m in _ForceTypeStore._AGENCY_WORDS)
+              or bool(_ORG_RE.search(low)))
     agency_sourcing = any(m in low for m in _ForceTypeStore._AGENCY_SOURCING)
     seek = any(m in low for m in _ForceTypeStore._AGENCY_SEEK_VERBS)
     agency_seeking = agency and seek and not agency_sourcing
@@ -451,6 +483,14 @@ def _run_search_worker_body(search_id: str, user_id: str, settings: HaSettings, 
             # ~70% of LLM-classified candidates that were obvious non-matches
             # never burn a DeepSeek call.
             content_filter = lambda text: _content_matches_requested_type(text, force_lead_type)  # noqa: E731
+        # Snippet-first full-text enrichment (fail-closed, env kill switch).
+        full_text_fetcher = None
+        if settings.fulltext_enrich:
+            try:
+                from enrich import fetch_full_text
+                full_text_fetcher = fetch_full_text
+            except Exception:  # noqa: BLE001 - enrichment is optional
+                log.debug("Full-text enrichment unavailable (snippets only)", exc_info=True)
         summary = ha_run_search(
             search_id,
             store=store,
@@ -461,6 +501,7 @@ def _run_search_worker_body(search_id: str, user_id: str, settings: HaSettings, 
             should_stop=should_stop,
             content_filter=content_filter,
             query_expander=query_expander,
+            full_text_fetcher=full_text_fetcher,
         )
         _progress_push(search_id, summary.status, summary.found, summary.accepted, summary.scanned,
                        summary.detail or summary.status)

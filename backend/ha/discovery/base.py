@@ -42,6 +42,10 @@ class RawPost:
     # drops an unknown-count post (the ceiling only rejects posts KNOWN to be
     # heavily contested).
     num_comments: int | None = None
+    # "google_snippet" (SERP text, often cut off) or "full_post" once the
+    # public post page was fetched (enrich.py). Tells the classifier whether
+    # missing context may simply be truncated.
+    text_source: str = "google_snippet"
 
 
 def canonical_post_url(url: str) -> str:
@@ -141,6 +145,35 @@ def field_value(item: dict[str, Any], candidates: list[str]) -> Any:
             if nk in author and author[nk] not in (None, ""):
                 return author[nk]
     return None
+
+
+# LinkedIn activity / ugcPost / share ids are snowflake-style: the top 41 bits
+# are the publish time in epoch milliseconds (id >> 22). Every post permalink
+# embeds one ("..._slug-activity-7372...-AbCd", "urn:li:activity:7372..."), so
+# the URL alone yields the EXACT post time - far better than Google's `date`
+# field, which is often missing or rounded to a day.
+_ACTIVITY_ID = re.compile(r"(?:activity|ugcpost|share)(?:[-:]|%3a)(\d{18,20})", re.IGNORECASE)
+_LINKEDIN_EPOCH_FLOOR = datetime(2014, 1, 1, tzinfo=UTC)
+
+
+def posted_at_from_url(url: str | None, now: datetime | None = None) -> datetime | None:
+    """Exact publish time decoded from a LinkedIn post URL's activity id.
+
+    Returns None when the URL carries no id or the decoded time is implausible
+    (before 2014 or more than a day in the future) - callers then fall back to
+    the provider's date."""
+    m = _ACTIVITY_ID.search(url or "")
+    if not m:
+        return None
+    try:
+        ts_ms = int(m.group(1)) >> 22
+        dt = datetime.fromtimestamp(ts_ms / 1000, tz=UTC)
+    except (ValueError, OSError, OverflowError):
+        return None
+    now = now or datetime.now(UTC)
+    if dt < _LINKEDIN_EPOCH_FLOOR or dt > now + timedelta(days=1):
+        return None
+    return dt
 
 
 _ISO_START = re.compile(r"^\d{4}-\d{2}-\d{2}")

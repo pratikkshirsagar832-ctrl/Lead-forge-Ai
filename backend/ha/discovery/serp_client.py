@@ -2,7 +2,7 @@
 
 Discovery = Google search over LinkedIn posts, not LinkedIn-native scraping:
 
-    <query> site:linkedin.com/posts after:YYYY-MM-DD
+    <query> site:linkedin.com/posts   (+ tbs=qdr:* time filter param)
 
 Design notes (Â§0 - these are provider trade-offs, not bugs):
 * Coverage is partial/inconsistent: Google does not fully or promptly crawl
@@ -11,7 +11,7 @@ Design notes (Â§0 - these are provider trade-offs, not bugs):
   behavior - it is never translated into a fake failure upstream.
 * The 24h window structurally underperforms (Google's crawl lag on LinkedIn
   is typically 1-3 days); the UI says so under that option.
-* The date filter rides in the query string itself (after:YYYY-MM-DD),
+* The date filter is Google's native `tbs` (qdr:d / qdr:dN / qdr:w) param,
   recomputed fresh from `since` on every call.
 * Every result still goes through DeepSeek classification upstream - SERP
   relevance is a starting filter, not a verdict.
@@ -35,6 +35,7 @@ from .base import (
     SearchBatchResult,
     canonical_post_url,
     parse_posted_at,
+    posted_at_from_url,
 )
 
 log = logging.getLogger(__name__)
@@ -105,6 +106,7 @@ class SerperDiscoveryClient(DiscoveryClient):
         gl: str = "",
         hl: str = "en",
         timeout_seconds: float = 30.0,
+        date_mode: str = "tbs",
     ) -> None:
         """`results_per_query` maps to Serper's `num`. Serper's FREE tier caps
         `num` at 10 and rejects larger values with HTTP 400 - the default is
@@ -127,6 +129,11 @@ class SerperDiscoveryClient(DiscoveryClient):
         self.gl = (gl or "").strip().lower()
         self.hl = (hl or "").strip()
         self.timeout_seconds = timeout_seconds
+        # "tbs" = Google's native time filter (qdr:*) as a request param - more
+        # reliable than the in-query `after:` operator and keeps the query
+        # string short (long strings make Google drop `site:`). "after" keeps
+        # the legacy operator.
+        self.date_mode = "after" if (date_mode or "").strip().lower() == "after" else "tbs"
         self._headers = {"X-API-KEY": api_key, "Content-Type": "application/json"}
         self.calls = 0
         self._calls_lock = threading.Lock()
@@ -140,12 +147,36 @@ class SerperDiscoveryClient(DiscoveryClient):
         parts = [query]
         if self.site_restriction:
             parts.append(f"site:{self.site_restriction}")
-        parts.append(f"after:{since.date().isoformat()}")  # fresh per request (Â§3)
+        if self.date_mode == "after":
+            parts.append(f"after:{since.date().isoformat()}")  # fresh per request (§3)
         return " ".join(parts)
 
+    @staticmethod
+    def tbs_for(since: datetime, now: datetime | None = None) -> str:
+        """Google `tbs` time filter covering everything posted at/after `since`.
+
+        Recomputed from *now* on every call. Rounds UP (never narrower than the
+        requested window); the engine's per-post date gate enforces the exact
+        boundary."""
+        now = now or datetime.now(UTC)
+        if since.tzinfo is None:
+            since = since.replace(tzinfo=UTC)
+        hours = max(1.0, (now - since).total_seconds() / 3600.0)
+        if hours <= 24.5:
+            return "qdr:d"
+        if hours <= 7 * 24 + 0.5:
+            days = int(-(-hours // 24))
+            return "qdr:w" if days >= 7 else f"qdr:d{days}"
+        if hours <= 31 * 24:
+            return "qdr:m"
+        return "qdr:y"
+
     # ------------------------------------------------------------------ http
-    def _search(self, full_query: str, num: int, page: int = 1) -> list[dict[str, Any]]:
+    def _search(self, full_query: str, num: int, page: int = 1,
+                tbs: str | None = None) -> list[dict[str, Any]]:
         payload: dict[str, Any] = {"q": full_query, "num": max(1, min(num, 100))}
+        if tbs:
+            payload["tbs"] = tbs
         if page > 1:
             payload["page"] = page
         if self.gl:
@@ -227,12 +258,16 @@ class SerperDiscoveryClient(DiscoveryClient):
         body = re.sub(r"\s*[-|]\s*LinkedIn\s*$", "", (body or "").strip())
         body = re.sub(r"\s*\.{2,}\s*$", "", body).strip()
 
+        # Exact publish time from the permalink's activity id wins; Google's
+        # `date` (often missing / day-rounded) is only the fallback.
+        posted_at = posted_at_from_url(link) or parse_posted_at(item.get("date"))
+
         return RawPost(
             post_url=link,
             text=body,
             author_name=author,
             author_profile_url=profile_url,
-            posted_at=parse_posted_at(item.get("date")),
+            posted_at=posted_at,
             query_used=query,
             provider=self.name,
         )
@@ -243,8 +278,9 @@ class SerperDiscoveryClient(DiscoveryClient):
         with self._calls_lock:
             self.calls += 1
         full = self._full_query(query, since)
-        organic = self._search(full, per_q, page=page)
-        log.info("Serper %r page %d -> %d organic results", full[:160], page, len(organic))
+        tbs = self.tbs_for(since) if self.date_mode == "tbs" else None
+        organic = self._search(full, per_q, page=page, tbs=tbs)
+        log.info("Serper %r tbs=%s page %d -> %d organic results", full[:200], tbs, page, len(organic))
         return [p for p in (self._map_organic(i, query) for i in organic) if p is not None]
 
     def search_posts(
@@ -312,6 +348,17 @@ class SerperDiscoveryClient(DiscoveryClient):
                     log.warning("%s", err)
                     continue
                 per_query_posts[query].extend(posts)
+
+        # Every page-1 request FAILED (out of credits, bad key, rate limit,
+        # network): that is a provider outage, not "no posts exist". Raise so
+        # the engine fails the search loudly instead of reporting a fake
+        # zero-result shortage (and burning the rest of the round budget).
+        if errors and all(err is not None for _q, _p, err in phase1):
+            first = errors[0]
+            low = first.lower()
+            if "not enough credits" in low or "credits" in low:
+                raise DiscoveryError("Search provider is out of credits (Serper) - top up the Serper account")
+            raise DiscoveryError(f"All search requests failed this round: {first}")
 
         posts: list[RawPost] = []
         for query in queries:

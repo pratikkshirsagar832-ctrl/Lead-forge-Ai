@@ -349,7 +349,8 @@ def _map_ha_lead(row: dict) -> dict:
         "post_text": row.get("post_text") or None,
         "profile_picture_url": None,
         "connections_count": None,
-        "posted_at": row.get("post_date") or None,
+        # Exact publish time (v18) when known, else the day-level post_date.
+        "posted_at": row.get("posted_at") or row.get("post_date") or None,
         "post_type": post_type or None,
         # 0-1 confidence saved by POST /api/ai/pitch (None until generated).
         "ai_confidence_score": row.get("ai_confidence_score"),

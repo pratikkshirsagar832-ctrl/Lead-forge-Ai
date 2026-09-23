@@ -1,7 +1,15 @@
 import pytest
 
 from models import LeadType
-from query_builder import NEGATIVE_QUERY_PHRASES, build_plan, next_queries, split_query
+from query_builder import (
+    NEGATIVE_QUERY_PHRASES,
+    PACKED_NEGATIVE_PHRASES,
+    build_plan,
+    next_queries,
+    pack_phrases,
+    query_phrases,
+    split_query,
+)
 
 # §0: templates must work for ANY service — a spread across unrelated niches.
 GENERIC_SERVICES = [
@@ -32,21 +40,61 @@ def test_service_words_survive_phrasing(service):
 
 
 def test_typed_article_is_not_doubled():
-    plan = build_plan("a video editor", LeadType.NEED_FREELANCER)
-    assert plan.base[0].startswith("looking for a video editor")
-    assert not any("a a video" in q or "for a a " in q for q in plan.base)
+    for style in ("packed", "legacy"):
+        plan = build_plan("a video editor", LeadType.NEED_FREELANCER, style)
+        assert query_phrases(plan.base[0])[0].startswith("looking for a video editor")
+        assert not any("a a video" in q or "for a a " in q for q in plan.base)
 
 
 @pytest.mark.parametrize("service", GENERIC_SERVICES)
-def test_every_query_pairs_negative_seller_phrases(service):
+@pytest.mark.parametrize("style,expected", [("legacy", NEGATIVE_QUERY_PHRASES),
+                                            ("packed", PACKED_NEGATIVE_PHRASES)])
+def test_every_query_pairs_negative_seller_phrases(service, style, expected):
     for lt in LeadType:
-        plan = build_plan(service, lt)
+        plan = build_plan(service, lt, style)
         for q in list(plan.base) + list(plan.pool):
             positive, negatives = split_query(q)
-            assert set(negatives) == set(NEGATIVE_QUERY_PHRASES), q
+            assert set(negatives) == set(expected), q
             assert positive  # a query is never ONLY negatives
-            for n in NEGATIVE_QUERY_PHRASES:
+            for n in expected:
                 assert f'-"{n}"' in q.lower(), (q, n)
+
+
+@pytest.mark.parametrize("service", GENERIC_SERVICES)
+def test_packed_queries_quote_phrases_and_fit_googles_word_window(service):
+    """Packed queries are exact-phrase OR-groups that stay inside Google's
+    ~32-word query window (incl. the site: operator the client appends), so
+    Google never silently drops the tail (negatives / site:)."""
+    for lt in LeadType:
+        plan = build_plan(service, lt, "packed")
+        for q in list(plan.base) + list(plan.pool):
+            positive, _ = split_query(q)
+            assert positive.startswith(('"', '("')), q
+            assert len(q.split()) + 1 <= 32, q  # +1 for site:linkedin.com/posts
+
+
+def test_packed_round_zero_covers_more_phrasings_in_same_calls():
+    packed = build_plan("video editing", LeadType.NEED_FREELANCER, "packed")
+    legacy = build_plan("video editing", LeadType.NEED_FREELANCER, "legacy")
+    assert len(packed.base) < len(legacy.base)  # fewer Serper calls...
+    phrasings = sum(len(query_phrases(q)) for q in packed.base)
+    assert phrasings >= len(legacy.base)  # ...covering at least as many phrasings
+    assert phrasings >= 2 * len(packed.base)
+
+
+def test_pack_phrases_groups_with_or_and_respects_budget():
+    packs = pack_phrases(["need a plumber", "anyone know a good plumber", 'plumber "urgent"'],
+                         max_words=9)
+    assert packs[0] == '("need a plumber" OR "anyone know a good plumber")'
+    assert packs[1] == '"plumber urgent"'  # stray quotes never break the syntax
+    assert query_phrases(packs[0] + ' -"we offer"') == ["need a plumber", "anyone know a good plumber"]
+
+
+def test_query_style_env_switch(monkeypatch):
+    monkeypatch.setenv("QUERY_STYLE", "legacy")
+    assert not build_plan("a plumber", LeadType.NEED_FREELANCER).base[0].startswith(('"', "("))
+    monkeypatch.setenv("QUERY_STYLE", "packed")
+    assert build_plan("a plumber", LeadType.NEED_FREELANCER).base[0].startswith(('"', "("))
 
 
 def test_split_query_roundtrip():
@@ -73,24 +121,31 @@ def test_need_freelancer_covers_individual_and_company_buyers():
     assert "join our team" not in pool or "freelance" in pool
 
 
-def test_our_agency_queries_are_company_seeking_agency():
-    plan = build_plan("video editor", LeadType.OUR_AGENCY)
-    positives = " | ".join(split_query(q)[0] for q in plan.base).lower()
-    # The agency-wanted lane targets companies seeking an agency/outside team.
-    assert any(p in positives for p in (
-        "looking for an agency for",
-        "need an agency for",
-        "looking for a video editor agency",
-        "recommendations for a video editor agency",
-        "hiring an agency for",
-    ))
-    # Pool still carries agency-sourcing phrases (sibling engine lane), so a
-    # freelancer-seller run never starves when companies seek agencies rarely.
+def test_need_agency_queries_are_client_seeking_agency():
+    """Agency mode ("I'm an Agency") targets clients seeking an agency - never
+    the retired agency-sources-freelancers direction, never self-promotion."""
+    for style in ("packed", "legacy"):
+        plan = build_plan("video editor", LeadType.NEED_AGENCY, style)
+        positives = " | ".join(p for q in plan.base for p in query_phrases(q)).lower()
+        assert any(p in positives for p in (
+            "looking for an agency for",
+            "need an agency for",
+            "looking for a video editor agency",
+            "recommendations for a video editor agency",
+            "hiring an agency for",
+        ))
+        everything = " | ".join(p for q in list(plan.base) + list(plan.pool)
+                                for p in query_phrases(q)).lower()
+        assert "freelancers to work with our agency" not in everything
+        assert "client projects" not in everything
+        assert "our agency can help" not in everything
+        assert "we specialize" not in everything
+
+
+def test_our_agency_retired_lane_still_builds_sourcing_queries():
+    plan = build_plan("video editor", LeadType.OUR_AGENCY, "legacy")
     pool_pos = " | ".join(split_query(q)[0] for q in plan.pool).lower()
     assert "freelancers to work with our agency" in pool_pos or "client projects" in pool_pos
-    # Self-promotion phrasing must never leak into the positive half.
-    assert "our agency can help" not in positives
-    assert "we specialize" not in positives
 
 
 def test_diversification_grows_pool_and_repeats_nothing():
@@ -127,7 +182,7 @@ def test_extra_pool_merges_at_head_with_negatives_and_dedupe():
     shared negative suffix, and dedupe against base positives."""
     first_round = next_queries(
         "video editing", LeadType.NEED_FREELANCER, 1,
-        extra_pool=("custom buyer phrase", "looking for a video editor"),
+        extra_pool=("custom buyer phrase", "looking for a video editor"), style="legacy",
     )
     assert first_round, "iteration 1 must return queries"
     # The unique expanded phrasing is merged at the HEAD with negatives.
@@ -140,9 +195,23 @@ def test_extra_pool_merges_at_head_with_negatives_and_dedupe():
     assert "looking for a video editor" not in positives
 
 
+def test_extra_pool_packed_leads_round_one_and_dedupes_base_phrases():
+    first_round = next_queries(
+        "video editing", LeadType.NEED_FREELANCER, 1,
+        extra_pool=("custom buyer phrase", "another niche ask", "looking for a video editor"),
+        style="packed",
+    )
+    head = query_phrases(first_round[0])
+    assert head[:2] == ["custom buyer phrase", "another niche ask"]
+    assert "looking for a video editor" not in head  # already in the base set
+    _, negatives = split_query(first_round[0])
+    assert set(negatives) == set(PACKED_NEGATIVE_PHRASES)
+
+
 def test_extra_pool_too_short_still_fills_from_deterministic_pool():
     first_round = next_queries(
         "video editing", LeadType.NEED_FREELANCER, 1, extra_pool=("custom buyer phrase",),
+        style="legacy",
     )
     assert first_round[0].startswith('custom buyer phrase -"')
     assert len(first_round) >= 4  # remaining slots come from the template pool

@@ -8,9 +8,10 @@ from models import LeadType, SearchRequest, TimeWindow
 
 def test_lead_type_values():
     assert LeadType.NEED_FREELANCER.value == "need_freelancer"
-    assert LeadType.OUR_AGENCY.value == "our_agency"
-    # Exactly two requestable buyer types — hiring/employee job-ads are never leads.
-    assert len(LeadType) == 2
+    assert LeadType.OUR_AGENCY.value == "our_agency"  # retired, kept for old rows
+    assert LeadType.NEED_AGENCY.value == "need_agency"
+    # Buyer types only — hiring/employee job-ads are never leads.
+    assert len(LeadType) == 3
 
 
 @pytest.mark.parametrize(

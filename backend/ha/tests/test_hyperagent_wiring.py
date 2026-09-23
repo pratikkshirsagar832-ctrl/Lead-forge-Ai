@@ -35,17 +35,25 @@ def test_lead_type_mapping():
 
 def test_production_settings_are_tuned():
     settings = ha_service._ha_settings()
-    assert settings.engine_max_iterations == 20
+    assert settings.engine_max_iterations == 40
     assert settings.engine_deadline_seconds == 540
-    assert settings.engine_early_stop_empty_rounds == 5
+    assert settings.engine_early_stop_empty_rounds == 8
     assert settings.max_serper_requests_per_search == 80
     assert settings.max_deepseek_calls_per_search == 150
-    assert settings.accept_sibling_buyers is True
-    assert settings.require_model_qualified is False
-    assert settings.min_overall_score == 55.0
+    # Strict one-direction modes (freelancer XOR agency) + trusted model verdict.
+    assert settings.accept_sibling_buyers is False
+    assert settings.require_model_qualified is True
+    assert settings.min_overall_score == 60.0
     assert settings.min_service_match == 60.0
     assert settings.min_intent_strength == "recommendation"
     assert settings.serper_pages_per_query == 4
+    # Engine v3 defaults.
+    assert settings.query_style == "packed"
+    assert settings.freshness_ladder == "3d"
+    assert settings.fulltext_enrich is True
+    assert settings.engine_prefetch is True
+    assert settings.classifier_concurrency == 16
+    assert settings.serper_date_mode == "tbs"
 
 
 def test_production_settings_drive_exact_count_engine():

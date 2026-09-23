@@ -124,6 +124,10 @@ class LeadClassification(BaseModel):
     confidence: float = Field(ge=0, le=1)
     evidence: str = Field(description="Short verbatim quote/paraphrase of the deciding line")
     reason: str = Field(description="Brief justification including which trap (if any) was ruled out")
+    # Optional (default False) so responses from older prompts still validate:
+    # the snippet looked cut off before intent/scope became clear, so the
+    # engine may fetch the full post and ask again.
+    needs_full_text: bool = Field(default=False, description="Snippet cut off before the deciding part")
 
 
 # ---------------------------------------------------------------------------

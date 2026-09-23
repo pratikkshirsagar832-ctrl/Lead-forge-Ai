@@ -17,6 +17,7 @@ import { MapPin, Briefcase, SearchIcon, Sparkles, Globe, Star, Phone, ChevronRig
 import { motion, AnimatePresence } from 'framer-motion';
 import Link from 'next/link';
 import { LEAD_CATEGORIES } from '@/lib/constants';
+import { formatPostedAgo, serviceLabel } from '@/lib/utils';
 
 const mapsSchema = z.object({
   niche: z.string().min(2, 'Niche must be at least 2 characters'),
@@ -24,7 +25,7 @@ const mapsSchema = z.object({
 });
 
 const linkedinSchema = z.object({
-  niche: z.string().min(2, 'Enter what people are asking for, e.g. I need SEO'),
+  niche: z.string().trim().min(2, 'Tell us the service you offer, e.g. video editing or interior design').max(200, 'Keep it under 200 characters'),
   location: z.string().optional(),
 });
 
@@ -135,7 +136,7 @@ function LiveResultCard({ lead, index }: { lead: any; index: number }) {
                   {lead.posted_at && (
                     <div className="flex items-center gap-1.5 text-ice/40">
                       <Clock className="w-3 h-3" />
-                      <span>posted {new Date(lead.posted_at).toLocaleDateString()}</span>
+                      <span>posted {formatPostedAgo(lead.posted_at)}</span>
                     </div>
                   )}
                   {lead.post_url && (
@@ -298,11 +299,16 @@ export default function SearchPage() {
   // (from the active search when one is running, else the live form value).
   const selectedService = progress?.service || mapsForm.watch('niche') || '';
   const selectedCount = progress?.requested_count || maxResults;
-  const serviceCap = selectedService.replace(/\s+/g, ' ').trim();
-  const _cap = (s: string) => (s ? s.charAt(0).toUpperCase() + s.slice(1) : s);
+  // Any input ("I'm a freelance video editor for YouTubers", a long pitch,
+  // Hinglish...) is reduced to a short display name; long descriptions fall
+  // back to a generic header instead of echoing the whole sentence.
+  const serviceCap = serviceLabel(selectedService);
+  const leadsWord = `${selectedCount} High-quality ${selectedCount === 1 ? 'Lead' : 'Leads'}`;
   const headerLabel = serviceCap
-    ? `Finding ${selectedCount} High-quality ${selectedCount === 1 ? 'Lead' : 'Leads'} for your ${_cap(serviceCap)} Service`
-    : 'Finding hot leads';
+    ? `Finding ${leadsWord} for your ${serviceCap} Service`
+    : selectedService.trim()
+      ? `Finding ${leadsWord} for your Service`
+      : 'Finding hot leads';
 
   const remaining = subscription?.remaining_searches ?? 1;
   const searchesPerDay = subscription?.searches_per_day ?? 1;
@@ -401,7 +407,7 @@ export default function SearchPage() {
                   <div className={source === 'linkedin' ? 'sm:col-span-2' : ''}>
                     <label className="block text-sm font-medium text-ice/70 mb-2 flex items-center gap-2">
                       <TargetIcon className="w-4 h-4 text-steel" />
-                      {source === 'linkedin' ? 'What are people asking for?' : 'Target Niche'}
+                      {source === 'linkedin' ? 'What service do you offer?' : 'Target Niche'}
                     </label>
                     <div className="relative group">
                       <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
@@ -410,12 +416,31 @@ export default function SearchPage() {
                       <input
                         {...mapsForm.register('niche')}
                         type="text"
-                        placeholder={source === 'linkedin' ? 'e.g. video editing, website development, logo design' : 'e.g. Plumbers, Dentists'}
+                        placeholder={source === 'linkedin' ? 'Any service, any industry — e.g. video editing, interior design, bookkeeping' : 'e.g. Plumbers, Dentists'}
                         className="w-full pl-10 pr-4 py-3 rounded-xl border border-ocean/30 bg-navy/60 focus:bg-navy/80 focus:ring-2 focus:ring-steel/40 focus:border-steel/50 transition-all text-offwhite text-lg placeholder-ice/30 outline-none"
                       />
                     </div>
                     {mapsForm.formState.errors.niche && (
                       <p className="text-red-400 text-sm mt-1.5">{mapsForm.formState.errors.niche.message}</p>
+                    )}
+                    {source === 'linkedin' && (
+                      <div className="mt-2 space-y-1.5">
+                        <p className="text-[11px] text-ice/40">
+                          Type it any way you like — &ldquo;I&apos;m a wedding photographer&rdquo;, &ldquo;SEO + web design&rdquo;, even Hinglish. We work out how buyers ask for it.
+                        </p>
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                          {['Video editing', 'Interior design', 'Bookkeeping', 'Wedding photography', 'Web development', 'Plumbing'].map((ex) => (
+                            <button
+                              key={ex}
+                              type="button"
+                              onClick={() => mapsForm.setValue('niche', ex, { shouldValidate: true })}
+                              className="text-[10px] font-medium px-2 py-1 rounded-full bg-navy/60 text-ice/60 border border-ocean/25 hover:text-offwhite hover:border-steel/40 transition-colors"
+                            >
+                              {ex}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
                     )}
                   </div>
                   {source === 'google_maps' && (
@@ -503,6 +528,23 @@ export default function SearchPage() {
                         <option key={n} value={n}>{n} leads</option>
                       ))}
                     </select>
+                    {(() => {
+                      // Exact count: the search delivers exactly this many — unless the
+                      // monthly quota is smaller, so say that BEFORE the search runs.
+                      const liLeft = subscription?.linkedin_hq_leads_remaining;
+                      if (typeof liLeft === 'number' && liLeft < maxResults) {
+                        return (
+                          <p className="text-[11px] text-amber-400/90 mt-1.5">
+                            You have {Math.max(0, liLeft)} LinkedIn leads left this month — this search will deliver {Math.max(0, liLeft)}. Upgrade for the full {maxResults}.
+                          </p>
+                        );
+                      }
+                      return (
+                        <p className="text-[11px] text-ice/40 mt-1.5">
+                          Exactly {maxResults} verified leads — never more, newest first.
+                        </p>
+                      );
+                    })()}
                   </div>
                   <div className="grid grid-cols-2 gap-2 self-end w-full">
                     {([

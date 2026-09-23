@@ -28,13 +28,51 @@ def test_requires_api_key():
     assert _client().config_errors == []
 
 
-def test_full_query_appends_site_and_fresh_after_date():
+def test_full_query_appends_site_and_no_after_in_tbs_mode():
     client = _client()
     since = datetime(2025, 6, 10, 12, 0, 0, tzinfo=UTC)
     q = client._full_query('looking for a plumber -"we offer"', since)
     assert q.startswith('looking for a plumber -"we offer"')
     assert "site:linkedin.com/posts" in q
-    assert "after:2025-06-10" in q  # computed from `since` at call time
+    assert "after:" not in q  # date rides in the `tbs` param instead
+
+
+def test_legacy_after_mode_keeps_in_query_date():
+    client = _client(date_mode="after")
+    since = datetime(2025, 6, 10, 12, 0, 0, tzinfo=UTC)
+    assert "after:2025-06-10" in client._full_query("looking for a plumber", since)
+
+
+@pytest.mark.parametrize("hours,expected", [
+    (1, "qdr:d"), (24, "qdr:d"), (30, "qdr:d2"), (72, "qdr:d3"),
+    (6 * 24, "qdr:d6"), (7 * 24, "qdr:w"), (14 * 24, "qdr:m"),
+])
+def test_tbs_rounds_up_to_cover_window(hours, expected):
+    from datetime import timedelta
+    now = datetime(2026, 9, 23, 12, tzinfo=UTC)
+    assert SerperDiscoveryClient.tbs_for(now - timedelta(hours=hours), now=now) == expected
+
+
+def test_url_activity_id_beats_google_date(monkeypatch):
+    from discovery.base import posted_at_from_url
+    link = "https://www.linkedin.com/posts/jane-doe_need-an-editor-activity-7372000000000000000-AbCd"
+    exact = posted_at_from_url(link)
+    assert exact is not None
+
+    def fake_post(url, headers, json, timeout):
+        return FakeResp(payload={"organic": [
+            {"link": link, "title": "Need an editor", "snippet": "Need a video editor this week.",
+             "date": "Jan 1, 2020"},
+            {"link": "https://www.linkedin.com/posts/nodate-activity-7372000000000000000-xy",
+             "title": "Need a plumber", "snippet": "Need a plumber asap."},
+        ]})
+
+    monkeypatch.setattr(serp_mod.httpx, "post", fake_post)
+    batch = _client().search_posts(["need an editor"], datetime(2025, 6, 1, tzinfo=UTC))
+    by_url = {p.post_url: p for p in batch.posts}
+    assert by_url[link].posted_at == exact  # URL time wins over Google's date
+    # An undated SERP row is recovered from its activity id (no longer dropped).
+    assert all(p.posted_at is not None for p in batch.posts)
 
 
 def test_maps_organic_results_and_parses_author(monkeypatch):
@@ -66,7 +104,8 @@ def test_maps_organic_results_and_parses_author(monkeypatch):
     batch = client.search_posts(['looking for a video editor', 'need a plumber'], since)
     assert captured["payload"]["num"] == 5
     assert "site:linkedin.com/posts" in captured["payload"]["q"]
-    assert "after:2025-06-01" in captured["payload"]["q"]
+    assert "after:" not in captured["payload"]["q"]
+    assert captured["payload"]["tbs"] == "qdr:y"  # window > 1 month -> widest bucket
     assert captured["url"] == "https://google.serper.dev/search"
 
     posts = {p.post_url: p for p in batch.posts}
@@ -127,13 +166,27 @@ def test_provider_errors_are_loud_and_isolated(monkeypatch):
     assert batch.posts == []
 
 
-def test_http_exception_recorded_per_query(monkeypatch):
+def test_every_request_failing_is_a_loud_provider_error(monkeypatch):
+    """All requests failing is an outage, never a silent 'no posts' result."""
+    from discovery.base import DiscoveryError
+
     def boom(url, headers, json, timeout):
         raise serp_mod.httpx.HTTPError("connection reset")
 
     monkeypatch.setattr(serp_mod.httpx, "post", boom)
-    batch = _client().search_posts(["q"], datetime(2025, 1, 1, tzinfo=UTC))
-    assert batch.provider_errors and "connection reset" in batch.provider_errors[0]
+    with pytest.raises(DiscoveryError, match="connection reset"):
+        _client().search_posts(["q1", "q2"], datetime(2025, 1, 1, tzinfo=UTC))
+
+
+def test_out_of_credits_is_reported_clearly(monkeypatch):
+    from discovery.base import DiscoveryError
+
+    def no_credits(url, headers, json, timeout):
+        return FakeResp(status_code=400, payload={}, text='{"message":"Not enough credits","statusCode":400}')
+
+    monkeypatch.setattr(serp_mod.httpx, "post", no_credits)
+    with pytest.raises(DiscoveryError, match="out of credits"):
+        _client().search_posts(["q1"], datetime(2025, 1, 1, tzinfo=UTC))
 
 
 def test_pagination_fetches_multiple_pages_and_dedupes(monkeypatch):

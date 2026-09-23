@@ -69,6 +69,9 @@ class Settings:
     serper_gl: str = field(default_factory=lambda: _str("SERPER_GL", ""))   # optional Google country ('us', 'in', ...)
     serper_hl: str = field(default_factory=lambda: _str("SERPER_HL", "en"))  # optional Google language
     serper_timeout_seconds: float = field(default_factory=lambda: _float("SERPER_TIMEOUT_SECONDS", 30.0))
+    # Date filter: "tbs" = Google's native time filter param (qdr:d / qdr:dN /
+    # qdr:w); "after" = legacy in-query `after:YYYY-MM-DD` operator.
+    serper_date_mode: str = field(default_factory=lambda: _str("SERPER_DATE_MODE", "tbs").lower())
 
     # Usage budget
     max_searches_per_day: int = field(default_factory=lambda: _int("MAX_SEARCHES_PER_DAY", 20))
@@ -91,6 +94,41 @@ class Settings:
         default_factory=lambda: _int("MAX_SERPER_REQUESTS_PER_SEARCH", 60))
     max_deepseek_calls_per_search: int = field(
         default_factory=lambda: _int("MAX_DEEPSEEK_CALLS_PER_SEARCH", 150))
+
+    # EXACT-N scaling: ceilings/deadline grow with the leads requested -
+    # effective = max(base, per_lead * N), capped by the hard maximum. 0 per
+    # lead = no scaling (the base values above apply to every request size).
+    serper_requests_per_lead: int = field(default_factory=lambda: _int("SERPER_REQUESTS_PER_LEAD", 0))
+    deepseek_calls_per_lead: int = field(default_factory=lambda: _int("DEEPSEEK_CALLS_PER_LEAD", 0))
+    max_serper_requests_hard: int = field(default_factory=lambda: _int("MAX_SERPER_REQUESTS_HARD", 0))
+    max_deepseek_calls_hard: int = field(default_factory=lambda: _int("MAX_DEEPSEEK_CALLS_HARD", 0))
+    engine_deadline_seconds_per_lead: int = field(
+        default_factory=lambda: _int("ENGINE_DEADLINE_SECONDS_PER_LEAD", 0))
+    engine_deadline_hard_seconds: int = field(default_factory=lambda: _int("ENGINE_DEADLINE_HARD_SECONDS", 0))
+    # When the query pool runs dry while still short of N: this many LLM
+    # refills (fresh, different phrasings) before the broad legacy fallback.
+    max_query_refills: int = field(default_factory=lambda: _int("MAX_QUERY_REFILLS", 2))
+
+    # Query emission style: "packed" (quoted exact phrasings OR-grouped - more
+    # precise AND ~3x phrasings per Serper call) or "legacy" (one unquoted
+    # phrasing per query). Kill switch for A/B runs.
+    query_style: str = field(default_factory=lambda: _str("QUERY_STYLE", "packed").lower())
+    # Freshness ladder (newest first): per-iteration discovery windows, e.g.
+    # "3d" = round 0 searches the last 3 days first (Google lags LinkedIn by
+    # 1-3 days, so 24h alone finds little), then the SAME queries re-run over
+    # the full window. Each step is clamped to the search's own
+    # window, so the hard freshness cutoff never widens. Empty = full window
+    # from round 0. Narrowed rounds never count toward the early-stop streak.
+    freshness_ladder: str = field(default_factory=lambda: _str("FRESHNESS_LADDER", "3d"))
+    # Snippet-first full-text enrichment: borderline / cut-off snippets get
+    # their public post page fetched and are re-classified with the full text.
+    fulltext_enrich: bool = field(
+        default_factory=lambda: _str("FULLTEXT_ENRICH", "1") in {"1", "true", "yes"})
+    max_enrich_per_search: int = field(default_factory=lambda: _int("MAX_ENRICH_PER_SEARCH", 20))
+    enrich_concurrency: int = field(default_factory=lambda: _int("ENRICH_CONCURRENCY", 4))
+    # Pipeline the next discovery round while the current one is classified.
+    engine_prefetch: bool = field(
+        default_factory=lambda: _str("ENGINE_PREFETCH", "1") in {"1", "true", "yes"})
 
     # Buyer-sibling acceptance: when ON, a need_freelancer search also accepts
     # hiring_buyer posts (both are genuine service buyers) and vice-versa.

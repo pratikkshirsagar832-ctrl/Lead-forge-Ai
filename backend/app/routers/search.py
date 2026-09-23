@@ -578,7 +578,16 @@ async def get_search_status(
                 except (TypeError, ValueError):
                     wanted = None
                 found_so_far = row["total_results"]
-                svc_label = (row.get("niche") or "").strip() or "your service"
+                raw_niche = (row.get("niche") or "").strip()
+                try:
+                    # Any-input: "I am a freelance video editor for YouTubers"
+                    # reads as "video editor" in the live message.
+                    from query_builder import primary_service
+                    svc_label = primary_service(raw_niche) if raw_niche else ""
+                except Exception:  # noqa: BLE001 - label is cosmetic
+                    svc_label = raw_niche
+                if not svc_label or len(svc_label.split()) > 5:
+                    svc_label = "your service"
                 if accepted_so_far > 0 and wanted:
                     row["message"] = (
                         f"We found {accepted_so_far} of {wanted} genuine {svc_label} buyers so far. "

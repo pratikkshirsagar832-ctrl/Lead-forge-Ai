@@ -18,10 +18,10 @@ def _mk_search(store, *, service="video editor", lead_type=LeadType.NEED_FREELAN
     )["id"]
 
 
-def _settings():
+def _settings(**overrides):
     from config import Settings
 
-    return Settings()
+    return Settings(**overrides)
 
 
 def _qualified_within_corpus(window: str, requested: LeadType = LeadType.NEED_FREELANCER) -> int:
@@ -286,8 +286,11 @@ def test_engine_keeps_looping_until_exactly_n_is_reached():
 
     store = MemoryStore()
     sid = _mk_search(store, needed=18)  # needs ~9 rounds: > the old cap of 6
+    # Legacy style: its one-phrasing-per-query pool is long enough for 9+
+    # rounds (packed packs ~3 phrasings per query into a shorter pool).
     summary = run_search(sid, store=store, discovery=DripDiscovery(),
-                         classifier=MockClassifier(corpus=drip), settings=_settings())
+                         classifier=MockClassifier(corpus=drip),
+                         settings=_settings(query_style="legacy"))
     assert summary.status == "completed"
     assert summary.iterations >= 7  # proved it looped well past a 6-round cap
     assert summary.accepted == 18   # exactly N — neither fewer nor more
@@ -336,7 +339,8 @@ def test_exact_count_skips_already_owned_posts_and_keeps_scanning():
     }])
     sid = _mk_search(store, needed=18)
     summary = run_search(sid, store=store, discovery=OwnedDripDiscovery(),
-                         classifier=MockClassifier(corpus=drip), settings=_settings())
+                         classifier=MockClassifier(corpus=drip),
+                         settings=_settings(query_style="legacy"))
     assert summary.status == "completed"
     assert summary.accepted == 18          # exactly N NEW leads delivered
     assert "already-owned" in summary.detail or "skipped" in summary.detail
@@ -634,7 +638,7 @@ def test_strict_freshness_accepts_post_exactly_inside_window():
 
 def test_query_expander_called_once_and_queries_used():
     """The LLM expander runs once per search; its phrasings lead iteration 1."""
-    from testing.mock_providers import split_query as _split
+    from query_builder import query_phrases
 
     calls = {"n": 0}
 
@@ -654,15 +658,15 @@ def test_query_expander_called_once_and_queries_used():
     sid = _mk_search(store, needed=100)  # shortage -> engine keeps iterating
     summary = run_search(
         sid, store=store, discovery=RecordingDiscovery(),
-        classifier=MockClassifier(), settings=_settings(),
+        # No freshness ladder: round 1 is then the first diversification round.
+        classifier=MockClassifier(), settings=_settings(freshness_ladder=""),
         query_expander=expander,
     )
     assert summary.status == "completed"
     assert calls["n"] == 1  # exactly one expansion call per search
     # Iteration 0 is the base set; iteration 1 leads with the expanded query.
     assert len(seen_first_iteration_queries) >= 2
-    positives = [_split(q)[0] for q in seen_first_iteration_queries[1]]
-    assert "urgent custom niche phrasing needed" == positives[0]
+    assert query_phrases(seen_first_iteration_queries[1][0])[0] == "urgent custom niche phrasing needed"
 
 
 def test_query_expander_failure_is_silent_and_search_still_works():

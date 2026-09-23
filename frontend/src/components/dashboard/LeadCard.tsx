@@ -2,7 +2,7 @@ import { GlassCard } from '@/components/shared/GlassCard';
 import { Badge } from '@/components/shared/Badge';
 import { PostTypeBadge, WorkTypeBadge } from '@/components/dashboard/PostTypeBadge';
 import { LEAD_CATEGORIES, USER_STATUSES } from '@/lib/constants';
-import { formatNumber, truncate } from '@/lib/utils';
+import { formatNumber, formatPostedAgo, truncate } from '@/lib/utils';
 import { MapPin, Globe, Star, Phone, ChevronRight, Heart, Linkedin, Mail, Clock, ExternalLink, Users } from 'lucide-react';
 import Link from 'next/link';
 
@@ -175,7 +175,7 @@ export function LeadCard({ lead, onToggleFavorite, isUpdatingFav }: LeadCardProp
                   <div className="p-1.5 shrink-0 rounded-lg bg-ocean/25 text-steel/50 transition-colors">
                     <Clock className="w-3.5 h-3.5" />
                   </div>
-                  <span className="text-[13px]">Posted {new Date(lead.posted_at).toLocaleDateString()}</span>
+                  <span className="text-[13px]">Posted {formatPostedAgo(lead.posted_at)}</span>
                 </div>
               )}
             </>

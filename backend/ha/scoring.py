@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from datetime import UTC, datetime
 
 from models import IntentStrength, LeadClassification, LeadType
 
@@ -20,6 +21,24 @@ W_COMMERCIAL = 0.15
 W_DECISION_MAKER = 0.10
 W_LOCATION = 0.10
 W_EVIDENCE = 0.10
+# When the post time is known, half of the location weight goes to recency so
+# the NEWEST genuine buyers rank (and gate) slightly ahead of week-old ones.
+W_RECENCY = 0.05
+
+
+def recency_score(posted_at: datetime | None, now: datetime | None = None) -> float:
+    """100 for posts <= 24h old, falling linearly to 50 at 7 days, 30 beyond."""
+    if posted_at is None:
+        return 50.0
+    now = now or datetime.now(UTC)
+    if posted_at.tzinfo is None:
+        posted_at = posted_at.replace(tzinfo=UTC)
+    hours = max(0.0, (now - posted_at).total_seconds() / 3600.0)
+    if hours <= 24:
+        return 100.0
+    if hours <= 7 * 24:
+        return 100.0 - 50.0 * (hours - 24) / (6 * 24)
+    return 30.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -91,17 +110,22 @@ def compute_score(
     requested_country_code: str = "",
     post_text: str = "",
     cfg: ScoreConfig | None = None,
+    posted_at: datetime | None = None,
 ) -> QualifiedLead:
     cfg = cfg or ScoreConfig()
     rank = intent_rank(classification.intent_strength)
     loc = location_confidence(requested_country, post_text, classification.evidence)
+    if posted_at is not None:
+        place = (W_LOCATION - W_RECENCY) * loc + W_RECENCY * recency_score(posted_at)
+    else:
+        place = W_LOCATION * loc
 
     overall = (
         W_INTENT * rank
         + W_SERVICE_MATCH * classification.service_match_score
         + W_COMMERCIAL * classification.commercial_intent_score
         + W_DECISION_MAKER * (100.0 if classification.decision_maker_signal else 0.0)
-        + W_LOCATION * loc
+        + place
         + W_EVIDENCE * classification.evidence_strength
     )
 

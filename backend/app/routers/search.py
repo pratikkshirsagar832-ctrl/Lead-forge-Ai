@@ -368,7 +368,7 @@ async def get_search_detail(
 
 
 @router.get("/{search_id}/results")
-async def get_search_results(
+def get_search_results(
     search_id: str,
     page: int = Query(1, ge=1),
     per_page: int = Query(4, ge=1, le=50),
@@ -471,7 +471,7 @@ async def get_search_results(
 
 
 @router.get("/{search_id}/status", response_model=SearchStatusResponse)
-async def get_search_status(
+def get_search_status(
     search_id: str,
     current_user: dict = Depends(get_current_user),
 ):

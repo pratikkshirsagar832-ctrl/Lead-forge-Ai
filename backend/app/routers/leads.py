@@ -52,7 +52,7 @@ def _sanitize_search(value: str | None, max_len: int = 100) -> str | None:
 
 
 @router.get("", response_model=LeadPaginatedResponse)
-async def list_leads(
+def list_leads(
     search_id: Optional[str] = Query(None, description="Filter by search ID"),
     source: Optional[str] = Query(None, description="Filter by source (google_maps/linkedin)"),
     post_type: Optional[str] = Query(None, description="Filter LinkedIn leads by post type (buyer)"),

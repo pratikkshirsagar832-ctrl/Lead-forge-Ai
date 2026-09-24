@@ -5,6 +5,7 @@ Endpoints:
   POST /api/ai/pitch/{lead_id}           — generate an AI pitch for a lead
   POST /api/ai/website-message/{lead_id} — generate a short WhatsApp outreach message
 """
+import asyncio
 
 import logging
 
@@ -45,10 +46,13 @@ async def check_ai_limit(user_id: str) -> str:
 
     supabase = get_supabase_admin()
 
-    eff = resolve_effective_subscription(supabase, user_id)
+    eff = await asyncio.to_thread(resolve_effective_subscription, supabase, user_id)
     plan_id = eff.get("plan_id", "free")
+    if eff.get("status") not in ("active", "trial"):
+        # Expired plan / locked team seat must not spend the owner's AI pool.
+        raise HTTPException(status_code=429, detail="Your subscription is not active. Renew to use AI features.")
     quota_user = quota_owner_id(eff, user_id)
-    plan = get_plan_row(supabase, plan_id)
+    plan = await asyncio.to_thread(get_plan_row, supabase, plan_id)
     limit = _get_ai_monthly_limit(plan, plan_id)
 
     consumed = await consume_monthly_quota(supabase, quota_user, "ai", limit)

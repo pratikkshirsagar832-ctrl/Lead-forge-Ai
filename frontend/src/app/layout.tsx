@@ -33,7 +33,7 @@ export default function RootLayout({
   return (
     <html lang="en" data-scroll-behavior="smooth" suppressHydrationWarning>
       <body className={`${montserrat.className} ${spaceGrotesk.variable} min-h-screen bg-navy text-ice antialiased selection:bg-violet/30 selection:text-offwhite`}>
-          <Script src="https://checkout.razorpay.com/v1/checkout.js" strategy="beforeInteractive" />
+          <Script src="https://checkout.razorpay.com/v1/checkout.js" strategy="lazyOnload" />
           <script
             type="text/javascript"
             dangerouslySetInnerHTML={{

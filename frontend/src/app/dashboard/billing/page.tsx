@@ -139,7 +139,7 @@ function BillingContent() {
         name: 'Hyperclients',
         description: `${order.plan_name} Plan`,
         order_id: order.order_id,
-        prefill: { email: (await supabase.auth.getUser()).data.user?.email },
+        prefill: { email: (await supabase.auth.getSession()).data.session?.user?.email },
         theme: { color: '#6366f1' },
         handler: async (response: unknown) => {
           const r = response as RazorpayResponse;

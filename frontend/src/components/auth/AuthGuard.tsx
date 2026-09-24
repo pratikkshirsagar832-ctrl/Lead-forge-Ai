@@ -18,100 +18,72 @@ function clearGuestSession() {
 
 export { clearGuestSession };
 
+function Loading({ label }: { label: string }) {
+  return (
+    <div className="min-h-screen flex items-center justify-center bg-navy font-sans">
+      <div className="flex items-center gap-3">
+        <Loader2 className="w-6 h-6 text-steel animate-spin" />
+        <p className="text-ice/60">{label}</p>
+      </div>
+    </div>
+  );
+}
+
 export function AuthGuard({ children }: { children: React.ReactNode }) {
   const router = useRouter();
   const pathname = usePathname();
-  const [isLoading, setIsLoading] = useState(true);
-  const [isAuthenticated, setIsAuthenticated] = useState(false);
-  const redirectTimerRef = useRef<NodeJS.Timeout | null>(null);
-  const mountedRef = useRef(true);
+  const [state, setState] = useState<'checking' | 'in' | 'out'>('checking');
+  const pathRef = useRef(pathname);
+  useEffect(() => { pathRef.current = pathname; }, [pathname]);
 
-  const safeRedirect = (url: string) => {
-    if (redirectTimerRef.current) clearTimeout(redirectTimerRef.current);
-    redirectTimerRef.current = setTimeout(() => {
-      if (mountedRef.current) router.replace(url);
-    }, 1500);
-  };
-
+  // Subscribe ONCE (not on every navigation): the session lives in this
+  // browser's storage and Supabase refreshes it in the background.
   useEffect(() => {
-    mountedRef.current = true;
-
-    const checkSession = async () => {
-      try {
-        if (isGuestSession()) {
-          setIsAuthenticated(true);
-          setIsLoading(false);
-          return;
-        }
-
-        const { data: { session } } = await supabase.auth.getSession();
-        if (!mountedRef.current) return;
-
-        if (session) {
-          setIsAuthenticated(true);
-          setIsLoading(false);
-          return;
-        }
-
-        redirectTimerRef.current = setTimeout(async () => {
-          if (!mountedRef.current) return;
-          try {
-            const { data: { session: retrySession } } = await supabase.auth.getSession();
-            if (retrySession) {
-              setIsAuthenticated(true);
-              setIsLoading(false);
-              return;
-            }
-          } catch {}
-          if (mountedRef.current) {
-            router.replace(`/login?redirect=${encodeURIComponent(pathname)}`);
-          }
-        }, 3000);
-      } catch (err: any) {
-        console.error('AuthGuard: session check failed', err);
-        if (err?.message?.includes('Invalid API key') || err?.status === 401) {
-          router.replace('/login?error=auth_config');
-        } else {
-          safeRedirect('/login');
-        }
-      }
+    let alive = true;
+    let retryTimer: ReturnType<typeof setTimeout> | null = null;
+    const toLogin = () => {
+      if (!alive) return;
+      setState('out');
+      router.replace(`/login?redirect=${encodeURIComponent(pathRef.current || '/dashboard')}`);
     };
 
-    checkSession();
-
-    const { data: { subscription } } = supabase.auth.onAuthStateChange(
-      (event, session) => {
-        if (!mountedRef.current) return;
-        if (event === 'SIGNED_OUT') {
-          clearGuestSession();
-          safeRedirect('/login');
-        } else if (session) {
-          if (redirectTimerRef.current) clearTimeout(redirectTimerRef.current);
-          setIsAuthenticated(true);
-          setIsLoading(false);
-        }
+    (async () => {
+      if (isGuestSession()) { setState('in'); return; }
+      try {
+        const { data: { session } } = await supabase.auth.getSession();
+        if (!alive) return;
+        if (session) { setState('in'); return; }
+        // One short re-check covers a session written a moment ago (OAuth
+        // callback, another tab signing in) without keeping users waiting.
+        retryTimer = setTimeout(async () => {
+          const { data: { session: again } } = await supabase.auth.getSession().catch(() => ({ data: { session: null } }));
+          if (!alive) return;
+          if (again) setState('in'); else toLogin();
+        }, 600);
+      } catch (err) {
+        console.error('AuthGuard: session check failed', err);
+        toLogin();
       }
-    );
+    })();
+
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
+      if (!alive) return;
+      if (event === 'SIGNED_OUT') {
+        clearGuestSession();
+        toLogin();
+      } else if (session) {
+        if (retryTimer) clearTimeout(retryTimer);
+        setState('in');
+      }
+    });
 
     return () => {
-      mountedRef.current = false;
-      if (redirectTimerRef.current) clearTimeout(redirectTimerRef.current);
+      alive = false;
+      if (retryTimer) clearTimeout(retryTimer);
       subscription.unsubscribe();
     };
-  }, [router, pathname]);
+  }, [router]);
 
-  if (isLoading) {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-navy font-sans">
-        <div className="flex items-center gap-3">
-          <Loader2 className="w-6 h-6 text-steel animate-spin" />
-          <p className="text-ice/60">Loading...</p>
-        </div>
-      </div>
-    );
-  }
-
-  if (!isAuthenticated) return null;
-
-  return <>{children}</>;
+  if (state === 'in') return <>{children}</>;
+  return <Loading label={state === 'out' ? 'Redirecting to login…' : 'Loading…'} />;
 }

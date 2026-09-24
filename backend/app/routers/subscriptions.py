@@ -1,3 +1,4 @@
+import asyncio
 import hashlib
 import hmac
 import json
@@ -165,6 +166,21 @@ def _target_subscription_row(supabase, user_id: str) -> dict | None:
     return rows[0]
 
 
+def _reject_team_member(supabase, user_id: str) -> None:
+    """Team seats ride on the owner's plan. Their subscription row carries the
+    `team:<owner>:<username>` marker in razorpay_order_id; checkout/cancel on
+    that row would overwrite the marker and silently drop them from the team."""
+    from app.services.plans import resolve_effective_subscription
+
+    try:
+        eff = resolve_effective_subscription(supabase, user_id)
+    except Exception:  # noqa: BLE001 - never block a real owner on a lookup error
+        return
+    if eff.get("team_owner_id"):
+        raise HTTPException(status_code=403, detail=(
+            "This is a team seat - billing is managed by your team owner's account."))
+
+
 def _get_razorpay_client(settings):
     if razorpay is None:
         raise HTTPException(status_code=503, detail="Payment system not configured")
@@ -195,71 +211,10 @@ async def list_plans():
 
 @router.get("/current")
 async def get_current_subscription(current_user: dict = Depends(get_current_user)):
-    from app.services.plans import (
-        resolve_effective_subscription,
-        get_plan_row,
-        get_monthly_limit,
-        get_monthly_counters,
-        quota_owner_id,
-        get_latest_subscription_row,
-    )
-
-    supabase = get_supabase_admin()
-    user_id = current_user["id"]
+    from app.services.plans import build_subscription_summary
 
     try:
-        eff = resolve_effective_subscription(supabase, user_id)
-        plan_id = eff["plan_id"]
-        status = eff["status"]
-        quota_user = quota_owner_id(eff, user_id)
-
-        plan = get_plan_row(supabase, plan_id)
-        searches_per_month = get_monthly_limit(plan, "searches_per_month", "searches_per_day", 3)
-        leads_per_month = get_monthly_limit(plan, "leads_per_month", "leads_per_day", 30)
-        ai_monthly = get_monthly_limit(plan, "ai_calls_monthly", "ai_calls", 5)
-
-        month = datetime.now(timezone.utc).replace(day=1).date().isoformat()
-        usage = {}
-        try:
-            monthly = supabase.table("monthly_usage").select("*").eq("user_id", quota_user).eq("usage_month", month).limit(1).execute()
-            usage = (monthly.data or [{}])[0]
-        except Exception as monthly_err:
-            logger.debug(f"monthly_usage table not available: {monthly_err}")
-        linkedin_limit = int(plan.get("linkedin_hq_leads_monthly", 0) or 0)
-        gmb_limit = int(plan.get("gmb_leads_monthly", 0) or 0)
-        used_searches = int(usage.get("searches_used", 0) or 0)
-        used_ai = int(usage.get("ai_calls_used", 0) or 0)
-
-        source_row = eff.get("source_row") or get_latest_subscription_row(supabase, user_id) or {}
-
-        return {
-            "plan_id": plan_id,
-            "plan_name": plan.get("name", "Free"),
-            "status": status,
-            "searches_per_month": searches_per_month,
-            "searches_per_day": searches_per_month,  # compat: frontend may read old key
-            "leads_per_month": leads_per_month,
-            "leads_per_day": leads_per_month,  # compat
-            "ai_calls_monthly": ai_monthly,
-            "remaining_searches": max(0, searches_per_month - used_searches),
-            "searches_used": used_searches,
-            "ai_used": used_ai,
-            "ai_remaining": max(0, ai_monthly - used_ai),
-            # Lead quota is MONTHLY — remaining_leads must reflect the monthly
-            # cap (resets on the 1st), never the daily leads_per_day counter.
-            "remaining_leads": max(0, linkedin_limit - int(usage.get("linkedin_hq_generated", 0) or 0) - int(usage.get("linkedin_hq_reserved", 0) or 0))
-                              + max(0, gmb_limit - int(usage.get("gmb_generated", 0) or 0) - int(usage.get("gmb_reserved", 0) or 0)),
-            "linkedin_hq_leads_monthly": linkedin_limit,
-            "gmb_leads_monthly": gmb_limit,
-            "linkedin_hq_leads_used": int(usage.get("linkedin_hq_generated", 0) or 0),
-            "gmb_leads_used": int(usage.get("gmb_generated", 0) or 0),
-            "linkedin_hq_leads_remaining": max(0, linkedin_limit - int(usage.get("linkedin_hq_generated", 0) or 0) - int(usage.get("linkedin_hq_reserved", 0) or 0)),
-            "gmb_leads_remaining": max(0, gmb_limit - int(usage.get("gmb_generated", 0) or 0) - int(usage.get("gmb_reserved", 0) or 0)),
-            "current_period_start": source_row.get("current_period_start"),
-            "current_period_end": source_row.get("current_period_end"),
-            "trial_end": source_row.get("trial_end"),
-            "is_trial_expired": source_row.get("is_trial_expired", False),
-        }
+        return await asyncio.to_thread(build_subscription_summary, get_supabase_admin(), current_user["id"])
     except Exception as e:
         logger.error(f"Failed to get subscription: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Failed to fetch subscription")
@@ -281,6 +236,7 @@ async def create_order(
     try:
         client = _get_razorpay_client(settings)
         supabase = get_supabase_admin()
+        await asyncio.to_thread(_reject_team_member, supabase, current_user["id"])
         plan_resp = supabase.table("plans").select("*").eq("id", plan_id).limit(1).execute()
         if not plan_resp.data or len(plan_resp.data) == 0:
             raise HTTPException(status_code=404, detail="Plan not found")
@@ -292,7 +248,7 @@ async def create_order(
             raise HTTPException(status_code=400, detail="Cannot create order for free plan")
 
         user_short = current_user["id"].replace("-", "")[:12]
-        order = client.order.create({
+        order = await asyncio.to_thread(client.order.create, {
             "amount": amount,
             "currency": "INR",
             "receipt": f"sub_{user_short}_{plan_id}",
@@ -378,7 +334,7 @@ async def verify_payment(
         if not resolved or resolved.get("user_id") != current_user["id"]:
             raise HTTPException(status_code=400, detail="Payment order does not belong to this account")
         client = _get_razorpay_client(settings)
-        order = client.order.fetch(razorpay_order_id)
+        order = await asyncio.to_thread(client.order.fetch, razorpay_order_id)
         notes = order.get("notes") or {}
         plan_id = notes.get("plan_id")
         if not plan_id and resolved.get("source") == "payment_orders":
@@ -392,7 +348,7 @@ async def verify_payment(
         # produced the payload, but only a live payment fetch proves the money
         # actually moved and equals the plan price — never trust the client.
         try:
-            payment = client.payment.fetch(razorpay_payment_id)
+            payment = await asyncio.to_thread(client.payment.fetch, razorpay_payment_id)
         except Exception as pay_exc:
             logger.error(f"Razorpay payment fetch failed for {razorpay_payment_id}: {pay_exc}")
             raise HTTPException(status_code=502, detail="Could not verify payment with Razorpay")
@@ -660,12 +616,16 @@ async def razorpay_webhook(request: Request):
 @router.post("/cancel")
 async def cancel_subscription(current_user: dict = Depends(get_current_user)):
     supabase = get_supabase_admin()
+    await asyncio.to_thread(_reject_team_member, supabase, current_user["id"])
 
     try:
+        target = _target_subscription_row(supabase, current_user["id"])
+        if not target or target.get("status") != "active":
+            return {"status": "cancelled", "message": "No active subscription to cancel"}
         supabase.table("user_subscriptions").update({
             "status": "cancelled",
             "cancelled_at": datetime.now(timezone.utc).isoformat(),
-        }).eq("user_id", current_user["id"]).eq("status", "active").execute()
+        }).eq("id", target["id"]).execute()
         return {"status": "cancelled", "message": "Subscription cancelled"}
     except Exception as e:
         logger.error(f"Failed to cancel subscription: {e}")

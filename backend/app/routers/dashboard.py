@@ -18,7 +18,7 @@ router = APIRouter(prefix="/api/dashboard", tags=["Dashboard"])
 
 
 @router.get("/stats")
-async def get_dashboard_stats(
+def get_dashboard_stats(
     current_user: dict = Depends(get_current_user),
 ):
     """

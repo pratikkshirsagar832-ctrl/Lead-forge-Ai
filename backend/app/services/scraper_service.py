@@ -63,6 +63,34 @@ def _get_scraper_path() -> str:
     return path
 
 
+class _CsvRowCounter:
+    """Incremental row counter for a CSV that is still being written.
+
+    Reads only the bytes appended since the last call (the old full re-read
+    every 0.5s per shard blocked the event loop for every other request)."""
+
+    def __init__(self, path: str) -> None:
+        self.path = path
+        self.offset = 0
+        self.lines = 0
+        self._partial = b""
+
+    def count(self) -> int:
+        try:
+            with open(self.path, "rb") as f:
+                f.seek(self.offset)
+                chunk = f.read()
+        except OSError:
+            return max(0, self.lines - 1)
+        if chunk:
+            self.offset += len(chunk)
+            data = self._partial + chunk
+            parts = data.split(b"\n")
+            self._partial = parts.pop()  # last piece may be an unfinished line
+            self.lines += sum(1 for line in parts if line.strip())
+        return max(0, self.lines - 1)  # minus the header
+
+
 def _count_csv_rows(output_file: str) -> int:
     """Best-effort count of data rows in a (possibly still-writer) CSV."""
     try:
@@ -238,18 +266,23 @@ async def run_maps_scraper(
             if scraper_dir and os.path.isdir(scraper_dir):
                 cwd = scraper_dir
 
+        # Output goes to files, not pipes: nobody reads a pipe while the
+        # scraper runs, and a full 64KB pipe buffer would hang the process.
+        out_log = open(output_file + ".stdout.log", "wb")
+        err_log = open(output_file + ".stderr.log", "wb")
         try:
             proc = subprocess.Popen(
                 cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
+                stdout=out_log,
+                stderr=err_log,
                 cwd=cwd,
                 env={**os.environ},
             )
-        except FileNotFoundError:
+        except (FileNotFoundError, PermissionError):
+            out_log.close()
+            err_log.close()
             raise
-        except PermissionError:
-            raise
+        row_counter = _CsvRowCounter(output_file)
 
         hard_deadline = time.time() + max(1, int(timeout_seconds))
         soft_deadline = (
@@ -271,7 +304,7 @@ async def run_maps_scraper(
                 proc.kill()
                 terminated_early = True
                 break
-            count = _count_csv_rows(output_file)
+            count = row_counter.count()
             if count != last_count:
                 last_count = count
             if on_progress and now - last_report >= 1.0:
@@ -302,13 +335,25 @@ async def run_maps_scraper(
             await asyncio.sleep(0.5)
 
         try:
-            stdout, stderr = proc.communicate(timeout=10)
+            await asyncio.to_thread(proc.wait, 10)
         except subprocess.TimeoutExpired:
             proc.kill()
-            stdout, stderr = proc.communicate()
+            await asyncio.to_thread(proc.wait)
+        finally:
+            out_log.close()
+            err_log.close()
 
-        stdout = stdout.decode(errors="replace") if stdout else ""
-        stderr = stderr.decode(errors="replace") if stderr else ""
+        def _read_log(path: str) -> str:
+            try:
+                with open(path, "rb") as f:
+                    data = f.read()
+                os.remove(path)
+                return data.decode(errors="replace")
+            except OSError:
+                return ""
+
+        stdout = _read_log(output_file + ".stdout.log")
+        stderr = _read_log(output_file + ".stderr.log")
         if stdout:
             logger.info(f"[Scraper:{run_id}] stdout: {stdout[:1000]}")
         if stderr:

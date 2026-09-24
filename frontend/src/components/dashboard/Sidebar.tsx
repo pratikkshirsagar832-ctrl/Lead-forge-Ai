@@ -49,8 +49,9 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
 
   useEffect(() => {
     const fetchUser = async () => {
-      const { data: { user: u } } = await supabase.auth.getUser();
-      if (u) setUser(u);
+      // Local session read (no network): the API calls below verify it.
+      const { data: { session } } = await supabase.auth.getSession();
+      if (session?.user) setUser(session.user);
 
       try {
         const resp = await api.get('/api/auth/me');
@@ -65,8 +66,14 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
   }, []);
 
   const handleLogout = async () => {
-    await supabase.auth.signOut();
-    window.location.href = '/login';
+    // scope 'local': log out THIS device only. The default ('global') revokes
+    // every session of the account, logging out teammates / other devices
+    // that share the same agency login.
+    try {
+      await supabase.auth.signOut({ scope: 'local' });
+    } finally {
+      window.location.href = '/login';
+    }
   };
 
   const planBadge = subscription?.plan_name || 'Free';

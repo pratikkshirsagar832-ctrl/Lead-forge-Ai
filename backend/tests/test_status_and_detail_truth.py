@@ -112,9 +112,7 @@ def test_terminal_status_clears_stale_progress_and_uses_db_counts(monkeypatch):
     # A leftover live-progress entry from the finished run.
     hyperagent_service._progress_push("s1", "running", 999, 999, 999)
     try:
-        result = asyncio.run(
-            search_router.get_search_status("s1", current_user={"id": "u1"})
-        )
+        result = search_router.get_search_status("s1", current_user={"id": "u1"})
         assert result["hot_leads"] == 3          # DB truth, not the registry
         assert result["total_results"] == 3
         assert hyperagent_service.get_progress("s1") is None

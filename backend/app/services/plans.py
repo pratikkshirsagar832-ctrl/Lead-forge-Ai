@@ -189,3 +189,84 @@ def get_monthly_counters(supabase, user_id: str) -> dict:
         }
     except Exception:
         return {"searches_used": 0, "ai_used": 0, "leads_used": 0}
+
+
+def build_subscription_summary(supabase, user_id: str) -> dict:
+    """Everything the UI shows about a user's plan and usage, in ONE place.
+
+    Used by /api/auth/me and /api/subscriptions/current (blocking - call via
+    asyncio.to_thread). Team members see their OWNER's live plan and shared
+    quota pool; reserved (in-flight) leads count as used; the free plan is
+    always active (its monthly quota is the gate, not a trial clock).
+    """
+    eff = resolve_effective_subscription(supabase, user_id)
+    team_seat = eff.get("team_owner_id") is not None
+    source_row = eff.get("source_row") or get_latest_subscription_row(supabase, user_id) or {}
+
+    if eff["status"] == "expired_team":
+        # Owner lapsed / downgraded below seats: the seat is locked.
+        return {
+            "plan_id": "free", "plan_name": "Free", "status": "inactive",
+            "searches_per_month": 0, "searches_per_day": 0, "leads_per_month": 0, "leads_per_day": 0,
+            "ai_calls_monthly": 0, "remaining_searches": 0, "remaining_leads": 0, "searches_used": 0,
+            "ai_used": 0, "ai_remaining": 0, "linkedin_hq_leads_monthly": 0, "gmb_leads_monthly": 0,
+            "linkedin_hq_leads_used": 0, "gmb_leads_used": 0, "linkedin_hq_leads_remaining": 0,
+            "gmb_leads_remaining": 0, "current_period_start": None, "current_period_end": None,
+            "trial_end": None, "is_trial_expired": True, "is_team_seat": True,
+        }
+
+    plan_id = eff["plan_id"]
+    plan = get_plan_row(supabase, plan_id)
+    quota_user = quota_owner_id(eff, user_id)
+    month = datetime.now(timezone.utc).replace(day=1).date().isoformat()
+    try:
+        resp = supabase.table("monthly_usage").select("*").eq("user_id", quota_user) \
+            .eq("usage_month", month).limit(1).execute()
+        usage = (resp.data or [{}])[0] or {}
+    except Exception:  # noqa: BLE001 - table missing on very old schemas
+        usage = {}
+
+    def n(key: str) -> int:
+        try:
+            return int(usage.get(key, 0) or 0)
+        except (TypeError, ValueError):
+            return 0
+
+    searches_limit = get_monthly_limit(plan, "searches_per_month", "searches_per_day", 3)
+    leads_limit = get_monthly_limit(plan, "leads_per_month", "leads_per_day", 30)
+    ai_limit = get_monthly_limit(plan, "ai_calls_monthly", "ai_calls", 5)
+    li_limit = int(plan.get("linkedin_hq_leads_monthly", 0) or 0)
+    gmb_limit = int(plan.get("gmb_leads_monthly", 0) or 0)
+    li_remaining = max(0, li_limit - n("linkedin_hq_generated") - n("linkedin_hq_reserved"))
+    gmb_remaining = max(0, gmb_limit - n("gmb_generated") - n("gmb_reserved"))
+    searches_used = n("searches_used")
+    ai_used = n("ai_calls_used")
+    status = eff["status"]
+    is_trial_expired = status == "inactive" and (source_row.get("status") == "trial")
+
+    return {
+        "plan_id": plan_id,
+        "plan_name": plan.get("name", plan_id.title() if plan_id else "Free"),
+        "status": status,
+        "searches_per_month": searches_limit,
+        "searches_per_day": searches_limit,  # compat
+        "leads_per_month": leads_limit,
+        "leads_per_day": leads_limit,  # compat
+        "ai_calls_monthly": ai_limit,
+        "remaining_searches": max(0, searches_limit - searches_used),
+        "searches_used": searches_used,
+        "ai_used": ai_used,
+        "ai_remaining": max(0, ai_limit - ai_used),
+        "remaining_leads": li_remaining + gmb_remaining,
+        "linkedin_hq_leads_monthly": li_limit,
+        "gmb_leads_monthly": gmb_limit,
+        "linkedin_hq_leads_used": n("linkedin_hq_generated"),
+        "gmb_leads_used": n("gmb_generated"),
+        "linkedin_hq_leads_remaining": li_remaining,
+        "gmb_leads_remaining": gmb_remaining,
+        "current_period_start": source_row.get("current_period_start"),
+        "current_period_end": source_row.get("current_period_end"),
+        "trial_end": source_row.get("trial_end"),
+        "is_trial_expired": is_trial_expired,
+        "is_team_seat": team_seat,
+    }

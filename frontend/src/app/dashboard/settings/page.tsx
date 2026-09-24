@@ -14,7 +14,8 @@ export default function SettingsPage() {
   useEffect(() => {
     const fetchUser = async () => {
       try {
-        const { data: { user: u } } = await supabase.auth.getUser();
+        const { data: { session } } = await supabase.auth.getSession();
+        const u = session?.user ?? null;
         setUser(u);
       } catch (err) {
         console.error('Failed to fetch user:', err);

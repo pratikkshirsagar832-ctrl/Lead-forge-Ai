@@ -2,83 +2,84 @@
 
 export const dynamic = 'force-dynamic';
 
-import { useEffect, useState, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { supabase } from '@/lib/supabase';
+import { clearGuestSession } from '@/components/auth/AuthGuard';
 import { Loader2 } from 'lucide-react';
-
-function hasGuestSession(): boolean {
-  if (typeof window === 'undefined') return false;
-  return localStorage.getItem('hyperclients_guest') === 'true';
-}
 
 export default function AuthCallbackPage() {
   const router = useRouter();
   const [error, setError] = useState('');
-  const mountedRef = useRef(true);
+  const ran = useRef(false);
 
   useEffect(() => {
-    mountedRef.current = true;
+    if (ran.current) return; // the code can only be exchanged once
+    ran.current = true;
 
-    const redirectToLogin = () => {
-      if (mountedRef.current) router.replace('/login?error=auth_config');
+    const done = () => {
+      // A real login always wins over an old "continue as guest" flag.
+      clearGuestSession();
+      router.replace('/dashboard');
     };
 
-    const handleCallback = async () => {
+    (async () => {
       try {
-        if (hasGuestSession()) {
-          router.replace('/dashboard');
+        const query = new URLSearchParams(window.location.search);
+        const hash = new URLSearchParams(window.location.hash.replace(/^#/, ''));
+        const providerError = query.get('error_description') || hash.get('error_description');
+        if (providerError) {
+          setError(providerError);
           return;
         }
 
-        const hashParams = new URLSearchParams(window.location.hash.replace('#', '?'));
-        const queryParams = new URLSearchParams(window.location.search);
-
-        const code = queryParams.get('code');
+        const code = query.get('code');
         if (code) {
-          await supabase.auth.exchangeCodeForSession(code);
-          if (mountedRef.current) router.replace('/dashboard');
-          return;
+          const { error: exchangeError } = await supabase.auth.exchangeCodeForSession(code);
+          if (exchangeError) {
+            // Already exchanged (e.g. page reloaded) but a session exists: fine.
+            const { data: { session } } = await supabase.auth.getSession();
+            if (session) return done();
+            setError(exchangeError.message || 'Could not complete sign in.');
+            return;
+          }
+          return done();
         }
 
-        const accessToken = hashParams.get('access_token');
-        const refreshToken = hashParams.get('refresh_token');
+        const accessToken = hash.get('access_token');
+        const refreshToken = hash.get('refresh_token');
         if (accessToken && refreshToken) {
           const { error: sessionError } = await supabase.auth.setSession({
             access_token: accessToken,
             refresh_token: refreshToken,
-          } as { access_token: string; refresh_token: string });
-          if (!sessionError && mountedRef.current) router.replace('/dashboard');
-          else redirectToLogin();
-          return;
+          });
+          if (sessionError) {
+            setError(sessionError.message || 'Could not complete sign in.');
+            return;
+          }
+          return done();
         }
 
         const { data: { session } } = await supabase.auth.getSession();
-        if (mountedRef.current && session) {
-          router.replace('/dashboard');
-          return;
-        }
-
-        redirectToLogin();
+        if (session) return done();
+        setError('This sign-in link has expired or was already used. Please sign in again.');
       } catch (err) {
         console.error('Auth callback error:', err);
-        redirectToLogin();
+        setError('Could not complete sign in. Please check your connection and try again.');
       }
-    };
-
-    handleCallback();
+    })();
   }, [router]);
 
   if (error) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-navy font-sans">
-        <div className="text-center">
-           <p className="text-rose-400 mb-4">{String(error)}</p>
+      <div className="min-h-screen flex items-center justify-center bg-navy font-sans p-4">
+        <div className="text-center max-w-sm">
+          <p className="text-rose-400 mb-4">{error}</p>
           <button
-            onClick={() => router.push('/login?error=auth_config')}
+            onClick={() => router.replace('/login')}
             className="px-6 py-2 rounded-lg bg-steel text-offwhite font-semibold hover:opacity-90 transition-opacity"
           >
-            Back to Login
+            Back to login
           </button>
         </div>
       </div>

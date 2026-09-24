@@ -1,9 +1,10 @@
+import asyncio
 import logging
 import re
 from datetime import datetime, timezone
 
 import httpx
-from fastapi import APIRouter, Depends, HTTPException, Body
+from fastapi import APIRouter, Body, Depends, HTTPException, Request
 
 from app.config import get_settings
 from app.database import get_supabase_admin
@@ -227,236 +228,32 @@ async def remove_team_member(member_id: str, current_user: dict = Depends(get_cu
 
 
 @router.post("/team-resolve")
-async def resolve_team_username(payload: dict = Body(...)):
+async def resolve_team_username(request: Request, payload: dict = Body(...)):
     """Public: turn a team username into its login email so the standard
     Supabase password sign-in works without exposing synthetic emails."""
-    # Throttle by a best-effort caller key to bound username enumeration.
-    # No auth here by design; the bucket key is intentionally coarse.
-    try:
-        from fastapi import Request
-    except Exception:
-        Request = None  # type: ignore
     username = (payload.get("username") or "").strip().lower()
     if not USERNAME_RE.match(username):
         raise HTTPException(status_code=400, detail={"message": "Invalid username format"})
-    if _throttled(_resolve_hits, "global", _RESOLVE_WINDOW_S, _RESOLVE_MAX * 10):
+    # Throttle per caller IP (behind nginx: X-Real-IP / X-Forwarded-For) so one
+    # noisy client can never block every team member's login.
+    ip = (request.headers.get("x-real-ip") or (request.headers.get("x-forwarded-for") or "").split(",")[0].strip()
+          or (request.client.host if request.client else "unknown"))
+    if _throttled(_resolve_hits, ip, _RESOLVE_WINDOW_S, _RESOLVE_MAX):
         raise HTTPException(status_code=429, detail={"message": "Too many requests. Try again shortly."})
     return {"email": f"{username}@{MEMBER_EMAIL_DOMAIN}"}
 
 
 @router.get("/me")
 async def get_me(current_user: dict = Depends(get_current_user)):
-    supabase = get_supabase_admin()
+    """Profile + plan/usage summary for the dashboard shell (one query path,
+    run off the event loop; team members see the owner's shared pool)."""
+    from app.services.plans import build_subscription_summary
+
     subscription = None
-
-    # Monthly quotas (v16): searches / AI / generic leads reset on the 1st.
-    # daily_usage is reporting-only now.
-    from app.services.plans import (
-        get_monthly_limit,
-        get_monthly_counters,
-        quota_owner_id,
-    )
     try:
-        from app.services.plans import resolve_effective_subscription as _eff
-        _eff_row = _eff(supabase, current_user["id"])
-        quota_user = quota_owner_id(_eff_row, current_user["id"])
-    except Exception:
-        quota_user = current_user["id"]
-    month_str = datetime.now(timezone.utc).replace(day=1).date().isoformat()
-    try:
-        monthly = supabase.table("monthly_usage").select("*").eq("user_id", quota_user).eq("usage_month", month_str).limit(1).execute()
-        mu = (monthly.data or [{}])[0] if monthly.data else {}
-    except Exception:
-        mu = {}
-    used_searches = int(mu.get("searches_used", 0) or 0)
-    used_ai = int(mu.get("ai_calls_used", 0) or 0)
-    used_leads = 0  # computed per-plan below from monthly generated totals
-
-    try:
-        sub_resp = supabase.rpc(
-            "get_user_subscription",
-            {"p_user_id": current_user["id"]},
-        ).execute()
-        if sub_resp and sub_resp.data:
-            subscription = sub_resp.data
-            searches_per_month = int(subscription.get("searches_per_month") or subscription.get("searches_per_day", 3) or 3)
-            leads_per_month = int(subscription.get("leads_per_month") or subscription.get("leads_per_day", 30) or 30)
-            subscription["searches_per_month"] = searches_per_month
-            subscription["searches_per_day"] = searches_per_month  # compat
-            subscription["leads_per_month"] = leads_per_month
-            subscription["leads_per_day"] = leads_per_month  # compat
-            subscription["remaining_searches"] = max(0, searches_per_month - used_searches)
-            subscription["remaining_leads"] = max(0, leads_per_month - used_leads)
-
-            # Monthly usage
-            month_str = datetime.now(timezone.utc).replace(day=1).date().isoformat()
-            try:
-                monthly = supabase.table("monthly_usage").select("*").eq("user_id", current_user["id"]).eq("usage_month", month_str).limit(1).execute()
-                mu = (monthly.data or [{}])[0]
-            except Exception:
-                mu = {}
-            plan_row = supabase.table("plans").select("linkedin_hq_leads_monthly,gmb_leads_monthly").eq("id", subscription.get("plan_id", "free")).limit(1).execute()
-            plan_cols = (plan_row.data or [{}])[0] if plan_row.data else {}
-            subscription["linkedin_hq_leads_monthly"] = int(plan_cols.get("linkedin_hq_leads_monthly", 0) or 0)
-            subscription["gmb_leads_monthly"] = int(plan_cols.get("gmb_leads_monthly", 0) or 0)
-            subscription["linkedin_hq_leads_used"] = int(mu.get("linkedin_hq_generated", 0) or 0)
-            subscription["gmb_leads_used"] = int(mu.get("gmb_generated", 0) or 0)
-
-        # Direct-table truth check: team members resolve their plan LIVE
-        # from the owner's subscription (upgrades/renewals propagate instantly).
-        try:
-            from app.services.plans import get_plan_row, resolve_effective_subscription, get_used_today
-            eff = resolve_effective_subscription(supabase, current_user["id"])
-
-            if eff["status"] not in ("active", "trial"):
-                # Owner lapsed/downgraded below seats → lock the seat down.
-                if eff.get("team_owner_id") and (
-                    not subscription or subscription.get("plan_id") != "free"
-                ):
-                    subscription = {
-                        "plan_id": "free",
-                        "plan_name": "Free",
-                        "status": "inactive",
-                        "searches_per_month": 0,
-                        "searches_per_day": 0,
-                        "leads_per_month": 0,
-                        "leads_per_day": 0,
-                        "remaining_searches": 0,
-                        "remaining_leads": 0,
-                        "current_period_start": None,
-                        "current_period_end": None,
-                        "trial_end": None,
-                        "is_trial_expired": True,
-                        "is_team_seat": True,
-                    }
-            elif not subscription or subscription.get("plan_id") != eff["plan_id"]:
-                plan = get_plan_row(supabase, eff["plan_id"])
-                quota_u = quota_owner_id(eff, current_user["id"])
-                counters = get_monthly_counters(supabase, quota_u)
-                s_limit = get_monthly_limit(plan, "searches_per_month", "searches_per_day", 3)
-                l_limit = get_monthly_limit(plan, "leads_per_month", "leads_per_day", 30)
-                subscription = {
-                    "plan_id": eff["plan_id"],
-                    "plan_name": plan.get("name", eff["plan_id"]),
-                    "status": "active",
-                    "searches_per_month": s_limit,
-                    "searches_per_day": s_limit,
-                    "leads_per_month": l_limit,
-                    "leads_per_day": l_limit,
-                    "remaining_searches": max(0, s_limit - counters["searches_used"]),
-                    "remaining_leads": max(0, l_limit - counters["leads_used"]),
-                    "linkedin_hq_leads_monthly": int(plan.get("linkedin_hq_leads_monthly", 0) or 0),
-                    "gmb_leads_monthly": int(plan.get("gmb_leads_monthly", 0) or 0),
-                    "linkedin_hq_leads_used": 0,
-                    "gmb_leads_used": 0,
-                    "current_period_start": None,
-                    "current_period_end": (eff.get("source_row") or {}).get("current_period_end"),
-                    "trial_end": None,
-                    "is_trial_expired": False,
-                    "is_team_seat": eff.get("team_owner_id") is not None,
-                }
-                # Monthly usage
-                month_str = datetime.now(timezone.utc).replace(day=1).date().isoformat()
-                try:
-                    monthly = supabase.table("monthly_usage").select("*").eq("user_id", current_user["id"]).eq("usage_month", month_str).limit(1).execute()
-                    mu = (monthly.data or [{}])[0]
-                    subscription["linkedin_hq_leads_used"] = int(mu.get("linkedin_hq_generated", 0) or 0)
-                    subscription["gmb_leads_used"] = int(mu.get("gmb_generated", 0) or 0)
-                except Exception:
-                    pass
-        except Exception as tbl_err:
-            logger.warning(f"Effective-plan resolution failed: {tbl_err}")
-    except Exception as e:
-        logger.warning(f"RPC get_user_subscription failed: {e}")
-
-    if not subscription:
-        try:
-            sub_resp = supabase.table("user_subscriptions") \
-                .select("*") \
-                .eq("user_id", current_user["id"]) \
-                .order("created_at", desc=True) \
-                .limit(1) \
-                .execute()
-
-            if sub_resp.data and len(sub_resp.data) > 0:
-                sub = sub_resp.data[0]
-                plan_id = sub.get("plan_id", "free")
-
-                plan_resp = supabase.table("plans") \
-                    .select("*") \
-                    .eq("id", plan_id) \
-                    .limit(1) \
-                    .execute()
-
-                plan = plan_resp.data[0] if plan_resp.data and len(plan_resp.data) > 0 else {}
-                s_limit = get_monthly_limit(plan, "searches_per_month", "searches_per_day", 3)
-                l_limit = get_monthly_limit(plan, "leads_per_month", "leads_per_day", 30)
-
-                subscription = {
-                    "plan_id": plan_id,
-                    "plan_name": plan.get("name", "Free"),
-                    "status": sub.get("status", "active"),
-                    "searches_per_month": s_limit,
-                    "searches_per_day": s_limit,
-                    "leads_per_month": l_limit,
-                    "leads_per_day": l_limit,
-                    "remaining_searches": max(0, s_limit - used_searches),
-                    "remaining_leads": max(0, l_limit - used_leads),
-                    "linkedin_hq_leads_monthly": int(plan.get("linkedin_hq_leads_monthly", 0) or 0),
-                    "gmb_leads_monthly": int(plan.get("gmb_leads_monthly", 0) or 0),
-                    "linkedin_hq_leads_used": 0,
-                    "gmb_leads_used": 0,
-                    "current_period_start": sub.get("current_period_start"),
-                    "current_period_end": sub.get("current_period_end"),
-                    "trial_end": sub.get("trial_end"),
-                    "is_trial_expired": sub.get("is_trial_expired", False),
-                }
-                month_str = datetime.now(timezone.utc).replace(day=1).date().isoformat()
-                try:
-                    monthly = supabase.table("monthly_usage").select("*").eq("user_id", current_user["id"]).eq("usage_month", month_str).limit(1).execute()
-                    mu = (monthly.data or [{}])[0]
-                    subscription["linkedin_hq_leads_used"] = int(mu.get("linkedin_hq_generated", 0) or 0)
-                    subscription["gmb_leads_used"] = int(mu.get("gmb_generated", 0) or 0)
-                except Exception:
-                    pass
-        except Exception as e:
-            logger.error(f"Failed to fetch subscription directly: {e}")
-
-    # Lead quota is MONTHLY (the enforced cap comes from monthly_usage
-    # reservations). The daily `remaining_leads` above reads daily_usage,
-    # which is never incremented for leads — so it always showed the full cap
-    # and appeared to "reset daily". Override with the true monthly remaining
-    # per source so it resets on the 1st of the month, not every day.
-    if subscription:
-        try:
-            month_str = datetime.now(timezone.utc).replace(day=1).date().isoformat()
-            monthly = supabase.table("monthly_usage").select("*").eq("user_id", current_user["id"]).eq("usage_month", month_str).limit(1).execute()
-            mu = (monthly.data or [{}])[0] if monthly.data else {}
-        except Exception:
-            mu = {}
-        try:
-            from app.services.plans import get_plan_row
-            plan = get_plan_row(supabase, subscription.get("plan_id", "free"))
-        except Exception:
-            plan = {}
-        li_monthly = int(plan.get("linkedin_hq_leads_monthly", 0) or 0)
-        gmb_monthly = int(plan.get("gmb_leads_monthly", 0) or 0)
-        li_used = int(mu.get("linkedin_hq_generated", 0) or 0)
-        gmb_used = int(mu.get("gmb_generated", 0) or 0)
-        li_remaining = max(0, li_monthly - li_used)
-        gmb_remaining = max(0, gmb_monthly - gmb_used)
-        subscription["remaining_leads"] = li_remaining + gmb_remaining
-        subscription["linkedin_hq_leads_remaining"] = li_remaining
-        subscription["gmb_leads_remaining"] = gmb_remaining
-        subscription["linkedin_hq_leads_monthly"] = li_monthly
-        subscription["gmb_leads_monthly"] = gmb_monthly
-
-        # Searches + generic leads reset MONTHLY (v16, on the 1st).
-        _sub_limit = int(subscription.get("searches_per_month") or subscription.get("searches_per_day", 3) or 3)
-        subscription["remaining_searches"] = max(0, _sub_limit - used_searches)
-        subscription["searches_used"] = used_searches
-        subscription["ai_used"] = used_ai
-
+        subscription = await asyncio.to_thread(build_subscription_summary, get_supabase_admin(), current_user["id"])
+    except Exception as exc:  # noqa: BLE001 - the shell still renders without plan info
+        logger.warning("Subscription summary failed for %s: %s", current_user["id"], exc)
     return {
         "id": current_user["id"],
         "email": current_user["email"],

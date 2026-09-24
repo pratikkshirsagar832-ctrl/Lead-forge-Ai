@@ -338,10 +338,9 @@ async def _run_maps_search(
         "message": f"Searching Google Maps for '{niche}' in {location}...",
     })
 
-    def _on_progress(count: int) -> None:
-        if count <= 0:
-            return
-        pct = min(35, 10 + int((count / max(1, max_results)) * 25))
+    progress_state = {"last": -1}
+
+    def _write_progress(pct: int, count: int) -> None:
         try:
             supabase.table("searches").update({
                 "progress_percent": pct,
@@ -349,6 +348,19 @@ async def _run_maps_search(
             }).eq("id", search_id).execute()
         except Exception:
             pass
+
+    def _on_progress(count: int) -> None:
+        # Called from the event loop: the DB write goes to a worker thread
+        # (fire-and-forget) so a slow Supabase round-trip never stalls other
+        # users' requests; unchanged counts are not re-written at all.
+        if count <= 0 or count == progress_state["last"]:
+            return
+        progress_state["last"] = count
+        pct = min(35, 10 + int((count / max(1, max_results)) * 25))
+        try:
+            asyncio.get_running_loop().run_in_executor(None, _write_progress, pct, count)
+        except RuntimeError:  # no running loop (sync caller)
+            _write_progress(pct, count)
 
     try:
         # Parallel sharded run: 2 workers for <=20, 3 for <=50, 4 for 80-100.

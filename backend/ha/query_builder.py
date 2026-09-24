@@ -19,8 +19,14 @@ phrases, deliberately not service-specific.
 PACKED STYLE (QUERY_STYLE=packed, default): each buyer phrasing is QUOTED
 (exact-phrase match instead of bag-of-words) and 2-4 phrasings are OR-grouped
 into one query, e.g. ("looking for a video editor" OR "need a video editor")
--"we offer" ... — sharper results and ~3x the phrasings per Serper call.
+-"we offer" ... — sharper results and ~3x the phrasings per search call.
 QUERY_STYLE=legacy restores one unquoted phrasing per query.
+
+SINGLE STYLE (QUERY_STYLE=single, used with the SocialCrawl provider): ONE
+quoted buyer phrasing per query + the short negative tail, e.g.
+"can anyone recommend an accountant" -"we offer". SocialCrawl returns
+unrelated posts for OR-packs but sharp, fresh buyer posts for one quoted
+phrase, so every phrasing gets its own (parallel) call.
 """
 from __future__ import annotations
 
@@ -71,9 +77,15 @@ _QUOTED = re.compile(r'"([^"]+)"')
 
 def query_style(style: str | None = None) -> str:
     """Active emission style: "packed" (quoted exact phrases OR-grouped, the
-    default) or "legacy" (one unquoted phrasing per query)."""
+    default), "single" (one quoted phrasing per query) or "legacy" (one
+    unquoted phrasing per query)."""
     raw = (style or os.getenv("QUERY_STYLE", "packed") or "packed").strip().lower()
-    return "legacy" if raw == "legacy" else "packed"
+    return raw if raw in ("legacy", "single") else "packed"
+
+
+def _single(phrase: str) -> str:
+    """One quoted exact phrasing + the short sell-side negative tail."""
+    return _with_negatives(f'"{_clean_phrase(phrase)}"', PACKED_NEGATIVE_PHRASES)
 
 
 # Derive natural role nouns from service phrases ("video editing" -> "video
@@ -196,7 +208,7 @@ def pack_phrases(phrases: list[str], *, max_words: int = _PACK_MAX_WORDS,
 
     Quoting makes each phrasing an EXACT match (the biggest precision lever:
     unquoted phrasings match the words anywhere on the page); OR-packing lets
-    one Serper call cover 3-4 phrasings (recall per credit). Order-preserving
+    one search call cover 3-4 phrasings (recall per credit). Order-preserving
     and deterministic, so later iterations slice packs stably."""
     packs: list[str] = []
     cur: list[str] = []
@@ -525,9 +537,9 @@ def _raw_plan(service: str, lead_type: LeadType) -> tuple[list[str], list[str]]:
 
 # Round 0 in packed style covers the base set PLUS this many of the strongest
 # pool phrasings, so the very first discovery round already spans ~12 buyer
-# phrasings in ~4 Serper calls instead of 4 phrasings in 4 calls.
+# phrasings in ~4 search calls instead of 4 phrasings in 4 calls.
 _PACKED_BASE_EXTRA = 8
-_PACKED_BASE_MAX = 4  # round-0 Serper queries; overflow packs lead the pool
+_PACKED_BASE_MAX = 4  # round-0 search queries; overflow packs lead the pool
 
 
 def _loose_packs(service: str, lead_type: LeadType) -> list[str]:
@@ -545,6 +557,23 @@ def _loose_packs(service: str, lead_type: LeadType) -> list[str]:
     return [f'"{_clean_phrase(n)}" {group}' for n in nouns if _clean_phrase(n)]
 
 
+_SINGLE_BASE_MAX = 8  # round-0 queries in single style (one phrasing each)
+
+
+def _loose_singles(service: str, lead_type: LeadType) -> list[str]:
+    """Recall queries for single style: quoted noun AND quoted buyer verb
+    (two exact terms anywhere in the post, no OR-group)."""
+    svc, naked, _phrase = _split_service(service)
+    if lead_type == LeadType.NEED_AGENCY:
+        nouns = [_org_noun(svc) or f"{_ARTICLE.sub(r'\\2', svc)} agency"]
+        verbs = ("looking for", "recommend", "need")
+    else:
+        nouns = (role_variants(naked) or [naked])[:2]
+        verbs = ("looking for", "recommend", "need", "anyone know")
+    return [_with_negatives(f'"{_clean_phrase(n)}" "{v}"', PACKED_NEGATIVE_PHRASES)
+            for n in nouns if _clean_phrase(n) for v in verbs]
+
+
 def build_plan(service: str, lead_type: LeadType, style: str | None = None) -> QueryPlan:
     """Build the base set + a deterministic diversification pool.
 
@@ -557,6 +586,12 @@ def build_plan(service: str, lead_type: LeadType, style: str | None = None) -> Q
     then loose recall packs). style="legacy": one unquoted phrasing per query.
     """
     base_raw, pool_raw = _raw_plan(service, lead_type)
+    if query_style(style) == "single":
+        phrases = base_raw + pool_raw
+        return QueryPlan(
+            base=tuple(_single(p) for p in phrases[:_SINGLE_BASE_MAX]),
+            pool=tuple(_single(p) for p in phrases[_SINGLE_BASE_MAX:]) + tuple(_loose_singles(service, lead_type)),
+        )
     if query_style(style) == "legacy":
         return QueryPlan(
             base=tuple(_with_negatives(q) for q in base_raw),
@@ -763,6 +798,8 @@ def emit_queries(phrases: list[str], style: str | None = None) -> list[str]:
     """Ready-to-run queries for arbitrary phrasings in the active style."""
     if query_style(style) == "legacy":
         return [_with_negatives(_clean_phrase(p)) for p in phrases if _clean_phrase(p)]
+    if query_style(style) == "single":
+        return [_single(p) for p in phrases if _clean_phrase(p)]
     return [_with_negatives(p, PACKED_NEGATIVE_PHRASES) for p in pack_phrases(phrases)]
 
 
@@ -776,7 +813,7 @@ def next_queries(service: str, lead_type: LeadType, iteration: int,
     """Queries to run in engine `iteration` (0 = base set only).
 
     Later iterations consume NON-OVERLAPPING slices of a merged pool so every
-    Serper call in a round buys a genuinely fresh phrasing (the old
+    search call in a round buys a genuinely fresh phrasing (the old
     overlapping windows re-sent phrasings the engine had already run, and the
     re-added `base[:1]` slot was always filtered out as a repeat).
 
@@ -787,9 +824,9 @@ def next_queries(service: str, lead_type: LeadType, iteration: int,
     its positive phrasing with the shared negative seller terms.
 
     Per-round query count is CAPPED (never grows past ~8) so a single search
-    cannot burn unbounded Serper credits on a niche that yields no leads.
+    cannot burn unbounded search credits on a niche that yields no leads.
     In packed style each query carries 3-4 phrasings, so the same cap buys
-    ~3x the phrasing coverage per Serper call.
+    ~3x the phrasing coverage per search call.
     """
     style = query_style(style)
     plan = build_plan(service, lead_type, style)
@@ -797,7 +834,7 @@ def next_queries(service: str, lead_type: LeadType, iteration: int,
         return list(plan.base)
     # Dedupe on the individual POSITIVE phrasings (base/pool entries carry the
     # negative suffix, extra_pool entries do not — comparing raw strings would
-    # never match and duplicates would slip through to Serper).
+    # never match and duplicates would slip through to the provider).
     seen: set[str] = {p.lower() for q in plan.base for p in query_phrases(q)}
     fresh_extra: list[str] = []
     for q in extra_pool:
@@ -817,6 +854,13 @@ def next_queries(service: str, lead_type: LeadType, iteration: int,
             if key in seen:
                 continue
             seen.add(key)
+            merged.append(q)
+    elif style == "single":
+        merged = [_single(p) for p in fresh_extra]
+        for q in plan.pool:
+            phrases = query_phrases(q)
+            if len(phrases) == 1 and phrases[0].lower() in seen:
+                continue
             merged.append(q)
     else:
         # Expanded phrasings are packed on their own so they lead round 1;

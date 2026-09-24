@@ -1,7 +1,7 @@
 ﻿"""LIVE end-to-end smoke: real Supabase + real DeepSeek + full engine.
 
-Discovery is the offline corpus (real Google-SERP discovery needs a
-SERPER_API_KEY); everything else - engine, gates, DeepSeek structured
+Discovery is the offline corpus (real SocialCrawl discovery needs a
+SOCIALCRAWL_API_KEY); everything else - engine, gates, DeepSeek structured
 classification, Supabase CRUD - runs against the real services configured in
 backend/.env. Run:  python testing/live_e2e.py
 """
@@ -26,8 +26,8 @@ from testing.mock_providers import CORPUS, MockClassifier, MockDiscoveryClient  
 
 
 def main() -> int:
-    log.info("supabase configured=%s | llm configured=%s (provider %s) | serper configured=%s",
-             settings.storage_configured, settings.llm_configured, settings.llm_provider, settings.serp_configured)
+    log.info("supabase configured=%s | llm configured=%s (provider %s) | discovery configured=%s",
+             settings.storage_configured, settings.llm_configured, settings.llm_provider, settings.discovery_configured)
     assert settings.storage_configured, "SUPABASE_URL/SUPABASE_SERVICE_ROLE_KEY missing"
     assert settings.llm_configured, f"{settings.llm_key_env} missing"
 

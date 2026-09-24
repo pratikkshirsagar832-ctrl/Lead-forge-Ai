@@ -1,0 +1,237 @@
+"""SocialCrawl discovery client - the LinkedIn post search provider.
+
+    GET https://www.socialcrawl.dev/v1/linkedin/search/posts
+        ?query=<phrase>&sort_by=date_posted&date_posted=past_week&limit=25
+    x-api-key: sc_...
+
+What it returns (measured 2026-09): newest-first public LinkedIn posts with the
+FULL post text, an exact `published_at`, the author (display_name, username),
+engagement counts and a free relevance score (`computed.relevance.p`). Posts
+are typically hours old, and the text is complete, so no post-page fetch is
+needed for classification.
+
+Provider trade-offs (not bugs):
+* It reads a public search index of LinkedIn, not LinkedIn's own search, so
+  coverage is best-effort; a precise phrase can legitimately return 0 posts.
+* One QUOTED buyer phrase per query works best ("can anyone recommend"
+  accountant). OR-packed phrases return unrelated posts, so the engine uses
+  the "single" query style with this provider.
+* Negatives (-"we offer") are honoured, but then the relevance score is often
+  absent; a missing score never drops a post.
+* Billing: 1 credit per 5 posts returned; cache hits and empty results free.
+Every candidate still goes through the DeepSeek classifier upstream.
+"""
+from __future__ import annotations
+
+import logging
+import threading
+from concurrent.futures import ThreadPoolExecutor
+from datetime import UTC, datetime, timedelta
+from typing import Any
+
+import httpx
+
+from .base import (
+    DiscoveryClient,
+    DiscoveryConfigError,
+    DiscoveryError,
+    RawPost,
+    SearchBatchResult,
+    canonical_post_url,
+    parse_posted_at,
+    posted_at_from_url,
+)
+
+log = logging.getLogger(__name__)
+
+SEARCH_PATH = "/v1/linkedin/search/posts"
+MAX_LIMIT = 200
+
+
+def date_filter_for(since: datetime, now: datetime | None = None) -> str:
+    """SocialCrawl `date_posted` covering everything posted at/after `since`.
+
+    Rounds UP (never narrower than the requested window); the engine's
+    per-post date gate enforces the exact boundary."""
+    now = now or datetime.now(UTC)
+    if since.tzinfo is None:
+        since = since.replace(tzinfo=UTC)
+    age = now - since
+    if age <= timedelta(hours=24, minutes=30):
+        return "past_24h"
+    if age <= timedelta(days=7, minutes=30):
+        return "past_week"
+    return "past_month"
+
+
+def _int_or_none(value: Any) -> int | None:
+    try:
+        return None if value is None else int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+class SocialCrawlDiscoveryClient(DiscoveryClient):
+    name = "socialcrawl"
+
+    def __init__(
+        self,
+        api_key: str,
+        *,
+        base_url: str = "https://www.socialcrawl.dev",
+        results_per_query: int = 25,
+        min_relevance: float = 0.2,
+        timeout_seconds: float = 60.0,
+        max_workers: int = 8,
+    ) -> None:
+        if not api_key:
+            raise DiscoveryConfigError("SOCIALCRAWL_API_KEY is required")
+        self.api_key = api_key
+        self.base_url = base_url.rstrip("/")
+        self.default_results_per_query = max(1, min(int(results_per_query or 25), MAX_LIMIT))
+        self.min_relevance = float(min_relevance or 0.0)
+        self.timeout_seconds = timeout_seconds
+        self.max_workers = max(1, int(max_workers))
+        self._headers = {"x-api-key": api_key, "accept": "application/json"}
+        self.calls = 0
+        self.credits_used = 0
+        self.credits_remaining: int | None = None
+        self.relevance_dropped = 0
+        self._lock = threading.Lock()
+
+    @property
+    def config_errors(self) -> list[str]:
+        return [] if self.api_key else ["SOCIALCRAWL_API_KEY is not set - LinkedIn discovery cannot run"]
+
+    # ------------------------------------------------------------------ http
+    def _get(self, params: dict[str, Any]) -> dict[str, Any]:
+        with self._lock:
+            self.calls += 1
+        try:
+            resp = httpx.get(f"{self.base_url}{SEARCH_PATH}", params=params, headers=self._headers,
+                             timeout=self.timeout_seconds)
+        except httpx.HTTPError as exc:
+            raise DiscoveryError(f"SocialCrawl request failed: {exc}") from exc
+        try:
+            body = resp.json()
+        except ValueError:
+            body = {}
+        err = body.get("error") if isinstance(body, dict) else None
+        message = ""
+        if isinstance(err, dict):
+            message = str(err.get("message") or err.get("code") or "")
+        elif err:
+            message = str(err)
+        if resp.status_code in (401, 403):
+            raise DiscoveryConfigError(f"SocialCrawl rejected the API key (HTTP {resp.status_code}) {message}".strip())
+        if resp.status_code == 402 or "credit" in message.lower():
+            raise DiscoveryError(f"SocialCrawl is out of credits - top up the SocialCrawl account ({message or resp.status_code})")
+        if resp.status_code != 200 or not isinstance(body, dict) or body.get("success") is False:
+            raise DiscoveryError(f"SocialCrawl request failed (HTTP {resp.status_code}): {message or str(body)[:200]}")
+        with self._lock:
+            self.credits_used += int(body.get("credits_used") or 0)
+            if body.get("credits_remaining") is not None:
+                self.credits_remaining = _int_or_none(body.get("credits_remaining"))
+        return body
+
+    # --------------------------------------------------------------- mapping
+    def _map_item(self, item: Any, query: str) -> RawPost | None:
+        if not isinstance(item, dict):
+            return None
+        post = item.get("post") if isinstance(item.get("post"), dict) else item
+        url = str(post.get("url") or "").strip()
+        content = post.get("content") if isinstance(post.get("content"), dict) else {}
+        text = str(content.get("text") or post.get("text") or "").strip()
+        if not url or "linkedin.com" not in url.lower() or not text:
+            return None
+        relevance = ((item.get("computed") or {}).get("relevance") or {}) if isinstance(item.get("computed"), dict) else {}
+        p = relevance.get("p") if isinstance(relevance, dict) else None
+        if isinstance(p, (int, float)) and p < self.min_relevance:
+            with self._lock:
+                self.relevance_dropped += 1
+            return None
+        author = post.get("author") if isinstance(post.get("author"), dict) else {}
+        username = str(author.get("username") or "").strip().strip("/")
+        profile = ""
+        if username:
+            profile = username if username.startswith("http") else f"https://www.linkedin.com/in/{username}"
+        engagement = post.get("engagement") if isinstance(post.get("engagement"), dict) else {}
+        posted = parse_posted_at(post.get("published_at")) or posted_at_from_url(url)
+        return RawPost(
+            post_url=url,
+            text=text,
+            author_name=(str(author.get("display_name") or author.get("name") or "").strip() or None),
+            author_profile_url=profile or None,
+            posted_at=posted,
+            query_used=query,
+            provider=self.name,
+            num_comments=_int_or_none(engagement.get("comments")),
+            text_source="full_post",
+        )
+
+    def _fetch(self, query: str, date_posted: str, limit: int) -> tuple[list[RawPost], int]:
+        body = self._get({"query": query, "sort_by": "date_posted", "date_posted": date_posted, "limit": limit})
+        data = body.get("data") if isinstance(body.get("data"), dict) else {}
+        items = data.get("items") or []
+        posts = [p for p in (self._map_item(i, query) for i in items) if p is not None]
+        log.info("SocialCrawl %r %s -> %d items, %d kept (%s credits)", query[:160], date_posted,
+                 len(items), len(posts), body.get("credits_used"))
+        return posts, len(items)
+
+    # ---------------------------------------------------------------- search
+    def search_posts(
+        self,
+        queries: list[str],
+        since: datetime,
+        *,
+        results_per_query: int | None = None,
+        pages: int = 1,
+    ) -> SearchBatchResult:
+        queries = [q for q in (queries or []) if q and q.strip()]
+        if not queries:
+            return SearchBatchResult()
+        if since.tzinfo is None:
+            since = since.replace(tzinfo=UTC)
+        limit = max(1, min(int(results_per_query or self.default_results_per_query), MAX_LIMIT))
+        date_posted = date_filter_for(since)
+
+        def _run(query: str) -> tuple[str, list[RawPost], int, str | None]:
+            try:
+                posts, seen = self._fetch(query, date_posted, limit)
+                return query, posts, seen, None
+            except DiscoveryConfigError:
+                raise
+            except DiscoveryError as exc:
+                return query, [], 0, str(exc)
+            except Exception as exc:  # noqa: BLE001 - one query must not kill the round
+                return query, [], 0, f"query {query!r} failed: {exc}"
+
+        with ThreadPoolExecutor(max_workers=min(self.max_workers, len(queries))) as pool:
+            results = list(pool.map(_run, queries))
+
+        errors = [err for _q, _p, _s, err in results if err]
+        for err in errors:
+            log.warning("%s", err)
+        if errors and len(errors) == len(results):
+            # Every request failed: provider outage / no credits, never "no posts exist".
+            first = errors[0]
+            if "credit" in first.lower():
+                raise DiscoveryError(first)
+            raise DiscoveryError(f"All LinkedIn search requests failed this round: {first}")
+
+        seen_keys: set[str] = set()
+        unique: list[RawPost] = []
+        raw_rows = 0
+        for _q, posts, seen, _err in results:
+            raw_rows += seen
+            for p in posts:
+                key = canonical_post_url(p.post_url)
+                if key and key not in seen_keys:
+                    seen_keys.add(key)
+                    unique.append(p)
+        return SearchBatchResult(
+            posts=unique,
+            queries_used=queries,
+            provider_errors=errors,
+            raw_rows_seen=raw_rows,
+        )

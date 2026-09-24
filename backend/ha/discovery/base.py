@@ -1,12 +1,12 @@
-﻿"""DiscoveryClient interface - the single seam every provider plugs into.
+"""DiscoveryClient interface - the single seam every provider plugs into.
 
-Â§0: discovery = Google search over LinkedIn posts via a SERP API (Serper.dev
-style), i.e. "<query> site:linkedin.com/posts after:YYYY-MM-DD" - not
-LinkedIn-native scraping. Coverage is partial and lags 1-3 days (a tight
-query/window legitimately returns zero hits); every candidate still goes
-through DeepSeek classification upstream. The rest of the codebase only talks
-to search_posts() on this interface, so swapping the SERP vendor later never
-touches the engine.
+Discovery = keyword search over public LinkedIn posts. The production provider
+is SocialCrawl (discovery/socialcrawl_client.py), which searches a public index
+of LinkedIn and returns full post text, author and exact publish time.
+Coverage is best-effort (a tight query/window legitimately returns zero hits);
+every candidate still goes through DeepSeek classification upstream. The rest
+of the codebase only talks to search_posts() on this interface, so swapping
+the vendor never touches the engine.
 """
 from __future__ import annotations
 
@@ -37,8 +37,8 @@ class RawPost:
     posted_at: datetime | None = None  # timezone-aware UTC when known
     query_used: str = ""
     provider: str = "unknown"
-    # Comment count when the provider returns it (Apify actors do; Serper SERP
-    # rows typically do not). None = unknown => the comment ceiling never
+    # Comment count when the provider returns it (SocialCrawl does via
+    # engagement.comments). None = unknown => the comment ceiling never
     # drops an unknown-count post (the ceiling only rejects posts KNOWN to be
     # heavily contested).
     num_comments: int | None = None

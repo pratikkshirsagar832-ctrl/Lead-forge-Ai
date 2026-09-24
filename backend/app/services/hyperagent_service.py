@@ -27,7 +27,7 @@ os.environ.setdefault("SUPABASE_SERVICE_ROLE_KEY", "")
 from config import Settings as HaSettings  # noqa: E402
 from db import SupabaseStore as HaSupabaseStore, build_store as ha_build_store  # noqa: E402
 from discovery.base import DiscoveryClient  # noqa: E402
-from discovery.serp_client import SerperDiscoveryClient  # noqa: E402
+from discovery.socialcrawl_client import SocialCrawlDiscoveryClient  # noqa: E402
 from engine import run_search as ha_run_search  # noqa: E402
 from geography import normalize_country  # noqa: E402
 
@@ -38,7 +38,7 @@ _PROGRESS: dict[str, dict[str, Any]] = {}
 _PROGRESS_LOCK = threading.Lock()
 
 # Cancellation registry: the engine checks this between iterations so a user
-# cancel stops Serper/DeepSeek spend promptly instead of running to completion.
+# cancel stops search/DeepSeek spend promptly instead of running to completion.
 _CANCELLED: set[str] = set()
 _CANCEL_LOCK = threading.Lock()
 
@@ -122,9 +122,11 @@ def _ha_settings() -> HaSettings:
     os.environ["DEEPSEEK_API_KEY"] = main.deepseek_api_key or os.environ.get("DEEPSEEK_API_KEY", "")
     os.environ["SUPABASE_URL"] = main.supabase_url
     os.environ["SUPABASE_SERVICE_ROLE_KEY"] = main.supabase_service_role_key
-    os.environ["SERPER_API_KEY"] = main.serper_api_key or os.environ.get("SERPER_API_KEY", "")
-    os.environ.setdefault("SERPER_RESULTS_PER_QUERY", str(main.serper_results_per_query))
-    os.environ.setdefault("SERPER_PAGES_PER_QUERY", str(main.serper_pages_per_query))
+    os.environ["SOCIALCRAWL_API_KEY"] = main.socialcrawl_api_key or os.environ.get("SOCIALCRAWL_API_KEY", "")
+    os.environ.setdefault("SOCIALCRAWL_BASE_URL", main.socialcrawl_base_url)
+    os.environ.setdefault("SOCIALCRAWL_RESULTS_PER_QUERY", str(main.socialcrawl_results_per_query))
+    os.environ.setdefault("SOCIALCRAWL_MIN_RELEVANCE", str(main.socialcrawl_min_relevance))
+    os.environ["DISCOVERY_PROVIDER"] = "socialcrawl"
     os.environ.setdefault("LLM_PROVIDER", "deepseek")
     os.environ.setdefault("DEEPSEEK_MODEL", main.deepseek_model)
     # GLOBAL SEARCH: no country filter at all. STRICT_COUNTRY stays off so
@@ -141,43 +143,43 @@ def _ha_settings() -> HaSettings:
     os.environ["MIN_SERVICE_MATCH"] = "60"
     os.environ["MIN_INTENT_STRENGTH"] = "recommendation"
     # Credit safety: cap iterations/deadline/empty rounds so one search can
-    # never burn unbounded Serper calls on a niche with no leads. Parallel
-    # discovery + 4-page paging return candidates much faster per round, so
-    # iterations stay generous while the deadline bounds total wall time.
+    # never burn unbounded search credits on a niche with no leads. Parallel
+    # discovery returns 25 full posts per query, so iterations stay generous
+    # while the deadline bounds total wall time.
     os.environ["ENGINE_MAX_ITERATIONS"] = "40"
     os.environ["ENGINE_DEADLINE_SECONDS"] = "540"
     os.environ["ENGINE_EARLY_STOP_EMPTY_ROUNDS"] = "8"
     # Independent per-search spend ceilings (safety net beyond iterations).
-    # 4 pages/query burns more requests per round, so the Serper ceiling rises
-    # to keep the same number of full discovery rounds.
-    os.environ["MAX_SERPER_REQUESTS_PER_SEARCH"] = "80"
+    # One SocialCrawl request = one query x 25 posts = ~5 credits.
+    os.environ["MAX_DISCOVERY_REQUESTS_PER_SEARCH"] = "40"
     os.environ["MAX_DEEPSEEK_CALLS_PER_SEARCH"] = "150"
     # Model gate ON: with the v2 prompt (explicit need_agency scope, 6 new
     # traps, direction-first calibration) the model's own verdict is trusted —
     # a hedged is_qualified=false kills the candidate. Strict > volume.
     os.environ["REQUIRE_MODEL_QUALIFIED"] = "1"
     os.environ["STRICT_COUNTRY"] = "0"
-    # Engine v3 (setdefault = env-overridable kill switches for A/B runs):
-    # quoted OR-packed queries, newest-first freshness ladder, snippet-first
-    # full-text enrichment, discovery prefetch, and wider DeepSeek fan-out
-    # (DeepSeek has no hard concurrency limit; the per-search ceiling above
-    # still bounds total spend).
-    os.environ.setdefault("QUERY_STYLE", "packed")
-    os.environ.setdefault("FRESHNESS_LADDER", "3d")
-    os.environ.setdefault("FULLTEXT_ENRICH", "1")
-    os.environ.setdefault("MAX_ENRICH_PER_SEARCH", "20")
+    # SocialCrawl engine (setdefault = env-overridable for A/B runs):
+    # - one quoted buyer phrase per query ("single"; OR-packs return junk there),
+    # - no freshness ladder: results already come newest-first, a narrowed
+    #   round would only pay twice for the same queries,
+    # - no full-text enrichment: SocialCrawl returns the complete post text,
+    # - discovery prefetch + wide DeepSeek fan-out (the ceilings bound spend).
+    os.environ.setdefault("QUERY_STYLE", "single")
+    os.environ.setdefault("FRESHNESS_LADDER", "")
+    os.environ.setdefault("FULLTEXT_ENRICH", "0")
+    os.environ.setdefault("MAX_ENRICH_PER_SEARCH", "0")
     os.environ.setdefault("ENGINE_PREFETCH", "1")
     os.environ.setdefault("CLASSIFIER_CONCURRENCY", "16")
     os.environ.setdefault("VERIFY_POST_ALIVE", "1")
     # EXACT-N: the user gets exactly the leads they asked for (never more,
     # and never fewer while genuine leads exist). Budgets scale with N -
-    # requests up to ~13 leads keep the 80/150 base above; bigger requests
-    # get 6 Serper + 12 DeepSeek calls (and 12s) per lead, hard-capped. The
+    # requests up to ~10 leads keep the 40/150 base above; bigger requests
+    # get 4 search + 12 DeepSeek calls (and 12s) per lead, hard-capped. The
     # iteration cap is generous because the ceilings, deadline and empty-round
     # stop already bound the spend.
-    os.environ.setdefault("SERPER_REQUESTS_PER_LEAD", "6")
+    os.environ.setdefault("DISCOVERY_REQUESTS_PER_LEAD", "4")
     os.environ.setdefault("DEEPSEEK_CALLS_PER_LEAD", "12")
-    os.environ.setdefault("MAX_SERPER_REQUESTS_HARD", "400")
+    os.environ.setdefault("MAX_DISCOVERY_REQUESTS_HARD", "200")
     os.environ.setdefault("MAX_DEEPSEEK_CALLS_HARD", "1000")
     os.environ.setdefault("ENGINE_DEADLINE_SECONDS_PER_LEAD", "12")
     os.environ.setdefault("ENGINE_DEADLINE_HARD_SECONDS", "1200")
@@ -185,35 +187,18 @@ def _ha_settings() -> HaSettings:
     return HaSettings()
 
 
-# ISO alpha-2 → Serper `gl` (Google country bias). Serper wants lowercase,
-# e.g. "us", "gb", "in". Falls back to "" (no bias) when unknown.
-_GL_BY_CODE = {
-    "US": "us", "GB": "uk", "IN": "in", "CA": "ca", "AU": "au", "NZ": "nz",
-    "DE": "de", "FR": "fr", "NL": "nl", "BE": "be", "CH": "ch", "AT": "at",
-    "SE": "se", "NO": "no", "DK": "dk", "FI": "fi", "ES": "es", "IT": "it",
-    "PT": "pt", "IE": "ie", "AE": "ae", "SA": "sa", "QA": "qa", "KW": "kw",
-    "SG": "sg", "IL": "il", "JP": "jp", "KR": "kr", "TW": "tw", "CN": "cn",
-    "BR": "br", "MX": "mx", "AR": "ar", "CL": "cl", "CO": "co", "ZA": "za",
-    "NG": "ng", "KE": "ke", "EG": "eg", "PK": "pk", "BD": "bd", "PH": "ph",
-    "VN": "vn", "ID": "id", "TH": "th", "MY": "my", "TR": "tr", "PL": "pl",
-}
-
-
 def build_discovery(settings: HaSettings, country_code: str = "") -> DiscoveryClient:
-    if settings.serp_configured:
-        gl = _GL_BY_CODE.get((country_code or "").strip().upper(), "")
-        return SerperDiscoveryClient(
-            settings.serper_api_key,
-            base_url=settings.serper_base_url,
-            site_restriction=settings.serper_site_restriction,
-            results_per_query=settings.serper_results_per_query,
-            pages_per_query=settings.serper_pages_per_query,
-            gl=gl,
-            hl=settings.serper_hl,
-            timeout_seconds=settings.serper_timeout_seconds,
-            date_mode=settings.serper_date_mode,
-        )
-    raise RuntimeError("SERPER_API_KEY is not set — cannot run LinkedIn search")
+    """LinkedIn discovery = SocialCrawl (the only provider). `country_code` is
+    kept for API compatibility; country bias is applied in the query text."""
+    if not settings.discovery_configured:
+        raise RuntimeError("SOCIALCRAWL_API_KEY is not set - cannot run LinkedIn search")
+    return SocialCrawlDiscoveryClient(
+        settings.socialcrawl_api_key,
+        base_url=settings.socialcrawl_base_url,
+        results_per_query=settings.socialcrawl_results_per_query,
+        min_relevance=settings.socialcrawl_min_relevance,
+        timeout_seconds=settings.socialcrawl_timeout_seconds,
+    )
 
 
 def build_classifier(settings: HaSettings):
@@ -417,7 +402,7 @@ def _content_matches_requested_type(text: str, lead_type: str) -> bool:
     return True
 
 
-# Max concurrently-running Hyperagent engines. Each burns paid Serper +
+# Max concurrently-running Hyperagent engines. Each burns paid search +
 # DeepSeek calls, so users must not be able to stack unbounded parallel spend.
 _ENGINE_SLOT = threading.BoundedSemaphore(4)
 _ENGINE_SLOT_WAIT_S = 30.0

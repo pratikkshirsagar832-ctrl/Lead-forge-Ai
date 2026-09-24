@@ -10,7 +10,7 @@ early stop after consecutive zero-yield rounds), then slice to exactly N.
 
 Parallelism: the LLM query expansion runs alongside round 0's discovery, and
 the NEXT round's discovery is prefetched while the current round is being
-classified, so Serper and DeepSeek work overlap instead of taking turns.
+classified, so discovery and DeepSeek work overlap instead of taking turns.
 
 Freshness (newest first): early rounds search a narrower recent window
 (FRESHNESS_LADDER, e.g. last 24h, then last 3 days) before the full window, so
@@ -300,8 +300,8 @@ def _run_search(
     stop_reason = "target_reached"
     reject_rows: list[dict[str, Any]] = []
     max_iterations = max(1, settings.engine_max_iterations)
-    serp_cap = _scaled(settings.max_serper_requests_per_search or 0,
-                       settings.serper_requests_per_lead, settings.max_serper_requests_hard)
+    serp_cap = _scaled(settings.max_discovery_requests_per_search or 0,
+                       settings.discovery_requests_per_lead, settings.max_discovery_requests_hard)
     llm_cap = _scaled(settings.max_deepseek_calls_per_search or 0,
                       settings.deepseek_calls_per_lead, settings.max_deepseek_calls_hard)
     # Prior accept-rate used to decide whether the next round is needed; replaced
@@ -378,7 +378,7 @@ def _run_search(
         """Service text the deterministic templates are built from. A messy
         input (a sentence, a pitch, another language) uses the LLM's canonical
         service name once known - templates built from the raw sentence would
-        only burn Serper calls on phrases nobody writes."""
+        only burn discovery calls on phrases nobody writes."""
         if messy_input:
             exp = _expansion(_EXPANSION_WAIT_S)
             canon = [c for c in (getattr(exp, "canonical_services", None) or []) if c.strip()]
@@ -516,7 +516,7 @@ def _run_search(
         # iteration/deadline/empty-round logic. 0/None disables a ceiling.
         s_now, d_now = _call_counts()
         if (serp_cap > 0 and s_now >= serp_cap) or (llm_cap > 0 and d_now >= llm_cap):
-            detail = f"provider-spend ceiling reached (serper {s_now}/{serp_cap}, deepseek {d_now}/{llm_cap})"
+            detail = f"provider-spend ceiling reached (discovery {s_now}/{serp_cap}, deepseek {d_now}/{llm_cap})"
             stop_reason = "ceiling_hit"
             break
         # Cooperative cancel - lets a user cancel stop provider spend promptly.
@@ -632,7 +632,7 @@ def _run_search(
                     log.debug("content_filter raised for a candidate (kept for classifier)", exc_info=True)
             candidates.append(post)
 
-        # PIPELINE: start the NEXT round's discovery now, so Serper works while
+        # PIPELINE: start the NEXT round's discovery now, so discovery works while
         # DeepSeek classifies this round. Only when the next round is actually
         # likely to be needed (spend safety): under both ceilings, this round
         # cannot plausibly reach N on its own, and an empty round would not
@@ -817,14 +817,14 @@ def _run_search(
             break
         # CREDIT SAFETY: stop as soon as several rounds added NO new lead -
         # whether that round had zero posts or posts that all got rejected.
-        # Prevents a 0-lead niche from burning 200+ Serper calls.
+        # Prevents a 0-lead niche from burning 200+ discovery calls.
         if zero_yield_rounds >= settings.engine_early_stop_empty_rounds and iteration > 0:
             detail = f"{zero_yield_rounds} rounds in a row added nothing new; stopped early"
             stop_reason = "empty_rounds_stop"
             break
 
     # A prefetched round the loop no longer needs: let it finish in the
-    # background (its Serper calls are already paid) but never wait on it.
+    # background (its discovery calls are already paid) but never wait on it.
     if pending is not None:
         pending.cancel()
 
@@ -909,7 +909,7 @@ def _run_search(
             suffix += f". {CRAWL_LAG_NOTE}"
         final_detail = (final_detail + " | " if final_detail else "") + suffix
 
-    # Rate-limit UX: when we made many Serper calls but the source returned
+    # Rate-limit UX: when we made many discovery calls but the source returned
     # very few results (and few/no leads), tell the user it may be throttled
     # instead of an unexplained 0. Never hides a genuine shortage.
     if shortage and raw_found < 20:
@@ -939,7 +939,7 @@ def _run_search(
              "pref_dropped=%d content_dropped=%d classify_failed=%d type_mismatch=%d dup_owned=%d "
              "undated_dropped=%d stale_dropped=%d full_text=%d full_text_flipped=%d "
              "dead_dropped=%d filled_dropped=%d liveness_unknown=%d newest=%s "
-             "serper_requests=%d deepseek_calls=%d stop_reason=%s",
+             "discovery_requests=%d deepseek_calls=%d stop_reason=%s",
              search_id, status, raw_found, delivered, scanned, iterations,
              pref_dropped, dir_dropped, classify_failed, type_mismatch, dup_existing,
              undated_dropped, stale_dropped, enriched, enrich_flipped,

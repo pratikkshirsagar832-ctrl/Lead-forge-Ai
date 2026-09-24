@@ -157,7 +157,7 @@ async def create_search(
     effective_max_results = min(effective_max_results, reservation_amount)
 
     if request.source == "linkedin":
-        # Hyperagent engine: Serper.dev discovery + DeepSeek classification
+        # Hyperagent engine: SocialCrawl LinkedIn search + DeepSeek classification
         from app.services.hyperagent_service import (
             ha_lead_type_from,
             ha_time_window_from,

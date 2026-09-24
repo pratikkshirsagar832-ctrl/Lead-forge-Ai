@@ -38,7 +38,7 @@ def test_production_settings_are_tuned():
     assert settings.engine_max_iterations == 40
     assert settings.engine_deadline_seconds == 540
     assert settings.engine_early_stop_empty_rounds == 8
-    assert settings.max_serper_requests_per_search == 80
+    assert settings.max_discovery_requests_per_search == 40
     assert settings.max_deepseek_calls_per_search == 150
     # Strict one-direction modes (freelancer XOR agency) + trusted model verdict.
     assert settings.accept_sibling_buyers is False
@@ -46,14 +46,14 @@ def test_production_settings_are_tuned():
     assert settings.min_overall_score == 60.0
     assert settings.min_service_match == 60.0
     assert settings.min_intent_strength == "recommendation"
-    assert settings.serper_pages_per_query == 4
-    # Engine v3 defaults.
-    assert settings.query_style == "packed"
-    assert settings.freshness_ladder == "3d"
-    assert settings.fulltext_enrich is True
+    # SocialCrawl engine defaults.
+    assert settings.discovery_provider == "socialcrawl"
+    assert settings.socialcrawl_results_per_query == 25
+    assert settings.query_style == "single"
+    assert settings.freshness_ladder == ""
+    assert settings.fulltext_enrich is False
     assert settings.engine_prefetch is True
     assert settings.classifier_concurrency == 16
-    assert settings.serper_date_mode == "tbs"
 
 
 def test_production_settings_drive_exact_count_engine():
@@ -67,14 +67,14 @@ def test_production_settings_drive_exact_count_engine():
         engine_max_iterations=settings.engine_max_iterations,
         engine_deadline_seconds=settings.engine_deadline_seconds,
         engine_early_stop_empty_rounds=settings.engine_early_stop_empty_rounds,
-        max_serper_requests_per_search=settings.max_serper_requests_per_search,
+        max_discovery_requests_per_search=settings.max_discovery_requests_per_search,
         max_deepseek_calls_per_search=settings.max_deepseek_calls_per_search,
         accept_sibling_buyers=settings.accept_sibling_buyers,
         require_model_qualified=settings.require_model_qualified,
         min_overall_score=settings.min_overall_score,
         min_service_match=settings.min_service_match,
         min_intent_strength=settings.min_intent_strength,
-        serper_pages_per_query=settings.serper_pages_per_query,
+        query_style=settings.query_style,
     )
 
     from db import MemoryStore

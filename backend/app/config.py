@@ -57,18 +57,12 @@ class Settings(BaseSettings):
     # DeepSeek's chat model (deepseek-chat, DeepSeek-V3) — the classifier model.
     deepseek_model: str = "deepseek-chat"
 
-    # Serper.dev (Google SERP discovery for Hyperagent LinkedIn engine)
-    serper_api_key: str = ""
-    serper_base_url: str = "https://google.serper.dev"
-    serper_site_restriction: str = "linkedin.com/posts"
-    serper_results_per_query: int = 10
-    # 4 pages (~40 results/query) raises recall so searches hit the exact
-    # requested lead count; discovery pages run in parallel and the per-search
-    # Serper ceiling bounds the spend.
-    serper_pages_per_query: int = 4
-    serper_gl: str = ""
-    serper_hl: str = "en"
-    serper_timeout_seconds: float = 30.0
+    # SocialCrawl (LinkedIn post search for the Hyperagent lead engine - the
+    # only LinkedIn discovery provider). ~5 credits per query of 25 posts.
+    socialcrawl_api_key: str = ""
+    socialcrawl_base_url: str = "https://www.socialcrawl.dev"
+    socialcrawl_results_per_query: int = 25
+    socialcrawl_min_relevance: float = 0.2
 
     # Hyperagent engine settings
     hyperagent_max_iterations: int = 30

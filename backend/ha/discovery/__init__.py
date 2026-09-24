@@ -8,7 +8,7 @@ from .base import (
     canonical_post_url,
     parse_posted_at,
 )
-from .serp_client import SerperDiscoveryClient
+from .socialcrawl_client import SocialCrawlDiscoveryClient
 
 __all__ = [
     "DiscoveryClient",
@@ -18,5 +18,5 @@ __all__ = [
     "SearchBatchResult",
     "canonical_post_url",
     "parse_posted_at",
-    "SerperDiscoveryClient",
+    "SocialCrawlDiscoveryClient",
 ]

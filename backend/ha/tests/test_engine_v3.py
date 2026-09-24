@@ -254,7 +254,7 @@ def test_prefetch_overlaps_rounds_and_respects_serper_ceiling():
     run_search(sid, store=store, discovery=disc,
                classifier=TextClassifier(lambda c: _verdict(**_VAGUE)),
                settings=_settings(freshness_ladder="", engine_prefetch=True,
-                                  max_serper_requests_per_search=3,
+                                  max_discovery_requests_per_search=3,
                                   engine_early_stop_empty_rounds=50))
     # The ceiling check covers prefetched rounds too: never more than cap + 0.
     assert disc.calls <= 3

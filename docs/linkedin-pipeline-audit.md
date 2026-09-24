@@ -1,5 +1,7 @@
 # LinkedIn Lead Pipeline — Deep Audit Report
 
+> **Update (Sep 2026):** discovery no longer uses Serper. LinkedIn posts now come from **SocialCrawl** (`backend/ha/discovery/socialcrawl_client.py`, one quoted buyer phrase per query, full post text + exact publish time). Serper references below describe the old pipeline.
+
 **Date:** 2026-09-08 · **Scope:** read-only audit of the LinkedIn (Hyperagent) lead
 pipeline. No code was changed to produce this report. All file references are to
 `backend/` under the repo root unless prefixed otherwise.

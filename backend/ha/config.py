@@ -50,28 +50,19 @@ class Settings:
     supabase_url: str = field(default_factory=lambda: _str("SUPABASE_URL"))
     supabase_service_role_key: str = field(default_factory=lambda: _str("SUPABASE_SERVICE_ROLE_KEY"))
 
-    # Discovery — Google SERP API (Serper.dev-style wrapper over Google search)
-    discovery_provider: str = field(default_factory=lambda: _str("DISCOVERY_PROVIDER", "auto").lower())
+    # Discovery - SocialCrawl LinkedIn post search (the only LinkedIn source)
+    discovery_provider: str = field(default_factory=lambda: _str("DISCOVERY_PROVIDER", "socialcrawl").lower())
     mock_mode: bool = field(default_factory=lambda: _str("MOCK_MODE", "0") in {"1", "true", "yes"})
 
-    serper_api_key: str = field(default_factory=lambda: _str("SERPER_API_KEY"))
-    serper_base_url: str = field(default_factory=lambda: _str("SERPER_BASE_URL", "https://google.serper.dev"))
-    # Restriction appended to every query, e.g. "linkedin.com/posts".
-    serper_site_restriction: str = field(default_factory=lambda: _str("SERPER_SITE_RESTRICTION", "linkedin.com/posts"))
-    # Results per query. NOTE: Serper's FREE tier caps `num` at 10 and rejects
-    # larger values with HTTP 400 — keep at 10 unless you are on a paid plan.
-    serper_results_per_query: int = field(default_factory=lambda: _int("SERPER_RESULTS_PER_QUERY", 10))
-    # Pages of results to request per query. Google only returns ~10 posts per
-    # page, so paging surfaces more candidates (recall lever), but EVERY page is
-    # a separate paid Serper call — default 3 to hit exact lead counts; the
-    # per-search ceiling bounds the spend on zero-yield niches.
-    serper_pages_per_query: int = field(default_factory=lambda: max(1, min(_int("SERPER_PAGES_PER_QUERY", 3), 5)))
-    serper_gl: str = field(default_factory=lambda: _str("SERPER_GL", ""))   # optional Google country ('us', 'in', ...)
-    serper_hl: str = field(default_factory=lambda: _str("SERPER_HL", "en"))  # optional Google language
-    serper_timeout_seconds: float = field(default_factory=lambda: _float("SERPER_TIMEOUT_SECONDS", 30.0))
-    # Date filter: "tbs" = Google's native time filter param (qdr:d / qdr:dN /
-    # qdr:w); "after" = legacy in-query `after:YYYY-MM-DD` operator.
-    serper_date_mode: str = field(default_factory=lambda: _str("SERPER_DATE_MODE", "tbs").lower())
+    socialcrawl_api_key: str = field(default_factory=lambda: _str("SOCIALCRAWL_API_KEY"))
+    socialcrawl_base_url: str = field(default_factory=lambda: _str("SOCIALCRAWL_BASE_URL", "https://www.socialcrawl.dev"))
+    # Posts per query (1-200). SocialCrawl bills 1 credit per 5 posts returned.
+    socialcrawl_results_per_query: int = field(
+        default_factory=lambda: max(1, min(_int("SOCIALCRAWL_RESULTS_PER_QUERY", 25), 200)))
+    # Free provider-side relevance score: posts scored below this are dropped
+    # before DeepSeek (a MISSING score never drops a post).
+    socialcrawl_min_relevance: float = field(default_factory=lambda: _float("SOCIALCRAWL_MIN_RELEVANCE", 0.2))
+    socialcrawl_timeout_seconds: float = field(default_factory=lambda: _float("SOCIALCRAWL_TIMEOUT_SECONDS", 60.0))
 
     # Usage budget
     max_searches_per_day: int = field(default_factory=lambda: _int("MAX_SEARCHES_PER_DAY", 20))
@@ -90,17 +81,17 @@ class Settings:
     classifier_concurrency: int = field(default_factory=lambda: _int("CLASSIFIER_CONCURRENCY", 8))
     # Independent hard ceilings per search (regardless of iteration/deadline/
     # empty-round logic) — the safety net for pathological niches.
-    max_serper_requests_per_search: int = field(
-        default_factory=lambda: _int("MAX_SERPER_REQUESTS_PER_SEARCH", 60))
+    max_discovery_requests_per_search: int = field(
+        default_factory=lambda: _int("MAX_DISCOVERY_REQUESTS_PER_SEARCH", 60))
     max_deepseek_calls_per_search: int = field(
         default_factory=lambda: _int("MAX_DEEPSEEK_CALLS_PER_SEARCH", 150))
 
     # EXACT-N scaling: ceilings/deadline grow with the leads requested -
     # effective = max(base, per_lead * N), capped by the hard maximum. 0 per
     # lead = no scaling (the base values above apply to every request size).
-    serper_requests_per_lead: int = field(default_factory=lambda: _int("SERPER_REQUESTS_PER_LEAD", 0))
+    discovery_requests_per_lead: int = field(default_factory=lambda: _int("DISCOVERY_REQUESTS_PER_LEAD", 0))
     deepseek_calls_per_lead: int = field(default_factory=lambda: _int("DEEPSEEK_CALLS_PER_LEAD", 0))
-    max_serper_requests_hard: int = field(default_factory=lambda: _int("MAX_SERPER_REQUESTS_HARD", 0))
+    max_discovery_requests_hard: int = field(default_factory=lambda: _int("MAX_DISCOVERY_REQUESTS_HARD", 0))
     max_deepseek_calls_hard: int = field(default_factory=lambda: _int("MAX_DEEPSEEK_CALLS_HARD", 0))
     engine_deadline_seconds_per_lead: int = field(
         default_factory=lambda: _int("ENGINE_DEADLINE_SECONDS_PER_LEAD", 0))
@@ -110,7 +101,7 @@ class Settings:
     max_query_refills: int = field(default_factory=lambda: _int("MAX_QUERY_REFILLS", 2))
 
     # Query emission style: "packed" (quoted exact phrasings OR-grouped - more
-    # precise AND ~3x phrasings per Serper call) or "legacy" (one unquoted
+    # precise AND ~3x phrasings per search call) or "legacy" (one unquoted
     # phrasing per query). Kill switch for A/B runs.
     query_style: str = field(default_factory=lambda: _str("QUERY_STYLE", "packed").lower())
     # Freshness ladder (newest first): per-iteration discovery windows, e.g.
@@ -179,8 +170,8 @@ class Settings:
         return "DEEPSEEK_API_KEY" if self.llm_provider == "deepseek" else "OPENAI_API_KEY"
 
     @property
-    def serp_configured(self) -> bool:
-        return bool(self.serper_api_key)
+    def discovery_configured(self) -> bool:
+        return bool(self.socialcrawl_api_key)
 
 
 settings = Settings()

@@ -357,7 +357,7 @@ def test_engine_independent_spend_ceiling_stops_honestly():
 
     settings = dataclasses.replace(
         _settings(),
-        max_serper_requests_per_search=1,   # one request is the budget
+        max_discovery_requests_per_search=1,   # one request is the budget
         engine_early_stop_empty_rounds=99,  # never stop on empty rounds
         engine_max_iterations=10,
     )

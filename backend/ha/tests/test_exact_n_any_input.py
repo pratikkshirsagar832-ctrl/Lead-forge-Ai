@@ -168,7 +168,7 @@ def test_pool_refill_keeps_searching_until_n():
     sid = _search(store, needed=45)
     summary = run_search(sid, store=store, discovery=disc, classifier=Clf(), query_expander=expander,
                          settings=_settings(engine_max_iterations=80, engine_early_stop_empty_rounds=50,
-                                            max_serper_requests_per_search=0,
+                                            max_discovery_requests_per_search=0,
                                             max_deepseek_calls_per_search=0, max_query_refills=6))
     assert calls["refill"] >= 1
     assert summary.accepted == 45
@@ -182,7 +182,7 @@ def test_legacy_fallback_after_refills_are_exhausted():
     sid = _search(store, needed=60)
     run_search(sid, store=store, discovery=disc, classifier=Clf(),
                settings=_settings(engine_max_iterations=80, engine_early_stop_empty_rounds=50,
-                                  max_serper_requests_per_search=0, max_deepseek_calls_per_search=0))
+                                  max_discovery_requests_per_search=0, max_deepseek_calls_per_search=0))
     flat = [q for qs in disc.queries for q in qs]
     assert any(q.startswith("(") or q.startswith('"') for q in flat)       # packed first
     assert any(not q.startswith(("(", '"')) for q in flat)                 # then broad legacy
@@ -218,8 +218,8 @@ def test_budget_scales_with_leads_requested():
         store = MemoryStore()
         sid = _search(store, needed=needed)
         run_search(sid, store=store, discovery=disc, classifier=Clf(),
-                   settings=_settings(max_serper_requests_per_search=5, serper_requests_per_lead=2,
-                                      max_serper_requests_hard=30, engine_max_iterations=200,
+                   settings=_settings(max_discovery_requests_per_search=5, discovery_requests_per_lead=2,
+                                      max_discovery_requests_hard=30, engine_max_iterations=200,
                                       engine_early_stop_empty_rounds=500, max_query_refills=0))
         return disc.calls
 

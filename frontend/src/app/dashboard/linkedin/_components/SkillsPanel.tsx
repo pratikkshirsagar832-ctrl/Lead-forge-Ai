@@ -14,60 +14,64 @@ export interface Seed { topic: string; goal?: string; formula?: string; text?: s
 type ToolKey = 'audit' | 'repurpose' | 'hook' | 'plan' | 'profile' | 'interview' | 'comment' | 'replies' | 'advocacy';
 
 const TOOLS: { k: ToolKey; label: string; skill: string; desc: string; Icon: typeof ClipboardCheck }[] = [
-  { k: 'audit', label: 'Pre-publish audit', skill: 'humanizer · post-audit', Icon: ClipboardCheck,
-    desc: 'Pass/fail check of a draft against the 2026 checklist: blockers, warnings, AI tells per paragraph, timing and format.' },
-  { k: 'plan', label: 'Content planner', skill: 'content-planner', Icon: CalendarDays,
-    desc: 'A week of posts: pillar mix, formula per day, goal mix, posting times, daily comment targets and an inbound-readiness check.' },
-  { k: 'interview', label: 'Story interview', skill: 'interviewer', Icon: Mic,
-    desc: 'Answers a few sharp questions and saves the real numbers and stories to your story bank. Post mode turns one topic into a post spine.' },
+  { k: 'audit', label: 'Check a post', skill: 'humanizer · post-audit', Icon: ClipboardCheck,
+    desc: 'Paste any post and get a ready / fix-first verdict with exact fixes.' },
+  { k: 'plan', label: 'Plan my week', skill: 'content-planner', Icon: CalendarDays,
+    desc: 'A 7-day plan: what to post each day, when, and who to comment on.' },
+  { k: 'interview', label: 'Interview me', skill: 'interviewer', Icon: Mic,
+    desc: 'Answer a few questions; your real stories and numbers are saved so posts sound like you.' },
   { k: 'repurpose', label: 'Repurpose', skill: 'repurposer', Icon: Repeat2,
-    desc: 'Turn a blog, tweet, thread, newsletter or video transcript into a native LinkedIn post (re-hooked, expanded, links moved to the first comment).' },
-  { k: 'hook', label: 'Hook analyzer', skill: 'hook-extractor', Icon: ScanSearch,
-    desc: 'Paste a viral post: get its formula (F1-F20), structure, why it worked, a blank template and a hook for your niche.' },
-  { k: 'comment', label: 'Comment drafter', skill: 'comment-drafter', Icon: MessageSquare,
-    desc: '200-350 character comments on other people\'s posts (7 proven templates) or a short take for resharing.' },
+    desc: 'Turn a blog, tweet, newsletter or video script into a LinkedIn post.' },
+  { k: 'hook', label: 'Learn from a viral post', skill: 'hook-extractor', Icon: ScanSearch,
+    desc: 'See why a post worked and get the same structure for your topic.' },
+  { k: 'comment', label: 'Write a comment', skill: 'comment-drafter', Icon: MessageSquare,
+    desc: 'Smart comments on other people\'s posts, or a short take for resharing.' },
   { k: 'replies', label: 'Reply to comments', skill: 'reply-handler', Icon: Reply,
-    desc: 'Paste the comments on your post: low-value ones are filtered out, every one worth answering gets a reply.' },
-  { k: 'profile', label: 'Profile optimizer', skill: 'profile-optimizer', Icon: UserRound,
-    desc: '9-part profile scorecard with rewritten headline, About, Featured, Experience bullets, skills and banner.' },
+    desc: 'Paste the comments on your post and get a reply for each one worth answering.' },
+  { k: 'profile', label: 'Improve my profile', skill: 'profile-optimizer', Icon: UserRound,
+    desc: 'Score your profile and get a better headline, About section and more.' },
   { k: 'advocacy', label: 'Team advocacy', skill: 'employee-advocacy', Icon: Megaphone,
-    desc: 'Get a team posting: 14-day launch plan, cadence by role, governance and ROI metrics.' },
+    desc: 'A 14-day plan to get your whole team posting on LinkedIn.' },
 ];
 
 export function SkillsPanel({ onDraft, setError, setNotice }: {
   onDraft: (s: Omit<Seed, 'nonce'>) => void; setError: (s: string) => void; setNotice: (s: string) => void;
 }) {
-  const [tool, setTool] = useState<ToolKey>('audit');
-  const t = TOOLS.find((x) => x.k === tool)!;
+  const [tool, setTool] = useState<ToolKey | null>(null);
+  const t = TOOLS.find((x) => x.k === tool);
+
+  if (!t) {
+    return (
+      <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-3">
+        {TOOLS.map(({ k, label, desc, Icon }) => (
+          <button key={k} onClick={() => setTool(k)}
+                  className="text-left flex flex-col items-start justify-start h-full rounded-2xl bg-navy/60 border border-ocean/25 hover:border-steel/50 hover:bg-navy/80 transition-colors p-4">
+            <div className="w-9 h-9 rounded-xl bg-sky-500/10 flex items-center justify-center mb-3"><Icon className="w-4.5 h-4.5 text-sky-300" /></div>
+            <p className="text-sm font-semibold text-offwhite">{label}</p>
+            <p className="text-xs text-ice/55 mt-1 leading-relaxed">{desc}</p>
+          </button>
+        ))}
+      </div>
+    );
+  }
   return (
-    <div className="grid grid-cols-1 lg:grid-cols-4 gap-4">
-      <GlassCard className="p-2 lg:col-span-1 h-fit">
-        <nav className="flex lg:flex-col gap-1 overflow-x-auto">
-          {TOOLS.map(({ k, label, Icon }) => (
-            <button key={k} onClick={() => setTool(k)}
-                    className={`shrink-0 flex items-center gap-2 px-3 py-2 rounded-lg text-sm text-left ${tool === k ? 'bg-steel/20 text-offwhite font-semibold' : 'text-ice/55 hover:text-offwhite hover:bg-navy/60'}`}>
-              <Icon className="w-4 h-4 shrink-0" /> {label}
-            </button>
-          ))}
-        </nav>
-      </GlassCard>
-      <GlassCard className="p-5 lg:col-span-3 space-y-4">
-        <div>
-          <h2 className="text-base font-bold text-offwhite flex items-center gap-2"><t.Icon className="w-4 h-4 text-sky-300" /> {t.label}</h2>
-          <p className="text-xs text-ice/55 mt-1">{t.desc}</p>
-          <p className="text-[10px] text-ice/35 mt-1">Skill: linkedin-{t.skill} · uses your brand profile, voice and story bank · 1 AI credit</p>
-        </div>
-        {tool === 'audit' && <AuditTool setError={setError} />}
-        {tool === 'plan' && <PlanTool setError={setError} onDraft={onDraft} />}
-        {tool === 'interview' && <InterviewTool setError={setError} setNotice={setNotice} onDraft={onDraft} />}
-        {tool === 'repurpose' && <RepurposeTool setError={setError} onDraft={onDraft} />}
-        {tool === 'hook' && <HookTool setError={setError} onDraft={onDraft} />}
-        {tool === 'comment' && <CommentTool setError={setError} />}
-        {tool === 'replies' && <RepliesTool setError={setError} />}
-        {tool === 'profile' && <ProfileTool setError={setError} />}
-        {tool === 'advocacy' && <AdvocacyTool setError={setError} />}
-      </GlassCard>
-    </div>
+    <GlassCard className="p-5 space-y-4">
+      <div>
+        <button onClick={() => setTool(null)} className="text-xs text-ice/55 hover:text-offwhite mb-2">&larr; All tools</button>
+        <h2 className="text-base font-bold text-offwhite flex items-center gap-2"><t.Icon className="w-4 h-4 text-sky-300" /> {t.label}</h2>
+        <p className="text-xs text-ice/55 mt-1">{t.desc}</p>
+        <p className="text-[10px] text-ice/35 mt-1">Uses your brand profile, voice and story bank · 1 AI credit per run</p>
+      </div>
+      {tool === 'audit' && <AuditTool setError={setError} />}
+      {tool === 'plan' && <PlanTool setError={setError} onDraft={onDraft} />}
+      {tool === 'interview' && <InterviewTool setError={setError} setNotice={setNotice} onDraft={onDraft} />}
+      {tool === 'repurpose' && <RepurposeTool setError={setError} onDraft={onDraft} />}
+      {tool === 'hook' && <HookTool setError={setError} onDraft={onDraft} />}
+      {tool === 'comment' && <CommentTool setError={setError} />}
+      {tool === 'replies' && <RepliesTool setError={setError} />}
+      {tool === 'profile' && <ProfileTool setError={setError} />}
+      {tool === 'advocacy' && <AdvocacyTool setError={setError} />}
+    </GlassCard>
   );
 }
 

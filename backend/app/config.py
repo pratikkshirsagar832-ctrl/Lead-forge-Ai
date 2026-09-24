@@ -26,6 +26,9 @@ class Settings(BaseSettings):
     # SocialCrawl (LinkedIn post search for the Hyperagent lead engine - the
     # only LinkedIn discovery provider). ~5 credits per query of 25 posts.
     socialcrawl_api_key: str = ""
+    # Extra keys (comma separated). All env keys are imported into the
+    # socialcrawl_keys table and rotated automatically when one runs dry.
+    socialcrawl_api_keys: str = ""
     socialcrawl_base_url: str = "https://www.socialcrawl.dev"
     socialcrawl_results_per_query: int = 25
     socialcrawl_min_relevance: float = 0.2
@@ -41,6 +44,10 @@ class Settings(BaseSettings):
     api_rate_create_per_min: int = 20
     api_rate_read_per_min: int = 120
     public_api_base_url: str = "https://hyperclients.online"
+
+    # Shared secret between the Next.js /admin panel (server side) and the
+    # backend admin endpoints (/api/admin/*). Empty = admin endpoints disabled.
+    admin_api_token: str = ""
 
     # LinkedIn Studio — official LinkedIn API only. Two LinkedIn apps:
     #   member app: "Sign In with LinkedIn (OpenID Connect)" + "Share on LinkedIn"

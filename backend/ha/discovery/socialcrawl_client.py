@@ -31,6 +31,7 @@ from typing import Any
 
 import httpx
 
+from .keypool import KeyPool, PoolKey
 from .base import (
     DiscoveryClient,
     DiscoveryConfigError,
@@ -64,6 +65,44 @@ def date_filter_for(since: datetime, now: datetime | None = None) -> str:
     return "past_month"
 
 
+def _error_message(body: Any) -> str:
+    err = body.get("error") if isinstance(body, dict) else None
+    if isinstance(err, dict):
+        return str(err.get("message") or err.get("code") or "")
+    return str(err or "")
+
+
+def _is_credit_error(status: int, message: str) -> bool:
+    # Real response (2026-09): HTTP 402, error.type INSUFFICIENT_CREDITS,
+    # "Your account has 23 credits remaining. This endpoint requires 40..."
+    low = message.lower()
+    return status == 402 or "credit" in low or "insufficient" in low or "balance" in low
+
+
+def check_balance(api_key: str, *, base_url: str = "https://www.socialcrawl.dev",
+                  timeout: float = 30.0) -> dict[str, Any]:
+    """Live balance of one key via a FREE dry-run call (0 credits).
+
+    Returns {"ok": bool, "credits_remaining": int | None, "status": "active" |
+    "exhausted" | "invalid" | "error", "error": str}."""
+    try:
+        resp = httpx.get(f"{base_url.rstrip('/')}{SEARCH_PATH}",
+                         params={"query": "balance check", "limit": 1, "dry_run": 1},
+                         headers={"x-api-key": api_key, "accept": "application/json"}, timeout=timeout)
+        body = resp.json() if resp.content else {}
+    except (httpx.HTTPError, ValueError) as exc:
+        return {"ok": False, "credits_remaining": None, "status": "error", "error": str(exc)[:200]}
+    message = _error_message(body)
+    if resp.status_code in (401, 403):
+        return {"ok": False, "credits_remaining": None, "status": "invalid", "error": message or "invalid API key"}
+    remaining = _int_or_none(body.get("credits_remaining")) if isinstance(body, dict) else None
+    if _is_credit_error(resp.status_code, message) or remaining == 0:
+        return {"ok": True, "credits_remaining": remaining or 0, "status": "exhausted", "error": message}
+    if resp.status_code != 200:
+        return {"ok": False, "credits_remaining": remaining, "status": "error", "error": message or f"HTTP {resp.status_code}"}
+    return {"ok": True, "credits_remaining": remaining, "status": "active", "error": ""}
+
+
 def _int_or_none(value: Any) -> int | None:
     try:
         return None if value is None else int(value)
@@ -76,7 +115,7 @@ class SocialCrawlDiscoveryClient(DiscoveryClient):
 
     def __init__(
         self,
-        api_key: str,
+        api_key: str | list[str] | KeyPool,
         *,
         base_url: str = "https://www.socialcrawl.dev",
         results_per_query: int = 25,
@@ -84,15 +123,18 @@ class SocialCrawlDiscoveryClient(DiscoveryClient):
         timeout_seconds: float = 60.0,
         max_workers: int = 8,
     ) -> None:
-        if not api_key:
+        if isinstance(api_key, KeyPool):
+            pool = api_key
+        else:
+            pool = KeyPool.from_keys([api_key] if isinstance(api_key, str) else list(api_key or []))
+        if not len(pool):
             raise DiscoveryConfigError("SOCIALCRAWL_API_KEY is required")
-        self.api_key = api_key
+        self.pool = pool
         self.base_url = base_url.rstrip("/")
         self.default_results_per_query = max(1, min(int(results_per_query or 25), MAX_LIMIT))
         self.min_relevance = float(min_relevance or 0.0)
         self.timeout_seconds = timeout_seconds
         self.max_workers = max(1, int(max_workers))
-        self._headers = {"x-api-key": api_key, "accept": "application/json"}
         self.calls = 0
         self.credits_used = 0
         self.credits_remaining: int | None = None
@@ -101,38 +143,57 @@ class SocialCrawlDiscoveryClient(DiscoveryClient):
 
     @property
     def config_errors(self) -> list[str]:
-        return [] if self.api_key else ["SOCIALCRAWL_API_KEY is not set - LinkedIn discovery cannot run"]
+        return [] if len(self.pool) else ["SOCIALCRAWL_API_KEY is not set - LinkedIn discovery cannot run"]
 
     # ------------------------------------------------------------------ http
     def _get(self, params: dict[str, Any]) -> dict[str, Any]:
-        with self._lock:
-            self.calls += 1
-        try:
-            resp = httpx.get(f"{self.base_url}{SEARCH_PATH}", params=params, headers=self._headers,
-                             timeout=self.timeout_seconds)
-        except httpx.HTTPError as exc:
-            raise DiscoveryError(f"SocialCrawl request failed: {exc}") from exc
-        try:
-            body = resp.json()
-        except ValueError:
-            body = {}
-        err = body.get("error") if isinstance(body, dict) else None
-        message = ""
-        if isinstance(err, dict):
-            message = str(err.get("message") or err.get("code") or "")
-        elif err:
-            message = str(err)
-        if resp.status_code in (401, 403):
-            raise DiscoveryConfigError(f"SocialCrawl rejected the API key (HTTP {resp.status_code}) {message}".strip())
-        if resp.status_code == 402 or "credit" in message.lower():
-            raise DiscoveryError(f"SocialCrawl is out of credits - top up the SocialCrawl account ({message or resp.status_code})")
-        if resp.status_code != 200 or not isinstance(body, dict) or body.get("success") is False:
-            raise DiscoveryError(f"SocialCrawl request failed (HTTP {resp.status_code}): {message or str(body)[:200]}")
-        with self._lock:
-            self.credits_used += int(body.get("credits_used") or 0)
-            if body.get("credits_remaining") is not None:
-                self.credits_remaining = _int_or_none(body.get("credits_remaining"))
-        return body
+        """One search request with KEY ROTATION: a key that is out of credits
+        (or rejected) is taken out of the pool and the SAME request is retried
+        on the next key, so a search never stops because one key ran dry."""
+        tried: set[str] = set()
+        while True:
+            k: PoolKey | None = self.pool.acquire(tried)
+            if k is None:
+                if self.pool.revive():  # a topped-up key came back
+                    tried.clear()
+                    continue
+                statuses = {p.status for p in self.pool.keys}
+                if statuses and statuses <= {"invalid", "disabled"}:
+                    raise DiscoveryConfigError("SocialCrawl rejected every API key - check the keys in /admin/keys")
+                raise DiscoveryError("All SocialCrawl API keys are out of credits - add or top up a key in /admin/keys")
+            tried.add(k.key)
+            with self._lock:
+                self.calls += 1
+            try:
+                resp = httpx.get(f"{self.base_url}{SEARCH_PATH}", params=params,
+                                 headers={"x-api-key": k.key, "accept": "application/json"},
+                                 timeout=self.timeout_seconds)
+            except httpx.HTTPError as exc:
+                raise DiscoveryError(f"SocialCrawl request failed: {exc}") from exc
+            try:
+                body = resp.json()
+            except ValueError:
+                body = {}
+            message = _error_message(body)
+            if resp.status_code in (401, 403):
+                log.warning("SocialCrawl key ...%s rejected (HTTP %s) - switching key", k.hint, resp.status_code)
+                self.pool.invalid(k, message or f"HTTP {resp.status_code}")
+                continue
+            if _is_credit_error(resp.status_code, message):
+                log.warning("SocialCrawl key ...%s is out of credits - switching key", k.hint)
+                left = _int_or_none(body.get("credits_remaining")) if isinstance(body, dict) else None
+                self.pool.exhausted(k, message or "out of credits", remaining=left)
+                continue
+            if resp.status_code != 200 or not isinstance(body, dict) or body.get("success") is False:
+                raise DiscoveryError(f"SocialCrawl request failed (HTTP {resp.status_code}): {message or str(body)[:200]}")
+            used = int(body.get("credits_used") or 0)
+            remaining = _int_or_none(body.get("credits_remaining"))
+            with self._lock:
+                self.credits_used += used
+                if remaining is not None:
+                    self.credits_remaining = remaining
+            self.pool.report(k, used, remaining)
+            return body
 
     # --------------------------------------------------------------- mapping
     def _map_item(self, item: Any, query: str) -> RawPost | None:

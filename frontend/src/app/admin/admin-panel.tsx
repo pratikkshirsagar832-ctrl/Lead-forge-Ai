@@ -616,12 +616,17 @@ export default function AdminPanel() {
               .
             </p>
           </div>
-          <button
-            onClick={handleLogout}
-            className="btn-glass rounded-xl px-4 py-2 text-sm inline-flex items-center gap-2"
-          >
-            <LogOut className="w-4 h-4" /> Logout
-          </button>
+          <div className="flex items-center gap-2">
+            <Link href="/admin/keys" className="btn-glass rounded-xl px-4 py-2 text-sm inline-flex items-center gap-2">
+              API keys
+            </Link>
+            <button
+              onClick={handleLogout}
+              className="btn-glass rounded-xl px-4 py-2 text-sm inline-flex items-center gap-2"
+            >
+              <LogOut className="w-4 h-4" /> Logout
+            </button>
+          </div>
         </header>
 
         {notice && (

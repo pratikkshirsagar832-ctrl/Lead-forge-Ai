@@ -160,3 +160,80 @@ def test_single_style_emits_one_quoted_phrase_per_query():
         for q in next_queries("chartered accountant", LeadType.NEED_FREELANCER, i, style="single"):
             phrases = query_phrases(q)
             assert not (len(phrases) == 1 and phrases[0].lower() in base_phrases)
+
+
+# ------------------------------------------------------------- key rotation
+
+def test_rotates_to_next_key_when_credits_run_out(monkeypatch):
+    from discovery.keypool import KeyPool
+
+    used_keys: list[str] = []
+
+    def fake_get(url, params=None, headers=None, timeout=None):
+        key = headers["x-api-key"]
+        used_keys.append(key)
+        if key == "sc_dry":
+            return FakeResp(402, {"success": False, "error": {"message": "Insufficient credits"}})
+        if key == "sc_bad":
+            return FakeResp(401, {"success": False, "error": {"message": "invalid api key"}})
+        body = _body([_item("7", "Need an accountant for my startup")], credits=5)
+        body["credits_remaining"] = 40
+        return FakeResp(200, body)
+
+    monkeypatch.setattr(sc_mod.httpx, "get", fake_get)
+    changes, usage = [], []
+    pool = KeyPool.from_keys(["sc_dry", "sc_bad", "sc_good"])
+    pool._on_change = lambda k, reason: changes.append((k.key, k.status))
+    pool._on_usage = lambda k, credits, remaining: usage.append((k.key, credits, remaining))
+    client = SocialCrawlDiscoveryClient(pool)
+
+    res = client.search_posts(['"need an accountant"'], datetime.now(UTC) - timedelta(days=7))
+    assert len(res.posts) == 1 and res.provider_errors == []
+    assert used_keys == ["sc_dry", "sc_bad", "sc_good"]          # same request retried on each key
+    assert changes == [("sc_dry", "exhausted"), ("sc_bad", "invalid")]
+    assert usage == [("sc_good", 5, 40)]
+
+    used_keys.clear()
+    client.search_posts(['"need a plumber"'], datetime.now(UTC) - timedelta(days=7))
+    assert used_keys == ["sc_good"]                                # dead keys are skipped afterwards
+
+
+def test_all_keys_dry_revives_topped_up_key_or_fails(monkeypatch):
+    from discovery.keypool import KeyPool
+
+    topped_up = {"sc_a": False}
+
+    def fake_get(url, params=None, headers=None, timeout=None):
+        if headers["x-api-key"] == "sc_a" and topped_up["sc_a"]:
+            return FakeResp(200, _body([_item("8", "Looking for a video editor")], credits=5))
+        return FakeResp(402, {"success": False, "error": {"message": "Insufficient credits"}})
+
+    monkeypatch.setattr(sc_mod.httpx, "get", fake_get)
+
+    def refresher(k):
+        topped_up["sc_a"] = True
+        return 500 if k.key == "sc_a" else 0
+
+    pool = KeyPool.from_keys(["sc_a", "sc_b"])
+    pool._refresher = refresher
+    res = SocialCrawlDiscoveryClient(pool).search_posts(['"q"'], datetime.now(UTC) - timedelta(days=7))
+    assert len(res.posts) == 1  # sc_a came back after the balance check
+
+    with pytest.raises(DiscoveryError, match="out of credits"):
+        SocialCrawlDiscoveryClient(KeyPool.from_keys(["sc_x", "sc_y"])).search_posts(
+            ['"q1"', '"q2"'], datetime.now(UTC) - timedelta(days=7))
+
+
+def test_zero_balance_marks_key_exhausted_proactively(monkeypatch):
+    from discovery.keypool import KeyPool
+
+    def fake_get(url, params=None, headers=None, timeout=None):
+        body = _body([_item("9", "Need a lawyer")], credits=4)
+        body["credits_remaining"] = 0
+        return FakeResp(200, body)
+
+    monkeypatch.setattr(sc_mod.httpx, "get", fake_get)
+    pool = KeyPool.from_keys(["sc_last", "sc_next"])
+    SocialCrawlDiscoveryClient(pool).search_posts(['"q"'], datetime.now(UTC) - timedelta(days=7))
+    assert [k.status for k in pool.keys] == ["exhausted", "active"]
+    assert pool.acquire().key == "sc_next"

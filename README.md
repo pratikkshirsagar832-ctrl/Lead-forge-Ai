@@ -70,6 +70,8 @@ SUPABASE_SERVICE_ROLE_KEY=...
 DEEPSEEK_API_KEY=...            # lead classifier + LinkedIn Studio AI
 OPENAI_API_KEY=...              # pitches + website analysis
 SOCIALCRAWL_API_KEY=sc_...      # LinkedIn post search
+SOCIALCRAWL_API_KEYS=sc_...,sc_...  # more keys; rotated automatically when one runs out
+ADMIN_API_TOKEN=...             # long random secret, SAME value in frontend/.env.local
 RAZORPAY_KEY_ID=...             # payments (optional in dev)
 RAZORPAY_KEY_SECRET=...
 FRONTEND_URL=https://hyperclients.online
@@ -88,7 +90,8 @@ LINKEDIN_TOKEN_KEY=...          # Fernet key - never change once users connect
 NEXT_PUBLIC_SUPABASE_URL=https://xxx.supabase.co
 NEXT_PUBLIC_SUPABASE_ANON_KEY=...
 NEXT_PUBLIC_API_URL=http://localhost:8000
-ADMIN_PASSWORD=...              # /admin blog CMS
+ADMIN_PASSWORD=...              # /admin blog CMS + API keys page
+ADMIN_API_TOKEN=...             # same value as the backend
 ```
 
 ---
@@ -133,6 +136,10 @@ docs/                       documentation
 Details: `docs/03-LINKEDIN-PIPELINE.md` and `docs/linkedin-pipeline-audit.md`.
 
 ---
+
+## SocialCrawl keys (auto-rotation)
+
+All SocialCrawl keys live in one pool (`socialcrawl_keys` table, encrypted; migration v23). LinkedIn searches use the first active key; when it runs out of credits (HTTP 402) the **same request is retried on the next key** and the empty key is marked "Out of credits". Manage keys at **`/admin/keys`**: add (validated live), disable, remove, check balances, and see credits left / used / calls per key. Keys in `SOCIALCRAWL_API_KEY(S)` are imported automatically.
 
 ## Blog data
 

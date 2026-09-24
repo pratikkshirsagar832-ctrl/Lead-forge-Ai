@@ -10,7 +10,7 @@ from fastapi.responses import JSONResponse
 from app.config import get_settings
 from app.database import get_supabase_admin
 
-from app.routers import search, leads, dashboard, ai, auth, subscriptions, developer, public_api, linkedin_studio
+from app.routers import search, leads, dashboard, ai, auth, subscriptions, developer, public_api, linkedin_studio, admin_keys
 from app.middleware.api_key_auth import ApiError
 from app.public_docs import register_public_docs
 
@@ -121,6 +121,7 @@ def create_app() -> FastAPI:
     app.include_router(developer.router)
     app.include_router(linkedin_studio.router)
     app.include_router(public_api.router)
+    app.include_router(admin_keys.router)
     register_public_docs(app)
 
     # Public API (/v1): every error is {"error": {"code", "message", ...}}.

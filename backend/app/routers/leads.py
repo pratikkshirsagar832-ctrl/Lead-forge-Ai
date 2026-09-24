@@ -38,7 +38,6 @@ router = APIRouter(prefix="/api/leads", tags=["Leads"])
 _ALLOWED_USER_STATUS = {"new", "contacted", "replied", "converted", "lost"}
 _ALLOWED_LEAD_CATEGORY = {"hot", "warm"}
 _ALLOWED_SOURCE = {"", "google_maps", "linkedin", "all"}
-_ALLOWED_POST_TYPE = {"buyer", None, ""}
 
 
 def _sanitize_search(value: str | None, max_len: int = 100) -> str | None:

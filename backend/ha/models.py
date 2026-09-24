@@ -30,12 +30,6 @@ class LeadType(str, Enum):
     NEED_AGENCY = "need_agency"  # client/owner wants to hire an agency for their work
 
 
-LEAD_TYPE_LABELS: dict[LeadType, str] = {
-    LeadType.NEED_FREELANCER: "Need Freelancer",
-    LeadType.OUR_AGENCY: "Our Agency",
-    LeadType.NEED_AGENCY: "Need Agency",
-}
-
 # Sent the classifier may return when a candidate is not a qualified buyer.
 IRRELEVANT = "irrelevant"
 CLASSIFICATION_TYPES = tuple(t.value for t in LeadType) + (IRRELEVANT,)
@@ -134,8 +128,6 @@ class LeadClassification(BaseModel):
 # API schemas
 # ---------------------------------------------------------------------------
 
-_LEAD_ID_RE = re.compile(r"^[A-Za-z0-9-]+$")
-
 
 class SearchRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -160,44 +152,3 @@ class SearchRequest(BaseModel):
         return v.strip() if v else ""
 
 
-class LeadPatch(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    status: Literal["new", "contacted", "replied", "not_a_fit"] | None = None
-    notes: str | None = Field(default=None, max_length=5000)
-
-
-class SearchCreateResponse(BaseModel):
-    search_id: str
-    status: str = "queued"
-
-
-class UsageOut(BaseModel):
-    used: int
-    limit: int
-    remaining: int
-    resets_in_seconds: int | None = None
-
-
-class LeadOut(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
-
-    id: str
-    search_id: str | None = None
-    lead_type: str | None = None
-    time_window: str | None = None
-    post_url: str
-    author_name: str | None = None
-    author_profile_url: str | None = None
-    post_text: str | None = None
-    post_date: date | None = None
-    overall_quality_score: float | None = None
-    service_match_score: float | None = None
-    intent_strength: str | None = None
-    status: str = "new"
-    notes: str | None = None
-    created_at: datetime | None = None
-
-
-def now_utc() -> datetime:
-    return datetime.now(UTC)

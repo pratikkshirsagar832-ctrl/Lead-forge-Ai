@@ -29,9 +29,14 @@ RUN adduser --system --uid 1001 nextjs
 RUN npm install --no-save sharp@0.33
 
 COPY --from=builder /app/public ./public
-COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone ./ 	
+COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone ./
 COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
 COPY --from=builder --chown=nextjs:nodejs /app/data ./data
+
+# Blogs/drafts published from /admin live HERE (a Docker volume), never in the
+# git checkout - see lib/blog-store.ts. data/ only seeds it on first start.
+RUN mkdir -p /app/storage && chown nextjs:nodejs /app/storage
+ENV BLOGS_DATA_DIR=/app/storage
 
 USER nextjs
 

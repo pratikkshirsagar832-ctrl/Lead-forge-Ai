@@ -19,11 +19,9 @@ import html
 import json
 import logging
 import re
-from typing import Callable
 
 log = logging.getLogger(__name__)
 
-FetchFn = Callable[[str], "str | None"]
 
 _HEADERS = {
     "User-Agent": ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "

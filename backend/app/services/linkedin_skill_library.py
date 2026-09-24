@@ -128,5 +128,3 @@ def system_prompt(task: str) -> str:
     return "".join(parts)
 
 
-def available_tasks() -> list[str]:
-    return sorted(SKILLS)

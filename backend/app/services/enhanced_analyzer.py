@@ -23,15 +23,6 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
-IMPORTANT_PATHS = [
-    "/about", "/about-us", "/about-us/",
-    "/services", "/service", "/what-we-do",
-    "/pricing", "/price", "/plans", "/packages",
-    "/contact", "/contact-us", "/get-in-touch",
-    "/team", "/our-team", "/staff",
-    "/products", "/product",
-    "/faq", "/faqs",
-]
 
 SOCIAL_DOMAINS = {
     "facebook": ["facebook.com", "fb.com", "fb.me"],

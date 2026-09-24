@@ -36,8 +36,12 @@ services:
       - ./frontend/.env.local
     environment:
       - NEXT_PUBLIC_API_URL=http://backend:8000
+      # Published blogs/drafts: a named volume that survives git pull/reset,
+      # re-clones and image rebuilds. ./frontend/data is only the first-run seed.
+      - BLOGS_DATA_DIR=/app/storage
     volumes:
       - ./frontend/data:/app/data
+      - blog-data:/app/storage
     depends_on:
       - backend
     restart: unless-stopped
@@ -47,3 +51,6 @@ services:
 networks:
   leadforge:
     driver: bridge
+
+volumes:
+  blog-data:

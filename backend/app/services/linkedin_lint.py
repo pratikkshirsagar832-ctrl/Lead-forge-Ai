@@ -179,10 +179,6 @@ def lint(text: str, *, goal: str = "", length: str = "") -> dict[str, Any]:
     }
 
 
-def summary_line(report: dict[str, Any]) -> str:
-    return "; ".join(f"{i['rule']}: {i['fix']}" for i in report["blockers"] + report["warnings"][:4])
-
-
 _NUM = re.compile(r"(?<![\w.])(\d{1,3}(?:,\d{3})+|\d+(?:\.\d+)?)(?![\w])")
 
 

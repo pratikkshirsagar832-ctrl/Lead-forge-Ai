@@ -1,5 +1,7 @@
 # 05 — EXTERNAL SERVICES INTEGRATION
 
+> **Note (Sep 2026):** LinkedIn leads now come from **SocialCrawl + DeepSeek** (`backend/ha/`, `app/services/hyperagent_service.py`). Sections that mention Apify, Serper or `linkedin_pipeline.py` describe the old pipeline. See the README.
+
 ## Overview
 
 Lead Forge AI integrates with 4 external services:

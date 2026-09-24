@@ -1,5 +1,4 @@
 export const API_ROUTES = {
-  health: '/api/health',
   searches: {
     create: '/api/searches',
     list: '/api/searches',

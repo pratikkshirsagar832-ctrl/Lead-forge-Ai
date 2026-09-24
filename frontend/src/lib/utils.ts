@@ -57,18 +57,7 @@ export function formatNumber(n: number | null | undefined): string {
   return n.toLocaleString();
 }
 
-export function formatDuration(seconds: number): string {
-  const m = Math.floor(seconds / 60);
-  const s = Math.floor(seconds % 60);
-  return m > 0 ? `${m}m ${s}s` : `${s}s`;
-}
-
 export function truncate(text: string, max: number = 100): string {
   if (text.length <= max) return text;
   return text.slice(0, max) + '…';
-}
-
-export function getInitials(name: string | null | undefined): string {
-  if (!name) return '?';
-  return name.split(' ').map(w => w[0]).join('').toUpperCase().slice(0, 2);
 }

@@ -91,22 +91,6 @@ class _CsvRowCounter:
         return max(0, self.lines - 1)  # minus the header
 
 
-def _count_csv_rows(output_file: str) -> int:
-    """Best-effort count of data rows in a (possibly still-writer) CSV."""
-    try:
-        if not os.path.exists(output_file):
-            return 0
-        with open(output_file, "r", encoding="utf-8", errors="replace") as f:
-            # First line is the header; count non-empty remaining lines.
-            n = 0
-            for line in f:
-                if line.strip():
-                    n += 1
-            return max(0, n - 1)
-    except OSError:
-        return 0
-
-
 def _gmaps_tuning() -> dict:
     """Resolve speed tunables from Settings with env fallback.
 

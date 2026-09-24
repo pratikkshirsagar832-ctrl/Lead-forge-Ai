@@ -1,5 +1,7 @@
 # 03 — LINKEDIN PIPELINE
 
+> **Note (Sep 2026):** LinkedIn leads now come from **SocialCrawl + DeepSeek** (`backend/ha/`, `app/services/hyperagent_service.py`). Sections that mention Apify, Serper or `linkedin_pipeline.py` describe the old pipeline. See the README.
+
 This is the **core brain** of the application — `linkedin_pipeline.py` at 2,540 lines is the largest and most complex file.
 
 ---

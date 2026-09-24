@@ -15,8 +15,6 @@ from typing import Any, Iterable
 
 log = logging.getLogger(__name__)
 
-SEARCH_STATUSES = ("queued", "running", "completed", "failed", "no_results")
-
 
 def _utcnow() -> datetime:
     return datetime.now(UTC)

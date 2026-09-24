@@ -112,40 +112,6 @@ class DiscoveryClient(ABC):
 # names, so mapping is always "pick the first present candidate key").
 # ---------------------------------------------------------------------------
 
-def _to_text(value: Any) -> str:
-    if value is None:
-        return ""
-    return str(value).strip()
-
-
-def field_value(item: dict[str, Any], candidates: list[str]) -> Any:
-    """Pick the first present candidate field from a provider row.
-
-    Handles flat scalars and nested payloads ({"author": {...}}). When the
-    candidates are URL-ish, nested lookups prefer url keys; otherwise they
-    prefer name keys - so a row with only {"author": {"name": ...}} does not
-    masquerade as an author-profile URL.
-    """
-    want_url = any("url" in c.lower() for c in candidates)
-    nested_keys = ("url", "profileUrl", "profile_url", "personUrl", "handle") if want_url else (
-        "name", "fullName", "displayName", "username", "handle",
-    )
-    for key in candidates:
-        if key in item and item[key] not in (None, ""):
-            value = item[key]
-            if isinstance(value, dict):
-                for nk in nested_keys:
-                    if nk in value and value[nk] not in (None, ""):
-                        return value[nk]
-                return value
-            return value
-    author = item.get("author")
-    if isinstance(author, dict):
-        for nk in nested_keys:
-            if nk in author and author[nk] not in (None, ""):
-                return author[nk]
-    return None
-
 
 # LinkedIn activity / ugcPost / share ids are snowflake-style: the top 41 bits
 # are the publish time in epoch milliseconds (id >> 22). Every post permalink

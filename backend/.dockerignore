@@ -18,9 +18,6 @@ __pycache__/
 *.swp
 *.swo
 
-# Scrapling source (copied explicitly in Dockerfile)
-Scrapling/.git/
-Scrapling/__pycache__/
 
 # google-maps-scraper build artifacts (rebuilt in Dockerfile)
 google-maps-scraper/.git/

@@ -1,8 +1,6 @@
 from functools import lru_cache
-from pathlib import Path
 from typing import Literal
 
-from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -20,38 +18,6 @@ class Settings(BaseSettings):
 
     openai_api_key: str = ""
 
-    # Apify (search-page LinkedIn provider)
-    apify_api_key: str = ""
-    apify_api_key_2: str = ""
-    apify_api_key_3: str = ""
-    apify_api_key_4: str = ""
-    apify_api_key_5: str = ""
-    apify_api_key_6: str = ""
-    apify_api_key_7: str = ""
-    apify_api_key_8: str = ""
-    apify_api_key_9: str = ""
-    apify_api_key_10: str = ""
-    apify_api_key_11: str = ""
-    apify_api_key_12: str = ""
-    apify_api_key_13: str = ""
-    apify_api_key_14: str = ""
-    apify_api_key_15: str = ""
-    apify_api_key_16: str = ""
-    apify_api_key_17: str = ""
-    apify_api_key_18: str = ""
-    apify_api_key_19: str = ""
-    apify_api_key_20: str = ""
-    apify_api_key_21: str = ""
-    apify_api_key_22: str = ""
-    apify_api_key_23: str = ""
-    apify_api_key_24: str = ""
-
-    # LinkedIn public post-scraper actor (profile-URL -> public post history).
-    # The actor is private and owned by the account whose token is set here;
-    # when empty, the shared APIFY_API_KEY rotation is used as a fallback.
-    apify_post_scraper_actor_id: str = "2nZ0rjo0R3O4fzBy3"
-    apify_post_scraper_token: str = ""
-
     deepseek_api_key: str = ""
     deepseek_base_url: str = "https://api.deepseek.com"
     # DeepSeek's chat model (deepseek-chat, DeepSeek-V3) — the classifier model.
@@ -63,15 +29,6 @@ class Settings(BaseSettings):
     socialcrawl_base_url: str = "https://www.socialcrawl.dev"
     socialcrawl_results_per_query: int = 25
     socialcrawl_min_relevance: float = 0.2
-
-    # Hyperagent engine settings
-    hyperagent_max_iterations: int = 30
-    hyperagent_deadline_seconds: int = 1800
-    hyperagent_early_stop_rounds: int = 3
-    hyperagent_classifier_concurrency: int = 8
-    hyperagent_min_overall_score: float = 60.0
-    hyperagent_min_service_match: float = 50.0
-    hyperagent_min_intent_strength: str = "recommendation"
 
     # Public API v1 — pay per DELIVERED lead from a prepaid wallet (INR).
     api_price_linkedin_inr: int = 50
@@ -107,30 +64,16 @@ class Settings(BaseSettings):
     razorpay_agency_amount_inr: int = 0
 
     gmaps_scraper_path: str = "backend/google-maps-scraper/google-maps-scraper"
-    # Google Maps speed tuning (env-overridable). Fast-first: depth=1 in the
-    # hot path; website/email enrichment is on-demand, not blocking.
-    gmaps_concurrency: int = 16
-    # Total browser-tab budget across ALL parallel workers. Per-worker -c is
-    # derived as total // shards (clamped 6-16) so 4 workers x 24 can never
-    # OOM a 4vCPU box or trip Google rate limits (96 tabs killed our test).
-    gmaps_total_concurrency: int = 48
+    # Google Maps tuning (GMAPS_CONCURRENCY / _TOTAL_CONCURRENCY / _WORKERS /
+    # _DEPTH / _SOFT_DEADLINE_SECONDS / _TIMEOUT_SECONDS are read straight from
+    # the environment by scraper_service._gmaps_tuning).
     gmaps_stagger_seconds: float = 3.0
     # Throttled shards must WAIT OUT a Google cooldown, not suicide:
     # the old 12s inactivity exit killed 3/4 parallel workers with 0 rows.
     gmaps_shard_inactivity: str = "45s"
-    gmaps_workers: int = 4
-    gmaps_depth: int = 1
-    gmaps_soft_deadline_seconds: int = 55
-    gmaps_timeout_seconds: int = 70
     gmaps_exit_inactivity: str = "12s"
 
-    scrapling_proxy: str = ""
-    scrapling_solve_cloudflare: bool = True
-    scrapling_headless: bool = True
-
     frontend_url: str = "http://localhost:3000"
-    backend_url: str = "http://localhost:8000"
-    site_url: str = "http://localhost:3000"
 
     environment: Literal["development", "staging", "production"] = "development"
 
@@ -145,38 +88,9 @@ class Settings(BaseSettings):
         """Debug routes are only live when EXPLICITLY enabled AND not production."""
         return bool(self.enable_debug_routes) and not self.is_production
 
-    @model_validator(mode="after")
-    def _collect_apify_keys(self):
-        self._apify_keys = [
-            k for k in (
-                self.apify_api_key, self.apify_api_key_2, self.apify_api_key_3,
-                self.apify_api_key_4, self.apify_api_key_5, self.apify_api_key_6,
-                self.apify_api_key_7, self.apify_api_key_8, self.apify_api_key_9,
-                self.apify_api_key_10, self.apify_api_key_11, self.apify_api_key_12,
-                self.apify_api_key_13, self.apify_api_key_14, self.apify_api_key_15,
-                self.apify_api_key_16, self.apify_api_key_17, self.apify_api_key_18,
-                self.apify_api_key_19, self.apify_api_key_20, self.apify_api_key_21,
-                self.apify_api_key_22, self.apify_api_key_23, self.apify_api_key_24,
-            )
-            if k
-        ]
-        return self
-
-    @property
-    def apify_keys(self) -> list[str]:
-        return getattr(self, "_apify_keys", [k for k in (self.apify_api_key, self.apify_api_key_2) if k])
-
     @property
     def is_production(self) -> bool:
         return self.environment == "production"
-
-    @property
-    def scraper_binary_path(self) -> Path:
-        path = Path(self.gmaps_scraper_path)
-        if self.is_production:
-            if not path.is_absolute():
-                path = Path("/app") / path
-        return path.resolve()
 
     @property
     def cors_origins(self) -> list[str]:

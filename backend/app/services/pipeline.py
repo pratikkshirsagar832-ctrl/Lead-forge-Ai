@@ -12,7 +12,7 @@ import asyncio
 import logging
 import threading
 import time
-from datetime import date, datetime, timezone
+from datetime import datetime, timezone
 
 from app.database import get_supabase_admin
 from app.services.scraper_service import run_maps_scraper, run_maps_scraper_parallel
@@ -38,7 +38,6 @@ QUERY_VARIANT_LIMIT_LARGE = 10
 # Bulk-save chunk: 100 leads must not serialize on RPC round-trips.
 SAVE_CHUNK_SIZE = 25
 
-TERMINAL_STATUSES = ("completed", "failed", "cancelled")
 # Hard per-search cap for load-more batches (avoids unbounded paid scraper runs).
 MAX_SEARCH_LEADS_CAP = 100
 

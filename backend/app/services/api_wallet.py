@@ -16,8 +16,6 @@ from app.config import get_settings
 
 logger = logging.getLogger(__name__)
 
-SOURCES = ("linkedin", "google_maps")
-
 
 def price_per_lead_paise(source: str) -> int:
     settings = get_settings()

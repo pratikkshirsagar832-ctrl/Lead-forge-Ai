@@ -27,11 +27,28 @@ export interface BlogPost {
 
 const SEED_FILE = path.join(process.cwd(), 'data', 'blogs.json');
 
+/**
+ * Where posts are READ and WRITTEN. In production BLOGS_DATA_DIR points at a
+ * Docker volume outside the git checkout: the repo file (SEED_FILE) is only
+ * the initial content. Writing into the git-tracked data/ folder meant every
+ * deploy that reset or re-cloned the checkout silently wiped all posts
+ * published from the admin panel.
+ */
 function dataFile(): string {
-  if (process.env.BLOGS_DATA_DIR) {
-    return path.join(process.env.BLOGS_DATA_DIR, 'blogs.json');
+  const dir = process.env.BLOGS_DATA_DIR;
+  if (!dir) return SEED_FILE;
+  const file = path.join(dir, 'blogs.json');
+  // First run on an empty volume: start from the seed (which, on the server,
+  // is the bind-mounted copy holding the posts published so far).
+  if (!fs.existsSync(file) && fs.existsSync(SEED_FILE)) {
+    try {
+      fs.mkdirSync(dir, { recursive: true });
+      fs.copyFileSync(SEED_FILE, file);
+    } catch (err) {
+      console.error('[blog-store] seeding persistent store failed', err);
+    }
   }
-  return SEED_FILE;
+  return file;
 }
 
 // NOTE: deliberately NO in-memory cache here. Next.js bundles lib/ separately

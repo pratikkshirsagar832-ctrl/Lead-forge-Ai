@@ -199,5 +199,3 @@ async def get_current_user(
                             headers={"Retry-After": "2"})
 
 
-async def get_current_user_id(current_user: dict = Depends(get_current_user)) -> str:
-    return current_user["id"]

@@ -11,9 +11,8 @@ team instantly, with no sync jobs.
 """
 
 import logging
-from datetime import date, datetime, timezone
+from datetime import datetime, timezone
 
-from app.database import get_supabase_admin
 
 logger = logging.getLogger(__name__)
 
@@ -136,59 +135,6 @@ def get_monthly_limit(plan: dict, key: str, legacy_key: str, default: int) -> in
         return max(0, int(plan.get(legacy_key, default) or default))
     except (TypeError, ValueError):
         return default
-
-
-def get_used_today(supabase, user_id: str) -> tuple[int, int]:
-    today_str = datetime.now(timezone.utc).date().isoformat()
-    resp = supabase.table("daily_usage") \
-        .select("searches_run, leads_generated") \
-        .eq("user_id", user_id) \
-        .eq("date", today_str) \
-        .execute()
-    used = (resp.data or [{}])[0] or {}
-    return (used.get("searches_run", 0) or 0, used.get("leads_generated", 0) or 0)
-
-
-def get_monthly_searches_used(supabase, user_id: str) -> int:
-    """Count searches created for this user in the CURRENT calendar month.
-
-    The search allowance resets on the 1st of the month (not daily), so the
-    quota is measured against `searches.created_at >= month start`.
-    """
-    month_start = datetime.now(timezone.utc).replace(day=1)
-    resp = supabase.table("searches") \
-        .select("id", count="exact") \
-        .eq("user_id", user_id) \
-        .gte("created_at", month_start.isoformat()) \
-        .execute()
-    return int(resp.count or 0)
-
-
-def remaining_leads_today(supabase, user_id: str) -> int:
-    """Monthly generic lead allowance (v16): team-aware, owner pool."""
-    eff = resolve_effective_subscription(supabase, user_id)
-    plan = get_plan_row(supabase, eff["plan_id"])
-    quota_user = quota_owner_id(eff, user_id)
-    limit = get_monthly_limit(plan, "leads_per_month", "leads_per_day", 30)
-    used = get_monthly_counters(supabase, quota_user)
-    return max(0, limit - int(used.get("leads_used", 0) or 0))
-
-
-def get_monthly_counters(supabase, user_id: str) -> dict:
-    """searches_used / ai_calls_used / generic leads used this calendar month."""
-    month_str = datetime.now(timezone.utc).replace(day=1).date().isoformat()
-    try:
-        resp = supabase.table("monthly_usage") \
-            .select("searches_used,ai_calls_used,linkedin_hq_generated,gmb_generated") \
-            .eq("user_id", user_id).eq("usage_month", month_str).limit(1).execute()
-        row = (resp.data or [{}])[0] or {}
-        return {
-            "searches_used": int(row.get("searches_used", 0) or 0),
-            "ai_used": int(row.get("ai_calls_used", 0) or 0),
-            "leads_used": int(row.get("linkedin_hq_generated", 0) or 0) + int(row.get("gmb_generated", 0) or 0),
-        }
-    except Exception:
-        return {"searches_used": 0, "ai_used": 0, "leads_used": 0}
 
 
 def build_subscription_summary(supabase, user_id: str) -> dict:

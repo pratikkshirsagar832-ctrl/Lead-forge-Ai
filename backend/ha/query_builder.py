@@ -380,10 +380,6 @@ def _a(phrase: str) -> str:
     return "an" if first[:1] in "aeiou" else "a"
 
 
-def _words(naked: str) -> list[str]:
-    return _WORD.findall(naked)
-
-
 # ---------------------------------------------------------------------------
 # Per-lead-type phrasings (§6). {A} = article phrase ("a video editor"),
 # {S} = bare service as typed, {N} = service with any leading article stripped.

@@ -1,699 +1,694 @@
-"""Hyperagent service — runs the ORIGINAL standalone Hyperagent engine
-(backend/ha/) inside the main backend process.
-
-The engine and its modules are copied verbatim from backend/Hyperagent/backend
-(no rewrites). It persists to dedicated ha_searches / ha_leads tables in the
-same main Supabase project (see supabase/migration_ha_tables.sql).
-"""
-from __future__ import annotations
-
-import logging
-import os
-import re
-import sys
-import threading
-from datetime import UTC, datetime
-from pathlib import Path
-from typing import Any
-
-_HA_DIR = Path(__file__).resolve().parent.parent.parent / "ha"
-if str(_HA_DIR) not in sys.path:
-    sys.path.insert(0, str(_HA_DIR))
-
-# Original Hyperagent engine modules (imported as-is from backend/ha/)
-os.environ.setdefault("SUPABASE_URL", "")
-os.environ.setdefault("SUPABASE_SERVICE_ROLE_KEY", "")
-
-from config import Settings as HaSettings  # noqa: E402
-from db import SupabaseStore as HaSupabaseStore, build_store as ha_build_store  # noqa: E402
-from discovery.base import DiscoveryClient  # noqa: E402
-from discovery.socialcrawl_client import SocialCrawlDiscoveryClient  # noqa: E402
-from engine import run_search as ha_run_search  # noqa: E402
-from geography import normalize_country  # noqa: E402
-
-log = logging.getLogger(__name__)
-
-# In-process progress registry (polled by status endpoint)
-_PROGRESS: dict[str, dict[str, Any]] = {}
-_PROGRESS_LOCK = threading.Lock()
-
-# Cancellation registry: the engine checks this between iterations so a user
-# cancel stops search/DeepSeek spend promptly instead of running to completion.
-_CANCELLED: set[str] = set()
-_CANCEL_LOCK = threading.Lock()
-
-
-def request_cancel(search_id: str) -> None:
-    with _CANCEL_LOCK:
-        _CANCELLED.add(search_id)
-
-
-def _is_cancelled(search_id: str) -> bool:
-    with _CANCEL_LOCK:
-        return search_id in _CANCELLED
-
-
-def _clear_cancel(search_id: str) -> None:
-    with _CANCEL_LOCK:
-        _CANCELLED.discard(search_id)
-
-
-def _progress_push(search_id: str, stage: str, found: int, accepted: int, scanned: int, message: str = "") -> None:
-    with _PROGRESS_LOCK:
-        if len(_PROGRESS) > 500:
-            _PROGRESS.pop(next(iter(_PROGRESS)), None)
-        _PROGRESS[search_id] = {
-            "search_id": search_id, "stage": stage, "found": found,
-            "accepted": accepted, "scanned": scanned, "message": message,
-        }
-
-
-def get_progress(search_id: str) -> dict[str, Any] | None:
-    with _PROGRESS_LOCK:
-        return _PROGRESS.get(search_id)
-
-
-def clear_progress(search_id: str) -> None:
-    """Drop the live-progress entry for a finished search.
-
-    Entries were never removed, so a completed row could still be overwritten
-    by stale/live registry numbers on the next status poll.
-    """
-    with _PROGRESS_LOCK:
-        _PROGRESS.pop(search_id, None)
-
-
-def ha_normalize_country(value: str):
-    """Normalize free-text country → canonical code (original geography table)."""
-    return normalize_country(value)
-
-
-def ha_lead_type_from(lead_types) -> str:
-    """Map main-app lead_types (freelancer/agency) → Hyperagent type.
-
-    UI semantics (STRICT — one role per search, never mixed):
-      freelancer     -> need_freelancer : posts asking for a freelancer/person
-      agency         -> need_agency     : posts where a client seeks an agency
-      buyer (legacy) -> need_freelancer : old rows predate the role picker
-    Hiring / employee job-ads are never requested (filtered out by the store
-    content gate below).
-    """
-    requested = [str(t or "").strip().lower() for t in (lead_types or [])]
-    if "agency" in requested:
-        return "need_agency"
-    return "need_freelancer"
-
-
-def ha_time_window_from() -> str:
-    """Freshness window — STRICT: latest posts only.
-
-    7d window: the product promise is "the latest genuine buyers". An engine-
-    side fail-closed date gate (undated or older-than-window posts are never
-    delivered) keeps this honest even when Google's `after:` filter is loose.
-    """
-    return "7d"
-
-
-def _ha_settings() -> HaSettings:
-    """Build the original engine's Settings from main backend env vars."""
-    from app.config import get_settings as get_app_settings
-
-    main = get_app_settings()
-    os.environ["DEEPSEEK_API_KEY"] = main.deepseek_api_key or os.environ.get("DEEPSEEK_API_KEY", "")
-    os.environ["SUPABASE_URL"] = main.supabase_url
-    os.environ["SUPABASE_SERVICE_ROLE_KEY"] = main.supabase_service_role_key
-    os.environ["SOCIALCRAWL_API_KEY"] = main.socialcrawl_api_key or os.environ.get("SOCIALCRAWL_API_KEY", "")
-    os.environ.setdefault("SOCIALCRAWL_BASE_URL", main.socialcrawl_base_url)
-    os.environ.setdefault("SOCIALCRAWL_RESULTS_PER_QUERY", str(main.socialcrawl_results_per_query))
-    os.environ.setdefault("SOCIALCRAWL_MIN_RELEVANCE", str(main.socialcrawl_min_relevance))
-    os.environ["DISCOVERY_PROVIDER"] = "socialcrawl"
-    os.environ.setdefault("LLM_PROVIDER", "deepseek")
-    os.environ.setdefault("DEEPSEEK_MODEL", main.deepseek_model)
-    # GLOBAL SEARCH: no country filter at all. STRICT_COUNTRY stays off so
-    # every country's genuine buyers are accepted.
-    # STRICT role split: one search = exactly ONE buyer direction. Sibling
-    # acceptance is OFF so a freelancer search can never deliver agency
-    # posts and vice versa ("no any other").
-    os.environ["ACCEPT_SIBLING_BUYERS"] = "0"
-    os.environ["MIN_OVERALL_SCORE"] = "60"
-    # MIN_SERVICE_MATCH=60: the earlier 45 let "adjacent craft" posts through
-    # (a social-media-agency ask delivered for a "video editing" search scored
-    # match=70). Genuine buyer posts score 70-90, so 60 drops the weakest
-    # look-alikes with margin.
-    os.environ["MIN_SERVICE_MATCH"] = "60"
-    os.environ["MIN_INTENT_STRENGTH"] = "recommendation"
-    # Credit safety: cap iterations/deadline/empty rounds so one search can
-    # never burn unbounded search credits on a niche with no leads. Parallel
-    # discovery returns 25 full posts per query, so iterations stay generous
-    # while the deadline bounds total wall time.
-    os.environ["ENGINE_MAX_ITERATIONS"] = "40"
-    os.environ["ENGINE_DEADLINE_SECONDS"] = "540"
-    os.environ["ENGINE_EARLY_STOP_EMPTY_ROUNDS"] = "8"
-    # Independent per-search spend ceilings (safety net beyond iterations).
-    # One SocialCrawl request = one query x 25 posts = ~5 credits.
-    os.environ["MAX_DISCOVERY_REQUESTS_PER_SEARCH"] = "40"
-    os.environ["MAX_DEEPSEEK_CALLS_PER_SEARCH"] = "150"
-    # Model gate ON: with the v2 prompt (explicit need_agency scope, 6 new
-    # traps, direction-first calibration) the model's own verdict is trusted —
-    # a hedged is_qualified=false kills the candidate. Strict > volume.
-    os.environ["REQUIRE_MODEL_QUALIFIED"] = "1"
-    os.environ["STRICT_COUNTRY"] = "0"
-    # SocialCrawl engine (setdefault = env-overridable for A/B runs):
-    # - one quoted buyer phrase per query ("single"; OR-packs return junk there),
-    # - no freshness ladder: results already come newest-first, a narrowed
-    #   round would only pay twice for the same queries,
-    # - no full-text enrichment: SocialCrawl returns the complete post text,
-    # - discovery prefetch + wide DeepSeek fan-out (the ceilings bound spend).
-    os.environ.setdefault("QUERY_STYLE", "single")
-    os.environ.setdefault("FRESHNESS_LADDER", "")
-    os.environ.setdefault("FULLTEXT_ENRICH", "0")
-    os.environ.setdefault("MAX_ENRICH_PER_SEARCH", "0")
-    os.environ.setdefault("ENGINE_PREFETCH", "1")
-    os.environ.setdefault("CLASSIFIER_CONCURRENCY", "16")
-    os.environ.setdefault("VERIFY_POST_ALIVE", "1")
-    # EXACT-N: the user gets exactly the leads they asked for (never more,
-    # and never fewer while genuine leads exist). Budgets scale with N -
-    # requests up to ~10 leads keep the 40/150 base above; bigger requests
-    # get 4 search + 12 DeepSeek calls (and 12s) per lead, hard-capped. The
-    # iteration cap is generous because the ceilings, deadline and empty-round
-    # stop already bound the spend.
-    os.environ.setdefault("DISCOVERY_REQUESTS_PER_LEAD", "4")
-    os.environ.setdefault("DEEPSEEK_CALLS_PER_LEAD", "12")
-    os.environ.setdefault("MAX_DISCOVERY_REQUESTS_HARD", "200")
-    os.environ.setdefault("MAX_DEEPSEEK_CALLS_HARD", "1000")
-    os.environ.setdefault("ENGINE_DEADLINE_SECONDS_PER_LEAD", "12")
-    os.environ.setdefault("ENGINE_DEADLINE_HARD_SECONDS", "1200")
-    os.environ.setdefault("MAX_QUERY_REFILLS", "6")
-    return HaSettings()
-
-
-def build_discovery(settings: HaSettings, country_code: str = "") -> DiscoveryClient:
-    """LinkedIn discovery = SocialCrawl (the only provider). `country_code` is
-    kept for API compatibility; country bias is applied in the query text."""
-    if not settings.discovery_configured:
-        raise RuntimeError("SOCIALCRAWL_API_KEY is not set - cannot run LinkedIn search")
-    return SocialCrawlDiscoveryClient(
-        settings.socialcrawl_api_key,
-        base_url=settings.socialcrawl_base_url,
-        results_per_query=settings.socialcrawl_results_per_query,
-        min_relevance=settings.socialcrawl_min_relevance,
-        timeout_seconds=settings.socialcrawl_timeout_seconds,
-    )
-
-
-def build_classifier(settings: HaSettings):
-    from classifier import GptClassifier
-
-    if settings.llm_provider == "deepseek":
-        return GptClassifier(
-            settings.deepseek_api_key,
-            model=settings.deepseek_model,
-            base_url=settings.deepseek_base_url,
-            provider="deepseek",
-            json_mode="json_object",
-            timeout_seconds=settings.llm_timeout_seconds,
-            max_retries=settings.llm_max_retries,
-        )
-    raise RuntimeError("No LLM provider configured (DEEPSEEK_API_KEY)")
-
-
-class _ForceTypeStore:
-    """Delegating store wrapper that enforces the requested lead type on save.
-
-    Sibling mode is OFF (ACCEPT_SIBLING_BUYERS=0): the engine only accepts the
-    requested type, and THIS wrapper is the second strict wall — the type
-    label is stamped AND opposite-direction content is dropped. A Freelancer
-    search shows ONLY freelancer-needed posts; an Agency search shows ONLY
-    client-seeks-agency posts. No mixing, ever.
-    """
-
-    # Employee-role / job-ad markers. When present WITHOUT any freelance/contract
-    # wording the post is a company job-ad, so it is dropped from a Freelancer
-    # search (employee job-ads are never leads).
-    _EMPLOYEE_HIRING = (
-        "we are hiring", "we're hiring", "hiring:", "vacancy", "open role",
-        "open position", "job opening", "position available", "salary",
-        "recruiting", "headcount", "careers page", "apply now", "benefits package",
-        "full-time", "full time", "part-time", "part time", "join our team",
-        "join our growing team", "to join our team", "for our team",
-    )
-    # Freelancer / contract wording (keeps a company freelancer-ask in
-    # Freelancer mode even when it also says "hiring a freelance").
-    _FREELANCER_WORDS = ("freelance", "freelancer", "freelancers", "contractor",
-                         "contract work", "independent contractor", "one-off project",
-                         "project basis", "gig")
-    # Agency / outside-team wording. A post is agency-relevant when it names an
-    # agency/team/firm OR when a company/team is sourcing help to build its own
-    # bench of creators/developers (very common phrasing on LinkedIn).
-    _AGENCY_WORDS = ("agency", "agencies", "an agency", "agency for", "marketing agency",
-                     "digital agency", "creative agency", "design agency", "development agency",
-                     "outsource", "white label", "white-label", "a firm", "creative partner",
-                     "agency to handle", "for our agency", "a team of", "our partner agency",
-                     "looking for a team", "need a team", "hire a team")
-    _AGENCY_TEAM_CONTEXT = ("we need", "we are looking for", "we're looking for",
-                            "looking for a few", "looking for several", "we want to build",
-                            "help us build", "for our brand", "for our company",
-                            "for our startup", "for our business", "for our channel",
-                            "for our clients", "build our content", "video editors and",
-                            "editors and writers", "freelancers to work with")
-    # Agency-sourcing phrasing (an agency recruiting freelancers for its clients)
-    # — not a freelancer-needed ask, so dropped in Freelancer mode even when the
-    # word "freelancers" appears.
-    _AGENCY_SOURCING = ("for client projects", "on client projects", "for our clients",
-                        "client projects", "client work", "work with our agency",
-                        "freelance bench", "overflow work", "white label freelancers",
-                        "white-label freelancers")
-    # Agency-SEEKING = agency words + seeking verbs TOGETHER. Either side alone
-    # is ambiguous (an agency pitching itself also says "agency"; a freelancer
-    # ask also says "looking for") — the pair is the direction signal, and the
-    # classifier owns the remaining ambiguity. This pair is the "I'm an Agency"
-    # direction — and what must NEVER surface in Freelancer mode.
-    _AGENCY_SEEK_VERBS = ("looking for", "need ", "needs ", "hiring an agency",
-                          "hire an agency", "recommend", "seeking", "outsource",
-                          "anyone know", "looking to hire", "want to hire")
-    # "Hiring an agency" is a buyer ask even though it contains hiring words —
-    # the employee-hiring drop must exempt it (see gate below).
-
-    def __init__(self, inner, lead_type: str, user_id: str | None = None) -> None:
-        self._inner = inner
-        self._lead_type = lead_type
-        self._user_id = user_id
-
-    def __getattr__(self, name):
-        return getattr(self._inner, name)
-
-    def insert_leads_many(self, rows) -> int:
-        forced = []
-        for r in rows:
-            item = dict(r)
-            item["lead_type"] = self._lead_type
-            text = (item.get("post_text") or "").lower()
-            if text and not _content_matches_requested_type(text, self._lead_type):
-                log.info("Type mismatch dropped (%s): %s",
-                         self._lead_type, text[:60].replace("\n", " "))
-                continue
-            forced.append(item)
-        return self._inner.insert_leads_many(forced, **({"user_id": self._user_id} if self._user_id else {}))
-
-    def find_existing_post_urls(self, urls, user_id: str | None = None):
-        return self._inner.find_existing_post_urls(urls, user_id=user_id or self._user_id)
-
-    def record_rejections(self, rows, user_id: str | None = None):
-        try:
-            return self._inner.record_rejections(rows, user_id=user_id or self._user_id)
-        except TypeError:
-            return self._inner.record_rejections(rows)
-
-
-class _UserScopedStore:
-    """Delegating store wrapper that stamps the owning user on every row.
-
-    `ha_leads` / `ha_searches` carry a `user_id` column and are protected by
-    owner-scoped RLS (migration v8). The engine itself is user-agnostic, so the
-    owner is injected here — on the search row at create time and on every
-    persisted lead — instead of leaking user plumbing into the engine.
-    """
-
-    def __init__(self, inner, user_id: str) -> None:
-        self._inner = inner
-        self._user_id = user_id
-
-    def __getattr__(self, name):
-        return getattr(self._inner, name)
-
-    def insert_leads_many(self, rows, user_id: str | None = None) -> int:
-        # Always stamp OUR owner: an inner wrapper may forward a stale/absent id.
-        return self._inner.insert_leads_many(rows, user_id=self._user_id)
-
-    def find_existing_post_urls(self, urls, user_id: str | None = None):
-        # Scope ownership dedupe to OUR user so User B never skips posts
-        # owned by User A. Explicit arg wins, else our owner.
-        return self._inner.find_existing_post_urls(urls, user_id=user_id or self._user_id)
-
-    def record_rejections(self, rows, user_id: str | None = None):
-        try:
-            return self._inner.record_rejections(rows, user_id=user_id or self._user_id)
-        except TypeError:
-            # Backward compat with stores predating the user_id arg.
-            return self._inner.record_rejections(rows)
-
-
-_ORG_RE = re.compile(r"\b(?:firms?|consultancy|consultancies|studio|chambers|llp|outside team)\b")
-
-
-def _content_matches_requested_type(text: str, lead_type: str) -> bool:
-    """Pure text gate: is this post's content compatible with the REQUESTED
-    buyer direction?
-
-    This is the single source of truth used BOTH by the save-time store gate
-    (drop mismatches before persistence) AND by the engine BEFORE any DeepSeek
-    call (a cheap pre-LLM `content_filter`). Because the engine only counts
-    posts that survive the exact same predicate the store applies, an accepted
-    post is never discarded at save time — a search that claims N leads really
-    saves N — and no LLM credit is spent on a post the store would drop anyway.
-
-    need_freelancer  -> someone needs an independent freelancer/contractor
-                       PERSON. Agency-sourcing posts, agency-SEEKING posts (a
-                       client wanting an agency — the opposite direction), and
-                       employee job-ads (no freelance wording) are dropped.
-    need_agency      -> a client/owner seeks to HIRE an agency/team/firm.
-                       Agency-sourcing posts (agency recruiting freelancers),
-                       agency self-promo without seeking verbs, and employee
-                       job-ads are dropped. "Hiring AN agency" is exempt from
-                       the employee-hiring drop.
-    our_agency       -> (retired) an agency / outside team is being sourced.
-    Empty text is never cheap-dropped (no text = classifier owns it).
-    """
-    low = (text or "").lower()
-    if not low:
-        return True
-    emp_hiring = any(m in low for m in _ForceTypeStore._EMPLOYEE_HIRING)
-    freelance = any(m in low for m in _ForceTypeStore._FREELANCER_WORDS)
-    # Provider ORGANISATIONS count as the agency direction too - professional
-    # services are bought as firms ("need a law firm", "any good CA firm?").
-    agency = (any(m in low for m in _ForceTypeStore._AGENCY_WORDS)
-              or bool(_ORG_RE.search(low)))
-    agency_sourcing = any(m in low for m in _ForceTypeStore._AGENCY_SOURCING)
-    seek = any(m in low for m in _ForceTypeStore._AGENCY_SEEK_VERBS)
-    agency_seeking = agency and seek and not agency_sourcing
-    hiring_an_agency = "hiring an agency" in low or "hire an agency" in low
-    if lead_type == "need_freelancer":
-        if agency_sourcing:
-            return False
-        # Agency-seeking with no freelancer wording is the opposite direction
-        # ("need a marketing agency" is not a freelancer ask) — strict split.
-        if agency_seeking and not freelance:
-            return False
-        if emp_hiring and not freelance:
-            return False
-        return True
-    if lead_type == "need_agency":
-        if agency_sourcing:
-            return False
-        if not agency_seeking:
-            return False
-        # Employee job-ads are never agency hires — except hiring AN agency.
-        if emp_hiring and not hiring_an_agency:
-            return False
-        return True
-    if lead_type == "our_agency":
-        team_ctx = any(m in low for m in _ForceTypeStore._AGENCY_TEAM_CONTEXT)
-        return bool(agency or team_ctx)
-    return True
-
-
-# Max concurrently-running Hyperagent engines. Each burns paid search +
-# DeepSeek calls, so users must not be able to stack unbounded parallel spend.
-_ENGINE_SLOT = threading.BoundedSemaphore(4)
-_ENGINE_SLOT_WAIT_S = 30.0
-
-
-def _run_search_worker(search_id: str, user_id: str, settings: HaSettings, store, leads_needed: int = 10,
-                       force_lead_type: str | None = None, country_code: str = "",
-                       all_types: bool = False) -> None:
-    # Acquire before doing ANY paid work; other queued searches wait their turn
-    # instead of running concurrently with the same user's (or others') engines.
-    if not _ENGINE_SLOT.acquire(timeout=_ENGINE_SLOT_WAIT_S):
-        log.error("Hyperagent engine slot timeout for %s — failing search", search_id)
-        try:
-            store.update_search(search_id, status="failed",
-                                error="too many searches running at once; try again shortly",
-                                finished_at=datetime.now(UTC))
-        except Exception:
-            log.exception("Could not fail search %s on slot timeout", search_id)
-        _sync_main_search_row(search_id, None, user_id=user_id, error="Too many searches running at once. Try again shortly.",
-                              leads_needed=leads_needed)
-        return
-    try:
-        _run_search_worker_body(search_id, user_id, settings, store, leads_needed,
-                                force_lead_type, country_code, all_types)
-    finally:
-        _ENGINE_SLOT.release()
-
-
-def _run_search_worker_body(search_id: str, user_id: str, settings: HaSettings, store, leads_needed: int = 10,
-                            force_lead_type: str | None = None, country_code: str = "",
-                            all_types: bool = False) -> None:
-    def cb(stage: str, found: int, accepted: int, scanned: int, message: str = "") -> None:
-        _progress_push(search_id, stage, found, accepted, scanned, message)
-
-    def should_stop() -> bool:
-        # Cooperative cancel: the router registers the id via request_cancel().
-        return _is_cancelled(search_id)
-
-    try:
-        discovery = build_discovery(settings, country_code=country_code)
-        classifier = build_classifier(settings)
-        # LLM query expansion (fail-closed): one extra DeepSeek call generates
-        # niche-aware buyer phrasings that lead the diversification pool. Any
-        # failure silently keeps the deterministic template pool.
-        query_expander = None
-        try:
-            from llm_queries import make_query_expander
-            query_expander = make_query_expander(classifier, lead_type=force_lead_type or "need_freelancer")
-        except Exception:  # noqa: BLE001 - expansion is optional, never blocking
-            log.debug("Query expander unavailable (deterministic pool only)", exc_info=True)
-        # Store wrapper: strict single-type mode (ACCEPT_SIBLING_BUYERS=0), so
-        # the engine only accepts the requested bucket. The product promise is
-        # that a freelancer search returns ONLY freelancer-needed leads and an
-        # agency search returns ONLY client-seeks-agency leads — so the STORED
-        # type is forced to the requested wire type before persistence.
-        store = _UserScopedStore(store, user_id)
-        content_filter = None
-        if force_lead_type and not all_types:
-            store = _ForceTypeStore(store, force_lead_type, user_id=user_id)
-            # Pre-LLM direction gate (cheap, no DeepSeek spend): drop posts the
-            # store would discard at save time BEFORE they are classified. The
-            # engine therefore only counts posts that will really be saved —
-            # requested N leads => N saved (when the pool has them) — and the
-            # ~70% of LLM-classified candidates that were obvious non-matches
-            # never burn a DeepSeek call.
-            content_filter = lambda text: _content_matches_requested_type(text, force_lead_type)  # noqa: E731
-        # Snippet-first full-text enrichment (fail-closed, env kill switch).
-        full_text_fetcher = None
-        if settings.fulltext_enrich:
-            try:
-                from enrich import fetch_full_text
-                full_text_fetcher = fetch_full_text
-            except Exception:  # noqa: BLE001 - enrichment is optional
-                log.debug("Full-text enrichment unavailable (snippets only)", exc_info=True)
-        # Liveness (env kill switch): never deliver a post that was deleted on
-        # LinkedIn but is still in Google's index ("Post not found").
-        post_checker = None
-        if settings.verify_post_alive:
-            try:
-                from liveness import check_post
-                post_checker = check_post
-            except Exception:  # noqa: BLE001 - optional, never blocks a search
-                log.debug("Liveness check unavailable", exc_info=True)
-        summary = ha_run_search(
-            search_id,
-            store=store,
-            discovery=discovery,
-            classifier=classifier,
-            settings=settings,
-            progress=cb,
-            should_stop=should_stop,
-            content_filter=content_filter,
-            query_expander=query_expander,
-            full_text_fetcher=full_text_fetcher,
-            post_checker=post_checker,
-        )
-        _progress_push(search_id, summary.status, summary.found, summary.accepted, summary.scanned,
-                       summary.detail or summary.status)
-        # Mirror the engine result into the MAIN searches row so history /
-        # dashboard / status endpoints see a consistent lifecycle.
-        _sync_main_search_row(search_id, summary, user_id=user_id, leads_needed=leads_needed)
-    except Exception as exc:
-        log.exception("Hyperagent search worker crashed for %s", search_id)
-        try:
-            store.update_search(search_id, status="failed", error=f"internal error: {exc}",
-                                finished_at=datetime.now(UTC))
-        except Exception:
-            log.exception("Could not mark search %s failed", search_id)
-        _progress_push(search_id, "failed", 0, 0, 0, f"internal error: {exc}")
-        try:
-            _sync_main_search_row(search_id, None, user_id=user_id, error=f"internal error: {exc}",
-                                  leads_needed=leads_needed)
-        except Exception:
-            log.exception("Could not sync main search row %s", search_id)
-    finally:
-        _clear_cancel(search_id)
-        # The DB row is now authoritative — a leftover registry entry would let
-        # a later status poll overwrite the final counts with live progress.
-        clear_progress(search_id)
-
-
-def _sync_main_search_row(search_id: str, summary, user_id: str,
-                          error: str | None = None,
-                          leads_needed: int | None = None) -> None:
-    """Copy the Hyperagent engine outcome into the main `searches` row.
-
-    The engine persists to ha_searches; the main app reads searches for
-    history, the lead manager and (partly) status. Keep both in sync so a
-    finished LinkedIn run never shows as 'queued' in the UI.
-    """
-    from app.database import get_supabase_admin
-
-    supabase = get_supabase_admin()
-
-    # A user cancel flips the main row to 'cancelled' while the engine thread
-    # is still finishing — never resurrect it to completed/failed.
-    try:
-        cur = (
-            supabase.table("searches")
-            .select("status,user_id")
-            .eq("id", search_id)
-            .limit(1)
-            .execute()
-        )
-        current_status = (cur.data or [{}])[0].get("status") if cur.data else None
-    except Exception:
-        current_status = None
-    if current_status == "cancelled":
-        log.info("Main searches row %s already cancelled — skipping sync, settling quota", search_id)
-        _settle_hyperagent_quota(search_id, user_id)
-        return
-
-    status = summary.status if summary else "failed"
-    # Engine vocabulary -> main searches CHECK constraint vocabulary.
-    if status == "running":
-        status = "scraping"
-    elif status == "no_results":
-        status = "completed"
-    elif status == "cancelled":
-        status = "cancelled"
-    payload: dict[str, Any] = {
-        "status": status,
-        "completed_at": datetime.now(UTC).isoformat(),
-        "error_message": error,
-    }
-    if summary is not None and status != "cancelled":
-        payload.update({
-            "message": _friendly_summary_message(summary, leads_needed=leads_needed),
-            # total_results must be the DELIVERED leads (never the raw found
-            # count — that made history/dashboard show 194 "leads" for a search
-            # that delivered 3).
-            "total_results": int(summary.accepted),
-            "hot_leads": int(summary.accepted),
-            "warm_leads": int(summary.scanned),
-            "skipped": max(0, int(summary.scanned) - int(summary.accepted)),
-            "progress_percent": 100 if status == "completed" else 95,
-        })
-    elif status == "cancelled":
-        payload.update({"message": "Search cancelled by user", "progress_percent": 0})
-    # The store wrapper may have dropped rows that did not match the requested
-    # content type — reflect the ACTUAL saved count, not the engine's.
-    saved: int | None = None
-    for _attempt in range(3):
-        try:
-            count = (
-                supabase.table("ha_leads")
-                .select("id", count="exact")
-                .eq("search_id", search_id)
-                .execute()
-            )
-            saved = int(count.count or 0)
-            break
-        except Exception:
-            import time as _t
-            _t.sleep(1.0)
-    if saved is not None and saved >= 0 and status != "cancelled":
-        payload["hot_leads"] = saved
-        payload["total_results"] = saved
-        if summary is not None:
-            payload["message"] = _friendly_summary_message(
-                summary, leads_needed=leads_needed, actual_accepted=saved)
-    # Transient Supabase disconnects happen under load — retry the write.
-    last_exc: Exception | None = None
-    for _attempt in range(3):
-        try:
-            supabase.table("searches").update(payload).eq("id", search_id).execute()
-            log.info("Main searches row synced for %s (status=%s)", search_id, status)
-            break
-        except Exception as exc:
-            last_exc = exc
-            import time as _t
-            _t.sleep(1.5)
-    else:
-        log.warning("Could not sync main searches row for %s after retries: %s", search_id, last_exc)
-
-    # Charge the LinkedIn monthly quota against what was actually saved.
-    _settle_hyperagent_quota(search_id, user_id, saved if saved is not None else (summary.accepted if summary else 0))
-
-
-def _settle_hyperagent_quota(search_id: str, user_id: str, saved: int = 0) -> None:
-    """Idempotent LinkedIn monthly-quota settlement (runs in the worker thread,
-    so it uses the synchronous settle path)."""
-    try:
-        from app.database import get_supabase_admin
-        from app.services.usage import settle_search_quota_sync
-        settle_search_quota_sync(get_supabase_admin(), search_id, user_id, saved)
-    except Exception as exc:
-        log.warning("Hyperagent quota settle failed for %s: %s", search_id, exc)
-
-
-def _friendly_summary_message(summary, leads_needed: int | None = None,
-                              actual_accepted: int | None = None) -> str:
-    """Human-facing completion message (no internal engine jargon)."""
-    accepted = int(actual_accepted if actual_accepted is not None else summary.accepted)
-    wanted = int(leads_needed or 0)
-    if summary.status == "failed":
-        return "We hit a temporary issue while searching. Please try again in a few minutes."
-    if summary.status == "completed":
-        if accepted > 0:
-            return (
-                f"Done! {accepted} qualified lead{'s' if accepted != 1 else ''} found"
-                + (f" of {wanted} requested." if wanted and accepted < wanted else " and saved.")
-            )
-        return (
-            "We searched LinkedIn but couldn't find qualified leads for this yet. "
-            "Try a different wording, a broader description, or a different location."
-        )
-    if summary.status == "no_results":
-        return (
-            "We searched but found no matching posts. Try a different wording or "
-            "a broader description."
-        )
-    return "Search finished."
-
-
-def run_hyperagent_pipeline(
-    search_id: str,
-    user_id: str,
-    service: str,
-    country: str = "",
-    lead_type: str = "need_freelancer",
-    time_window: str = "7d",
-    leads_needed: int = 10,
-    all_types: bool = False,
-) -> None:
-    """Entry point called from the search router. Spawns a background thread."""
-    settings = _ha_settings()
-    store = HaSupabaseStore(settings.supabase_url, settings.supabase_service_role_key)
-
-    # Seed the ha_searches row with id == main searches.id (engine looks it up
-    # by that id, so both tables share one id for traceability).
-    try:
-        store.create_search(
-            service=service,
-            country=country,
-            lead_type=lead_type,
-            time_window=time_window,
-            leads_needed=leads_needed,
-            search_id=search_id,
-            user_id=user_id,
-        )
-        log.info("ha_searches row created for %s", search_id)
-    except Exception as exc:
-        log.warning("Could not pre-create ha_searches row (id=%s): %s", search_id, exc)
-
-    thread = threading.Thread(
-        target=_run_search_worker,
-        args=(search_id, user_id, settings, store, leads_needed, lead_type, country, all_types),
-        daemon=True,
-        name=f"hyperagent-{search_id[:8]}",
-    )
-    thread.start()
-    log.info("Hyperagent search %s started (queued or running): service=%r country=%r type=%s window=%s need=%d all_types=%s",
-             search_id, service, country, lead_type, time_window, leads_needed, all_types)
+"""Hyperagent service — runs the ORIGINAL standalone Hyperagent engine
+(backend/ha/) inside the main backend process.
+
+The engine and its modules are copied verbatim from backend/Hyperagent/backend
+(no rewrites). It persists to dedicated ha_searches / ha_leads tables in the
+same main Supabase project (see supabase/migration_ha_tables.sql).
+"""
+from __future__ import annotations
+
+import logging
+import os
+import re
+import sys
+import threading
+from datetime import UTC, datetime
+from pathlib import Path
+from typing import Any
+
+_HA_DIR = Path(__file__).resolve().parent.parent.parent / "ha"
+if str(_HA_DIR) not in sys.path:
+    sys.path.insert(0, str(_HA_DIR))
+
+# Original Hyperagent engine modules (imported as-is from backend/ha/)
+
+
+
+from config import Settings as HaSettings  # noqa: E402
+from db import SupabaseStore as HaSupabaseStore  # noqa: E402
+from discovery.base import DiscoveryClient  # noqa: E402
+from discovery.socialcrawl_client import SocialCrawlDiscoveryClient  # noqa: E402
+from engine import run_search as ha_run_search  # noqa: E402
+
+
+log = logging.getLogger(__name__)
+
+# In-process progress registry (polled by status endpoint)
+_PROGRESS: dict[str, dict[str, Any]] = {}
+_PROGRESS_LOCK = threading.Lock()
+
+# Cancellation registry: the engine checks this between iterations so a user
+# cancel stops search/DeepSeek spend promptly instead of running to completion.
+_CANCELLED: set[str] = set()
+_CANCEL_LOCK = threading.Lock()
+
+
+def request_cancel(search_id: str) -> None:
+    with _CANCEL_LOCK:
+        _CANCELLED.add(search_id)
+
+
+def _is_cancelled(search_id: str) -> bool:
+    with _CANCEL_LOCK:
+        return search_id in _CANCELLED
+
+
+def _clear_cancel(search_id: str) -> None:
+    with _CANCEL_LOCK:
+        _CANCELLED.discard(search_id)
+
+
+def _progress_push(search_id: str, stage: str, found: int, accepted: int, scanned: int, message: str = "") -> None:
+    with _PROGRESS_LOCK:
+        if len(_PROGRESS) > 500:
+            _PROGRESS.pop(next(iter(_PROGRESS)), None)
+        _PROGRESS[search_id] = {
+            "search_id": search_id, "stage": stage, "found": found,
+            "accepted": accepted, "scanned": scanned, "message": message,
+        }
+
+
+def get_progress(search_id: str) -> dict[str, Any] | None:
+    with _PROGRESS_LOCK:
+        return _PROGRESS.get(search_id)
+
+
+def clear_progress(search_id: str) -> None:
+    """Drop the live-progress entry for a finished search.
+
+    Entries were never removed, so a completed row could still be overwritten
+    by stale/live registry numbers on the next status poll.
+    """
+    with _PROGRESS_LOCK:
+        _PROGRESS.pop(search_id, None)
+
+
+def ha_lead_type_from(lead_types) -> str:
+    """Map main-app lead_types (freelancer/agency) → Hyperagent type.
+
+    UI semantics (STRICT — one role per search, never mixed):
+      freelancer     -> need_freelancer : posts asking for a freelancer/person
+      agency         -> need_agency     : posts where a client seeks an agency
+      buyer (legacy) -> need_freelancer : old rows predate the role picker
+    Hiring / employee job-ads are never requested (filtered out by the store
+    content gate below).
+    """
+    requested = [str(t or "").strip().lower() for t in (lead_types or [])]
+    if "agency" in requested:
+        return "need_agency"
+    return "need_freelancer"
+
+
+def ha_time_window_from() -> str:
+    """Freshness window — STRICT: latest posts only.
+
+    7d window: the product promise is "the latest genuine buyers". An engine-
+    side fail-closed date gate (undated or older-than-window posts are never
+    delivered) keeps this honest even when Google's `after:` filter is loose.
+    """
+    return "7d"
+
+
+def _ha_settings() -> HaSettings:
+    """Build the original engine's Settings from main backend env vars."""
+    from app.config import get_settings as get_app_settings
+
+    main = get_app_settings()
+    os.environ["DEEPSEEK_API_KEY"] = main.deepseek_api_key or os.environ.get("DEEPSEEK_API_KEY", "")
+    os.environ["SUPABASE_URL"] = main.supabase_url
+    os.environ["SUPABASE_SERVICE_ROLE_KEY"] = main.supabase_service_role_key
+    os.environ["SOCIALCRAWL_API_KEY"] = main.socialcrawl_api_key or os.environ.get("SOCIALCRAWL_API_KEY", "")
+    os.environ.setdefault("SOCIALCRAWL_BASE_URL", main.socialcrawl_base_url)
+    os.environ.setdefault("SOCIALCRAWL_RESULTS_PER_QUERY", str(main.socialcrawl_results_per_query))
+    os.environ.setdefault("SOCIALCRAWL_MIN_RELEVANCE", str(main.socialcrawl_min_relevance))
+    os.environ["DISCOVERY_PROVIDER"] = "socialcrawl"
+    os.environ.setdefault("LLM_PROVIDER", "deepseek")
+    os.environ.setdefault("DEEPSEEK_MODEL", main.deepseek_model)
+    # GLOBAL SEARCH: no country filter at all. STRICT_COUNTRY stays off so
+    # every country's genuine buyers are accepted.
+    # STRICT role split: one search = exactly ONE buyer direction. Sibling
+    # acceptance is OFF so a freelancer search can never deliver agency
+    # posts and vice versa ("no any other").
+    os.environ["ACCEPT_SIBLING_BUYERS"] = "0"
+    os.environ["MIN_OVERALL_SCORE"] = "60"
+    # MIN_SERVICE_MATCH=60: the earlier 45 let "adjacent craft" posts through
+    # (a social-media-agency ask delivered for a "video editing" search scored
+    # match=70). Genuine buyer posts score 70-90, so 60 drops the weakest
+    # look-alikes with margin.
+    os.environ["MIN_SERVICE_MATCH"] = "60"
+    os.environ["MIN_INTENT_STRENGTH"] = "recommendation"
+    # Credit safety: cap iterations/deadline/empty rounds so one search can
+    # never burn unbounded search credits on a niche with no leads. Parallel
+    # discovery returns 25 full posts per query, so iterations stay generous
+    # while the deadline bounds total wall time.
+    os.environ["ENGINE_MAX_ITERATIONS"] = "40"
+    os.environ["ENGINE_DEADLINE_SECONDS"] = "540"
+    os.environ["ENGINE_EARLY_STOP_EMPTY_ROUNDS"] = "8"
+    # Independent per-search spend ceilings (safety net beyond iterations).
+    # One SocialCrawl request = one query x 25 posts = ~5 credits.
+    os.environ["MAX_DISCOVERY_REQUESTS_PER_SEARCH"] = "40"
+    os.environ["MAX_DEEPSEEK_CALLS_PER_SEARCH"] = "150"
+    # Model gate ON: with the v2 prompt (explicit need_agency scope, 6 new
+    # traps, direction-first calibration) the model's own verdict is trusted —
+    # a hedged is_qualified=false kills the candidate. Strict > volume.
+    os.environ["REQUIRE_MODEL_QUALIFIED"] = "1"
+    os.environ["STRICT_COUNTRY"] = "0"
+    # SocialCrawl engine (setdefault = env-overridable for A/B runs):
+    # - one quoted buyer phrase per query ("single"; OR-packs return junk there),
+    # - no freshness ladder: results already come newest-first, a narrowed
+    #   round would only pay twice for the same queries,
+    # - no full-text enrichment: SocialCrawl returns the complete post text,
+    # - discovery prefetch + wide DeepSeek fan-out (the ceilings bound spend).
+    os.environ.setdefault("QUERY_STYLE", "single")
+    os.environ.setdefault("FRESHNESS_LADDER", "")
+    os.environ.setdefault("FULLTEXT_ENRICH", "0")
+    os.environ.setdefault("MAX_ENRICH_PER_SEARCH", "0")
+    os.environ.setdefault("ENGINE_PREFETCH", "1")
+    os.environ.setdefault("CLASSIFIER_CONCURRENCY", "16")
+    os.environ.setdefault("VERIFY_POST_ALIVE", "1")
+    # EXACT-N: the user gets exactly the leads they asked for (never more,
+    # and never fewer while genuine leads exist). Budgets scale with N -
+    # requests up to ~10 leads keep the 40/150 base above; bigger requests
+    # get 4 search + 12 DeepSeek calls (and 12s) per lead, hard-capped. The
+    # iteration cap is generous because the ceilings, deadline and empty-round
+    # stop already bound the spend.
+    os.environ.setdefault("DISCOVERY_REQUESTS_PER_LEAD", "4")
+    os.environ.setdefault("DEEPSEEK_CALLS_PER_LEAD", "12")
+    os.environ.setdefault("MAX_DISCOVERY_REQUESTS_HARD", "200")
+    os.environ.setdefault("MAX_DEEPSEEK_CALLS_HARD", "1000")
+    os.environ.setdefault("ENGINE_DEADLINE_SECONDS_PER_LEAD", "12")
+    os.environ.setdefault("ENGINE_DEADLINE_HARD_SECONDS", "1200")
+    os.environ.setdefault("MAX_QUERY_REFILLS", "6")
+    return HaSettings()
+
+
+def build_discovery(settings: HaSettings, country_code: str = "") -> DiscoveryClient:
+    """LinkedIn discovery = SocialCrawl (the only provider). `country_code` is
+    kept for API compatibility; country bias is applied in the query text."""
+    if not settings.discovery_configured:
+        raise RuntimeError("SOCIALCRAWL_API_KEY is not set - cannot run LinkedIn search")
+    return SocialCrawlDiscoveryClient(
+        settings.socialcrawl_api_key,
+        base_url=settings.socialcrawl_base_url,
+        results_per_query=settings.socialcrawl_results_per_query,
+        min_relevance=settings.socialcrawl_min_relevance,
+        timeout_seconds=settings.socialcrawl_timeout_seconds,
+    )
+
+
+def build_classifier(settings: HaSettings):
+    from classifier import GptClassifier
+
+    if settings.llm_provider == "deepseek":
+        return GptClassifier(
+            settings.deepseek_api_key,
+            model=settings.deepseek_model,
+            base_url=settings.deepseek_base_url,
+            provider="deepseek",
+            json_mode="json_object",
+            timeout_seconds=settings.llm_timeout_seconds,
+            max_retries=settings.llm_max_retries,
+        )
+    raise RuntimeError("No LLM provider configured (DEEPSEEK_API_KEY)")
+
+
+class _ForceTypeStore:
+    """Delegating store wrapper that enforces the requested lead type on save.
+
+    Sibling mode is OFF (ACCEPT_SIBLING_BUYERS=0): the engine only accepts the
+    requested type, and THIS wrapper is the second strict wall — the type
+    label is stamped AND opposite-direction content is dropped. A Freelancer
+    search shows ONLY freelancer-needed posts; an Agency search shows ONLY
+    client-seeks-agency posts. No mixing, ever.
+    """
+
+    # Employee-role / job-ad markers. When present WITHOUT any freelance/contract
+    # wording the post is a company job-ad, so it is dropped from a Freelancer
+    # search (employee job-ads are never leads).
+    _EMPLOYEE_HIRING = (
+        "we are hiring", "we're hiring", "hiring:", "vacancy", "open role",
+        "open position", "job opening", "position available", "salary",
+        "recruiting", "headcount", "careers page", "apply now", "benefits package",
+        "full-time", "full time", "part-time", "part time", "join our team",
+        "join our growing team", "to join our team", "for our team",
+    )
+    # Freelancer / contract wording (keeps a company freelancer-ask in
+    # Freelancer mode even when it also says "hiring a freelance").
+    _FREELANCER_WORDS = ("freelance", "freelancer", "freelancers", "contractor",
+                         "contract work", "independent contractor", "one-off project",
+                         "project basis", "gig")
+    # Agency / outside-team wording. A post is agency-relevant when it names an
+    # agency/team/firm OR when a company/team is sourcing help to build its own
+    # bench of creators/developers (very common phrasing on LinkedIn).
+    _AGENCY_WORDS = ("agency", "agencies", "an agency", "agency for", "marketing agency",
+                     "digital agency", "creative agency", "design agency", "development agency",
+                     "outsource", "white label", "white-label", "a firm", "creative partner",
+                     "agency to handle", "for our agency", "a team of", "our partner agency",
+                     "looking for a team", "need a team", "hire a team")
+    _AGENCY_TEAM_CONTEXT = ("we need", "we are looking for", "we're looking for",
+                            "looking for a few", "looking for several", "we want to build",
+                            "help us build", "for our brand", "for our company",
+                            "for our startup", "for our business", "for our channel",
+                            "for our clients", "build our content", "video editors and",
+                            "editors and writers", "freelancers to work with")
+    # Agency-sourcing phrasing (an agency recruiting freelancers for its clients)
+    # — not a freelancer-needed ask, so dropped in Freelancer mode even when the
+    # word "freelancers" appears.
+    _AGENCY_SOURCING = ("for client projects", "on client projects", "for our clients",
+                        "client projects", "client work", "work with our agency",
+                        "freelance bench", "overflow work", "white label freelancers",
+                        "white-label freelancers")
+    # Agency-SEEKING = agency words + seeking verbs TOGETHER. Either side alone
+    # is ambiguous (an agency pitching itself also says "agency"; a freelancer
+    # ask also says "looking for") — the pair is the direction signal, and the
+    # classifier owns the remaining ambiguity. This pair is the "I'm an Agency"
+    # direction — and what must NEVER surface in Freelancer mode.
+    _AGENCY_SEEK_VERBS = ("looking for", "need ", "needs ", "hiring an agency",
+                          "hire an agency", "recommend", "seeking", "outsource",
+                          "anyone know", "looking to hire", "want to hire")
+    # "Hiring an agency" is a buyer ask even though it contains hiring words —
+    # the employee-hiring drop must exempt it (see gate below).
+
+    def __init__(self, inner, lead_type: str, user_id: str | None = None) -> None:
+        self._inner = inner
+        self._lead_type = lead_type
+        self._user_id = user_id
+
+    def __getattr__(self, name):
+        return getattr(self._inner, name)
+
+    def insert_leads_many(self, rows) -> int:
+        forced = []
+        for r in rows:
+            item = dict(r)
+            item["lead_type"] = self._lead_type
+            text = (item.get("post_text") or "").lower()
+            if text and not _content_matches_requested_type(text, self._lead_type):
+                log.info("Type mismatch dropped (%s): %s",
+                         self._lead_type, text[:60].replace("\n", " "))
+                continue
+            forced.append(item)
+        return self._inner.insert_leads_many(forced, **({"user_id": self._user_id} if self._user_id else {}))
+
+    def find_existing_post_urls(self, urls, user_id: str | None = None):
+        return self._inner.find_existing_post_urls(urls, user_id=user_id or self._user_id)
+
+    def record_rejections(self, rows, user_id: str | None = None):
+        try:
+            return self._inner.record_rejections(rows, user_id=user_id or self._user_id)
+        except TypeError:
+            return self._inner.record_rejections(rows)
+
+
+class _UserScopedStore:
+    """Delegating store wrapper that stamps the owning user on every row.
+
+    `ha_leads` / `ha_searches` carry a `user_id` column and are protected by
+    owner-scoped RLS (migration v8). The engine itself is user-agnostic, so the
+    owner is injected here — on the search row at create time and on every
+    persisted lead — instead of leaking user plumbing into the engine.
+    """
+
+    def __init__(self, inner, user_id: str) -> None:
+        self._inner = inner
+        self._user_id = user_id
+
+    def __getattr__(self, name):
+        return getattr(self._inner, name)
+
+    def insert_leads_many(self, rows, user_id: str | None = None) -> int:
+        # Always stamp OUR owner: an inner wrapper may forward a stale/absent id.
+        return self._inner.insert_leads_many(rows, user_id=self._user_id)
+
+    def find_existing_post_urls(self, urls, user_id: str | None = None):
+        # Scope ownership dedupe to OUR user so User B never skips posts
+        # owned by User A. Explicit arg wins, else our owner.
+        return self._inner.find_existing_post_urls(urls, user_id=user_id or self._user_id)
+
+    def record_rejections(self, rows, user_id: str | None = None):
+        try:
+            return self._inner.record_rejections(rows, user_id=user_id or self._user_id)
+        except TypeError:
+            # Backward compat with stores predating the user_id arg.
+            return self._inner.record_rejections(rows)
+
+
+_ORG_RE = re.compile(r"\b(?:firms?|consultancy|consultancies|studio|chambers|llp|outside team)\b")
+
+
+def _content_matches_requested_type(text: str, lead_type: str) -> bool:
+    """Pure text gate: is this post's content compatible with the REQUESTED
+    buyer direction?
+
+    This is the single source of truth used BOTH by the save-time store gate
+    (drop mismatches before persistence) AND by the engine BEFORE any DeepSeek
+    call (a cheap pre-LLM `content_filter`). Because the engine only counts
+    posts that survive the exact same predicate the store applies, an accepted
+    post is never discarded at save time — a search that claims N leads really
+    saves N — and no LLM credit is spent on a post the store would drop anyway.
+
+    need_freelancer  -> someone needs an independent freelancer/contractor
+                       PERSON. Agency-sourcing posts, agency-SEEKING posts (a
+                       client wanting an agency — the opposite direction), and
+                       employee job-ads (no freelance wording) are dropped.
+    need_agency      -> a client/owner seeks to HIRE an agency/team/firm.
+                       Agency-sourcing posts (agency recruiting freelancers),
+                       agency self-promo without seeking verbs, and employee
+                       job-ads are dropped. "Hiring AN agency" is exempt from
+                       the employee-hiring drop.
+    our_agency       -> (retired) an agency / outside team is being sourced.
+    Empty text is never cheap-dropped (no text = classifier owns it).
+    """
+    low = (text or "").lower()
+    if not low:
+        return True
+    emp_hiring = any(m in low for m in _ForceTypeStore._EMPLOYEE_HIRING)
+    freelance = any(m in low for m in _ForceTypeStore._FREELANCER_WORDS)
+    # Provider ORGANISATIONS count as the agency direction too - professional
+    # services are bought as firms ("need a law firm", "any good CA firm?").
+    agency = (any(m in low for m in _ForceTypeStore._AGENCY_WORDS)
+              or bool(_ORG_RE.search(low)))
+    agency_sourcing = any(m in low for m in _ForceTypeStore._AGENCY_SOURCING)
+    seek = any(m in low for m in _ForceTypeStore._AGENCY_SEEK_VERBS)
+    agency_seeking = agency and seek and not agency_sourcing
+    hiring_an_agency = "hiring an agency" in low or "hire an agency" in low
+    if lead_type == "need_freelancer":
+        if agency_sourcing:
+            return False
+        # Agency-seeking with no freelancer wording is the opposite direction
+        # ("need a marketing agency" is not a freelancer ask) — strict split.
+        if agency_seeking and not freelance:
+            return False
+        if emp_hiring and not freelance:
+            return False
+        return True
+    if lead_type == "need_agency":
+        if agency_sourcing:
+            return False
+        if not agency_seeking:
+            return False
+        # Employee job-ads are never agency hires — except hiring AN agency.
+        if emp_hiring and not hiring_an_agency:
+            return False
+        return True
+    if lead_type == "our_agency":
+        team_ctx = any(m in low for m in _ForceTypeStore._AGENCY_TEAM_CONTEXT)
+        return bool(agency or team_ctx)
+    return True
+
+
+# Max concurrently-running Hyperagent engines. Each burns paid search +
+# DeepSeek calls, so users must not be able to stack unbounded parallel spend.
+_ENGINE_SLOT = threading.BoundedSemaphore(4)
+_ENGINE_SLOT_WAIT_S = 30.0
+
+
+def _run_search_worker(search_id: str, user_id: str, settings: HaSettings, store, leads_needed: int = 10,
+                       force_lead_type: str | None = None, country_code: str = "",
+                       all_types: bool = False) -> None:
+    # Acquire before doing ANY paid work; other queued searches wait their turn
+    # instead of running concurrently with the same user's (or others') engines.
+    if not _ENGINE_SLOT.acquire(timeout=_ENGINE_SLOT_WAIT_S):
+        log.error("Hyperagent engine slot timeout for %s — failing search", search_id)
+        try:
+            store.update_search(search_id, status="failed",
+                                error="too many searches running at once; try again shortly",
+                                finished_at=datetime.now(UTC))
+        except Exception:
+            log.exception("Could not fail search %s on slot timeout", search_id)
+        _sync_main_search_row(search_id, None, user_id=user_id, error="Too many searches running at once. Try again shortly.",
+                              leads_needed=leads_needed)
+        return
+    try:
+        _run_search_worker_body(search_id, user_id, settings, store, leads_needed,
+                                force_lead_type, country_code, all_types)
+    finally:
+        _ENGINE_SLOT.release()
+
+
+def _run_search_worker_body(search_id: str, user_id: str, settings: HaSettings, store, leads_needed: int = 10,
+                            force_lead_type: str | None = None, country_code: str = "",
+                            all_types: bool = False) -> None:
+    def cb(stage: str, found: int, accepted: int, scanned: int, message: str = "") -> None:
+        _progress_push(search_id, stage, found, accepted, scanned, message)
+
+    def should_stop() -> bool:
+        # Cooperative cancel: the router registers the id via request_cancel().
+        return _is_cancelled(search_id)
+
+    try:
+        discovery = build_discovery(settings, country_code=country_code)
+        classifier = build_classifier(settings)
+        # LLM query expansion (fail-closed): one extra DeepSeek call generates
+        # niche-aware buyer phrasings that lead the diversification pool. Any
+        # failure silently keeps the deterministic template pool.
+        query_expander = None
+        try:
+            from llm_queries import make_query_expander
+            query_expander = make_query_expander(classifier, lead_type=force_lead_type or "need_freelancer")
+        except Exception:  # noqa: BLE001 - expansion is optional, never blocking
+            log.debug("Query expander unavailable (deterministic pool only)", exc_info=True)
+        # Store wrapper: strict single-type mode (ACCEPT_SIBLING_BUYERS=0), so
+        # the engine only accepts the requested bucket. The product promise is
+        # that a freelancer search returns ONLY freelancer-needed leads and an
+        # agency search returns ONLY client-seeks-agency leads — so the STORED
+        # type is forced to the requested wire type before persistence.
+        store = _UserScopedStore(store, user_id)
+        content_filter = None
+        if force_lead_type and not all_types:
+            store = _ForceTypeStore(store, force_lead_type, user_id=user_id)
+            # Pre-LLM direction gate (cheap, no DeepSeek spend): drop posts the
+            # store would discard at save time BEFORE they are classified. The
+            # engine therefore only counts posts that will really be saved —
+            # requested N leads => N saved (when the pool has them) — and the
+            # ~70% of LLM-classified candidates that were obvious non-matches
+            # never burn a DeepSeek call.
+            content_filter = lambda text: _content_matches_requested_type(text, force_lead_type)  # noqa: E731
+        # Snippet-first full-text enrichment (fail-closed, env kill switch).
+        full_text_fetcher = None
+        if settings.fulltext_enrich:
+            try:
+                from enrich import fetch_full_text
+                full_text_fetcher = fetch_full_text
+            except Exception:  # noqa: BLE001 - enrichment is optional
+                log.debug("Full-text enrichment unavailable (snippets only)", exc_info=True)
+        # Liveness (env kill switch): never deliver a post that was deleted on
+        # LinkedIn but is still in Google's index ("Post not found").
+        post_checker = None
+        if settings.verify_post_alive:
+            try:
+                from liveness import check_post
+                post_checker = check_post
+            except Exception:  # noqa: BLE001 - optional, never blocks a search
+                log.debug("Liveness check unavailable", exc_info=True)
+        summary = ha_run_search(
+            search_id,
+            store=store,
+            discovery=discovery,
+            classifier=classifier,
+            settings=settings,
+            progress=cb,
+            should_stop=should_stop,
+            content_filter=content_filter,
+            query_expander=query_expander,
+            full_text_fetcher=full_text_fetcher,
+            post_checker=post_checker,
+        )
+        _progress_push(search_id, summary.status, summary.found, summary.accepted, summary.scanned,
+                       summary.detail or summary.status)
+        # Mirror the engine result into the MAIN searches row so history /
+        # dashboard / status endpoints see a consistent lifecycle.
+        _sync_main_search_row(search_id, summary, user_id=user_id, leads_needed=leads_needed)
+    except Exception as exc:
+        log.exception("Hyperagent search worker crashed for %s", search_id)
+        try:
+            store.update_search(search_id, status="failed", error=f"internal error: {exc}",
+                                finished_at=datetime.now(UTC))
+        except Exception:
+            log.exception("Could not mark search %s failed", search_id)
+        _progress_push(search_id, "failed", 0, 0, 0, f"internal error: {exc}")
+        try:
+            _sync_main_search_row(search_id, None, user_id=user_id, error=f"internal error: {exc}",
+                                  leads_needed=leads_needed)
+        except Exception:
+            log.exception("Could not sync main search row %s", search_id)
+    finally:
+        _clear_cancel(search_id)
+        # The DB row is now authoritative — a leftover registry entry would let
+        # a later status poll overwrite the final counts with live progress.
+        clear_progress(search_id)
+
+
+def _sync_main_search_row(search_id: str, summary, user_id: str,
+                          error: str | None = None,
+                          leads_needed: int | None = None) -> None:
+    """Copy the Hyperagent engine outcome into the main `searches` row.
+
+    The engine persists to ha_searches; the main app reads searches for
+    history, the lead manager and (partly) status. Keep both in sync so a
+    finished LinkedIn run never shows as 'queued' in the UI.
+    """
+    from app.database import get_supabase_admin
+
+    supabase = get_supabase_admin()
+
+    # A user cancel flips the main row to 'cancelled' while the engine thread
+    # is still finishing — never resurrect it to completed/failed.
+    try:
+        cur = (
+            supabase.table("searches")
+            .select("status,user_id")
+            .eq("id", search_id)
+            .limit(1)
+            .execute()
+        )
+        current_status = (cur.data or [{}])[0].get("status") if cur.data else None
+    except Exception:
+        current_status = None
+    if current_status == "cancelled":
+        log.info("Main searches row %s already cancelled — skipping sync, settling quota", search_id)
+        _settle_hyperagent_quota(search_id, user_id)
+        return
+
+    status = summary.status if summary else "failed"
+    # Engine vocabulary -> main searches CHECK constraint vocabulary.
+    if status == "running":
+        status = "scraping"
+    elif status == "no_results":
+        status = "completed"
+    elif status == "cancelled":
+        status = "cancelled"
+    payload: dict[str, Any] = {
+        "status": status,
+        "completed_at": datetime.now(UTC).isoformat(),
+        "error_message": error,
+    }
+    if summary is not None and status != "cancelled":
+        payload.update({
+            "message": _friendly_summary_message(summary, leads_needed=leads_needed),
+            # total_results must be the DELIVERED leads (never the raw found
+            # count — that made history/dashboard show 194 "leads" for a search
+            # that delivered 3).
+            "total_results": int(summary.accepted),
+            "hot_leads": int(summary.accepted),
+            "warm_leads": int(summary.scanned),
+            "skipped": max(0, int(summary.scanned) - int(summary.accepted)),
+            "progress_percent": 100 if status == "completed" else 95,
+        })
+    elif status == "cancelled":
+        payload.update({"message": "Search cancelled by user", "progress_percent": 0})
+    # The store wrapper may have dropped rows that did not match the requested
+    # content type — reflect the ACTUAL saved count, not the engine's.
+    saved: int | None = None
+    for _attempt in range(3):
+        try:
+            count = (
+                supabase.table("ha_leads")
+                .select("id", count="exact")
+                .eq("search_id", search_id)
+                .execute()
+            )
+            saved = int(count.count or 0)
+            break
+        except Exception:
+            import time as _t
+            _t.sleep(1.0)
+    if saved is not None and saved >= 0 and status != "cancelled":
+        payload["hot_leads"] = saved
+        payload["total_results"] = saved
+        if summary is not None:
+            payload["message"] = _friendly_summary_message(
+                summary, leads_needed=leads_needed, actual_accepted=saved)
+    # Transient Supabase disconnects happen under load — retry the write.
+    last_exc: Exception | None = None
+    for _attempt in range(3):
+        try:
+            supabase.table("searches").update(payload).eq("id", search_id).execute()
+            log.info("Main searches row synced for %s (status=%s)", search_id, status)
+            break
+        except Exception as exc:
+            last_exc = exc
+            import time as _t
+            _t.sleep(1.5)
+    else:
+        log.warning("Could not sync main searches row for %s after retries: %s", search_id, last_exc)
+
+    # Charge the LinkedIn monthly quota against what was actually saved.
+    _settle_hyperagent_quota(search_id, user_id, saved if saved is not None else (summary.accepted if summary else 0))
+
+
+def _settle_hyperagent_quota(search_id: str, user_id: str, saved: int = 0) -> None:
+    """Idempotent LinkedIn monthly-quota settlement (runs in the worker thread,
+    so it uses the synchronous settle path)."""
+    try:
+        from app.database import get_supabase_admin
+        from app.services.usage import settle_search_quota_sync
+        settle_search_quota_sync(get_supabase_admin(), search_id, user_id, saved)
+    except Exception as exc:
+        log.warning("Hyperagent quota settle failed for %s: %s", search_id, exc)
+
+
+def _friendly_summary_message(summary, leads_needed: int | None = None,
+                              actual_accepted: int | None = None) -> str:
+    """Human-facing completion message (no internal engine jargon)."""
+    accepted = int(actual_accepted if actual_accepted is not None else summary.accepted)
+    wanted = int(leads_needed or 0)
+    if summary.status == "failed":
+        return "We hit a temporary issue while searching. Please try again in a few minutes."
+    if summary.status == "completed":
+        if accepted > 0:
+            return (
+                f"Done! {accepted} qualified lead{'s' if accepted != 1 else ''} found"
+                + (f" of {wanted} requested." if wanted and accepted < wanted else " and saved.")
+            )
+        return (
+            "We searched LinkedIn but couldn't find qualified leads for this yet. "
+            "Try a different wording, a broader description, or a different location."
+        )
+    if summary.status == "no_results":
+        return (
+            "We searched but found no matching posts. Try a different wording or "
+            "a broader description."
+        )
+    return "Search finished."
+
+
+def run_hyperagent_pipeline(
+    search_id: str,
+    user_id: str,
+    service: str,
+    country: str = "",
+    lead_type: str = "need_freelancer",
+    time_window: str = "7d",
+    leads_needed: int = 10,
+    all_types: bool = False,
+) -> None:
+    """Entry point called from the search router. Spawns a background thread."""
+    settings = _ha_settings()
+    store = HaSupabaseStore(settings.supabase_url, settings.supabase_service_role_key)
+
+    # Seed the ha_searches row with id == main searches.id (engine looks it up
+    # by that id, so both tables share one id for traceability).
+    try:
+        store.create_search(
+            service=service,
+            country=country,
+            lead_type=lead_type,
+            time_window=time_window,
+            leads_needed=leads_needed,
+            search_id=search_id,
+            user_id=user_id,
+        )
+        log.info("ha_searches row created for %s", search_id)
+    except Exception as exc:
+        log.warning("Could not pre-create ha_searches row (id=%s): %s", search_id, exc)
+
+    thread = threading.Thread(
+        target=_run_search_worker,
+        args=(search_id, user_id, settings, store, leads_needed, lead_type, country, all_types),
+        daemon=True,
+        name=f"hyperagent-{search_id[:8]}",
+    )
+    thread.start()
+    log.info("Hyperagent search %s started (queued or running): service=%r country=%r type=%s window=%s need=%d all_types=%s",
+             search_id, service, country, lead_type, time_window, leads_needed, all_types)

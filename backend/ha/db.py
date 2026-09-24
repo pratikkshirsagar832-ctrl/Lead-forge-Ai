@@ -245,7 +245,16 @@ class SupabaseStore(Store):
             raise ValueError("SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are required")
         from supabase import create_client
 
-        self._client = create_client(url, service_role_key)
+        # HTTP/1.1 pool (thread-safe): the engine's worker threads share this
+        # client; one HTTP/2 connection dropped by the server (GOAWAY) failed
+        # every concurrent request at once.
+        import httpx
+        from supabase import ClientOptions
+
+        http = httpx.Client(http2=False, timeout=httpx.Timeout(120.0, connect=10.0),
+                            transport=httpx.HTTPTransport(retries=2, limits=httpx.Limits(
+                                max_connections=50, max_keepalive_connections=10, keepalive_expiry=15.0)))
+        self._client = create_client(url, service_role_key, options=ClientOptions(httpx_client=http))
         # Lazily probed: True when the table has the user_id column that
         # migration v8 (security hardening) added. Probed once per table so a
         # pre-v8 database degrades instead of failing every insert.

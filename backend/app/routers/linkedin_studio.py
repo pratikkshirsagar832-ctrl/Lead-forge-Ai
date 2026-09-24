@@ -279,6 +279,10 @@ class RepurposeIn(BaseModel):
     goal: Literal["comments", "reposts", "likes", "saves", "leads"] = "comments"
 
 
+class TopicsIn(BaseModel):
+    hint: str = Field("", max_length=200)
+
+
 class PlanIn(BaseModel):
     theme: str = Field("", max_length=400)
     days: int = Field(7, ge=3, le=14)
@@ -432,6 +436,12 @@ async def ai_repurpose(body: RepurposeIn, user: dict = Depends(require_studio)) 
 @router.post("/ai/hook")
 async def ai_hook(body: PostTextIn, user: dict = Depends(require_studio)) -> dict[str, Any]:
     return await _run_ai(user, writer.extract_hook, body.post)
+
+
+@router.post("/ai/topics")
+async def ai_topics(body: TopicsIn, user: dict = Depends(require_studio)) -> dict[str, Any]:
+    """Topic ideas for the composer, from the user's brand profile + story bank."""
+    return {"topics": await _run_ai(user, writer.suggest_topics, hint=body.hint)}
 
 
 @router.post("/ai/plan")

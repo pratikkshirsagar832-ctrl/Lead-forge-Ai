@@ -59,24 +59,30 @@ def _client():
 def _ask(task: str, request: str, ctx: str = "", temperature: float = 0.8) -> dict[str, Any]:
     settings = get_settings()
     user_msg = f"{request.strip()}\n\n=================== USER DATA ===================\n{ctx or '(none provided)'}"
-    try:
-        resp = _client().chat.completions.create(
-            model=settings.deepseek_model,
-            messages=[{"role": "system", "content": system_prompt(task)},
-                      {"role": "user", "content": user_msg}],
-            temperature=temperature,
-            response_format={"type": "json_object"},
-            max_tokens=6000,
-        )
-        data = json.loads(resp.choices[0].message.content or "")
-    except WriterError:
-        raise
-    except Exception as exc:  # noqa: BLE001 - provider / JSON failures -> fail closed
-        logger.warning("DeepSeek %s call failed: %s", task, exc)
-        raise WriterError("The AI writer is unavailable right now. Please try again.") from exc
-    if not isinstance(data, dict):
-        raise WriterError("The AI writer returned an unexpected answer. Please try again.")
-    return data
+    last_exc: Exception | None = None
+    # Two attempts: DeepSeek occasionally returns truncated / malformed JSON
+    # (seen in production: "Expecting ',' delimiter"); a second, slightly
+    # cooler sample almost always parses. Still fail-closed after that.
+    for attempt in range(2):
+        try:
+            resp = _client().chat.completions.create(
+                model=settings.deepseek_model,
+                messages=[{"role": "system", "content": system_prompt(task)},
+                          {"role": "user", "content": user_msg}],
+                temperature=temperature if attempt == 0 else max(0.2, temperature - 0.3),
+                response_format={"type": "json_object"},
+                max_tokens=6000,
+            )
+            data = json.loads(resp.choices[0].message.content or "")
+            if isinstance(data, dict):
+                return data
+            last_exc = ValueError("answer is not a JSON object")
+        except WriterError:
+            raise
+        except Exception as exc:  # noqa: BLE001 - provider / JSON failures -> retry, then fail closed
+            last_exc = exc
+        logger.warning("DeepSeek %s call failed (attempt %d): %s", task, attempt + 1, last_exc)
+    raise WriterError("The AI writer is unavailable right now. Please try again.") from last_exc
 
 
 def clean_post(text: str) -> str:
@@ -511,6 +517,32 @@ Return: {{"matches": [{{"formula_id": "F#", "formula_name": "...", "fit": 0-100}
         "cautions": _strs(data.get("cautions"), 6, 300), "watch_out": "; ".join(_strs(data.get("cautions"), 3, 200)),
         "injection_flag": _s(data.get("injection_flag"), 300),
     }
+
+
+def suggest_topics(*, hint: str = "", count: int = 6, ctx: str = "") -> list[dict[str, str]]:
+    """Post ideas for the "What do you want to post about?" box, built from the
+    user's brand profile, story bank and recent posts (never repeats them)."""
+    count = max(3, min(int(count), 8))
+    data = _ask("plan", f"""TASK: suggest {count} LinkedIn post topics this person could write TODAY.
+{f'Focus on: "{hint[:200]}".' if hint.strip() else "Use their services, audience, pillars and story bank from USER DATA."}
+Rules: each topic is one specific, concrete sentence (not a generic theme), grounded in USER DATA (a real
+story, number, client situation or opinion from their business) - never invent facts. Mix the goals
+(comments, saves, reposts, likes, leads) and use the content pillars. Do NOT repeat topics or hooks from
+their recent posts. Keep each topic under 140 characters.
+
+Return: {{"topics": [{{"topic": "...", "goal": "comments|saves|reposts|likes|leads", "why": "one short line"}}]}}""",
+                ctx, temperature=0.9)
+    out = []
+    for t in data.get("topics") or []:
+        if isinstance(t, dict) and _s(t.get("topic")):
+            goal = _s(t.get("goal"), 20).lower()
+            out.append({"topic": _s(t.get("topic"), 200), "goal": goal if goal in GOALS else "comments",
+                        "why": _s(t.get("why"), 160)})
+        elif isinstance(t, str) and t.strip():
+            out.append({"topic": t.strip()[:200], "goal": "comments", "why": ""})
+    if not out:
+        raise WriterError("Could not suggest topics right now. Please try again.")
+    return out[:count]
 
 
 def content_plan(theme: str, *, days: int = 7, edition: str = "general", posts_per_week: int = 4,

@@ -4,7 +4,7 @@ import { useEffect, useState } from 'react';
 import api from '@/lib/api';
 import { GlassCard } from '@/components/shared/GlassCard';
 import { LoadingButton } from '@/components/shared/LoadingButton';
-import { Building2, Check, ChevronLeft, ChevronRight, Mic, ShieldCheck, UserRound, Users, X } from 'lucide-react';
+import { Building2, Check, ChevronLeft, ChevronRight, ShieldCheck, UserRound, Users, X } from 'lucide-react';
 import { Chips, TagInput, errText, inputCls, labelCls } from './shared';
 
 export interface Brand {
@@ -170,8 +170,6 @@ export function BrandForm({ onSaved, onCancel, compact = false }: {
                       placeholder={'- Mar 2025: cut client onboarding from 11 days to 4\n- Lost our biggest client in 2024 because...\n- 312 GST notices handled for SaaS founders'} />
             <p className="text-[10px] text-ice/40 mt-1">Tip: the AI Skills → Interview tool fills this for you by asking questions.</p>
           </div>
-          <div><label className={labelCls}>Writing samples - paste 3-6 past posts (the AI matches this voice)</label>
-            <textarea rows={4} className={inputCls} value={b.writing_samples} onChange={(e) => set('writing_samples', e.target.value)} maxLength={6000} /></div>
           <div><label className={labelCls}>Anything else the AI should know</label><textarea rows={2} className={inputCls} value={b.notes} onChange={(e) => set('notes', e.target.value)} maxLength={2000} /></div>
           <label className={`flex items-start gap-3 p-3 rounded-xl border cursor-pointer ${b.authorized ? 'bg-emerald-500/10 border-emerald-500/30' : 'bg-navy/60 border-ocean/25'}`}>
             <input type="checkbox" checked={b.authorized} onChange={(e) => set('authorized', e.target.checked)} className="mt-1 accent-emerald-500" />
@@ -219,70 +217,13 @@ export function BrandModal({ onClose, onSaved }: { onClose: () => void; onSaved:
   );
 }
 
-export function VoiceCard({ setError, setNotice }: { setError: (s: string) => void; setNotice: (s: string) => void }) {
-  const [voice, setVoice] = useState('');
-  const [updated, setUpdated] = useState<string | null>(null);
-  const [samples, setSamples] = useState('');
-  const [busy, setBusy] = useState('');
-  const [coverage, setCoverage] = useState('');
-
-  useEffect(() => {
-    api.get('/api/linkedin/brand').then((r) => {
-      setVoice(r.data.profile?.voice_profile || '');
-      setUpdated(r.data.profile?.voice_updated_at || null);
-      setSamples(r.data.profile?.writing_samples || '');
-    }).catch(() => undefined);
-  }, []);
-
-  async function learn() {
-    setError(''); setBusy('learn');
-    try {
-      const r = await api.post('/api/linkedin/ai/voice', { samples });
-      setVoice(r.data.text); setCoverage(r.data.coverage || ''); setUpdated(new Date().toISOString());
-      setNotice(r.data.saved ? 'Voice profile learned and saved. Every draft now matches it.' : 'Voice learned - save your brand profile first to keep it.');
-    } catch (e) { setError(errText(e, 'Could not learn the voice.')); } finally { setBusy(''); }
-  }
-  async function saveEdits() {
-    setError(''); setBusy('save');
-    try { await api.put('/api/linkedin/brand/voice', { voice_profile: voice }); setNotice('Voice profile saved.'); }
-    catch (e) { setError(errText(e, 'Could not save the voice profile.')); } finally { setBusy(''); }
-  }
-
-  return (
-    <GlassCard className="p-5 space-y-3">
-      <div className="flex items-center justify-between">
-        <p className="text-xs font-semibold uppercase tracking-wide text-ice/40 flex items-center gap-2"><Mic className="w-4 h-4" /> Voice profile</p>
-        <span className="text-[10px] text-ice/40">{updated ? `updated ${new Date(updated).toLocaleDateString()}` : 'not learned yet'}</span>
-      </div>
-      <p className="text-xs text-ice/55">Paste 3-6 of your real LinkedIn posts. The AI extracts your rhythm, openers, punctuation, words you use and never use, and signature lines - then every skill writes in that voice.</p>
-      <textarea rows={6} className={inputCls} value={samples} onChange={(e) => setSamples(e.target.value)} maxLength={12000} placeholder="Paste your own posts here, separated by blank lines" />
-      <div className="flex items-center gap-2">
-        <LoadingButton size="sm" onClick={learn} isLoading={busy === 'learn'} disabled={samples.trim().length < 200}>Learn my voice</LoadingButton>
-        {samples.trim().length < 200 && <span className="text-[10px] text-ice/40">{200 - samples.trim().length} more characters needed</span>}
-      </div>
-      {coverage && <p className="text-[11px] text-amber-300">{coverage}</p>}
-      {voice && (
-        <>
-          <textarea rows={10} className={`${inputCls} font-mono text-xs`} value={voice} onChange={(e) => setVoice(e.target.value)} maxLength={5000} />
-          <LoadingButton size="sm" variant="secondary" onClick={saveEdits} isLoading={busy === 'save'}>Save edits</LoadingButton>
-        </>
-      )}
-    </GlassCard>
-  );
-}
-
-export function BrandTab({ setError, setNotice, onSaved }: {
-  setError: (s: string) => void; setNotice: (s: string) => void; onSaved: () => void;
+export function BrandTab({ setNotice, onSaved }: {
+  setNotice: (s: string) => void; onSaved: () => void;
 }) {
   return (
-    <div className="grid grid-cols-1 xl:grid-cols-5 gap-4">
-      <GlassCard className="p-5 xl:col-span-3">
-        <p className="text-xs font-semibold uppercase tracking-wide text-ice/40 mb-3">Brand profile - what the AI knows</p>
-        <BrandForm onSaved={() => { setNotice('Brand profile saved. The AI uses it on every task.'); onSaved(); }} />
-      </GlassCard>
-      <div className="xl:col-span-2">
-        <VoiceCard setError={setError} setNotice={setNotice} />
-      </div>
-    </div>
+    <GlassCard className="p-5 max-w-3xl">
+      <p className="text-xs font-semibold uppercase tracking-wide text-ice/40 mb-3">Brand profile - what the AI knows</p>
+      <BrandForm onSaved={() => { setNotice('Brand profile saved. The AI uses it on every task.'); onSaved(); }} />
+    </GlassCard>
   );
 }

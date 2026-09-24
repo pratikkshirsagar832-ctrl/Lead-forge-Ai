@@ -105,10 +105,13 @@ class KeyPool:
             k.calls += 1
             k.credits_used += max(0, int(credits_used or 0))
             if credits_remaining is not None:
-                k.credits_remaining = int(credits_remaining)
+                # parallel requests finish out of order: the lowest balance is the newest
+                new = int(credits_remaining)
+                k.credits_remaining = new if k.credits_remaining is None else min(k.credits_remaining, new)
+            remaining = k.credits_remaining
         if self._on_usage:
             try:
-                self._on_usage(k, int(credits_used or 0), credits_remaining)
+                self._on_usage(k, int(credits_used or 0), remaining if credits_remaining is not None else None)
             except Exception:  # noqa: BLE001
                 pass
         if credits_remaining is not None and int(credits_remaining) <= 0:

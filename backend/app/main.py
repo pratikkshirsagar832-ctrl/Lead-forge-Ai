@@ -19,6 +19,11 @@ logging.basicConfig(
     format="%(asctime)s | %(levelname)-8s | %(name)s | %(message)s",
     datefmt="%Y-%m-%d %H:%M:%S",
 )
+# httpx/httpcore log every request at INFO (the LinkedIn scheduler polls every
+# 30s), which buried real warnings in production logs.
+for _noisy in ("httpx", "httpcore", "hpack"):
+    logging.getLogger(_noisy).setLevel(logging.WARNING)
+
 logger = logging.getLogger(__name__)
 
 

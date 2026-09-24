@@ -608,3 +608,34 @@ def test_profile_scorecard_has_nine_sections(monkeypatch):
     r = writer.optimize_profile("CA", "About me")
     assert [s["section"] for s in r["scorecard"]] == writer.PROFILE_SECTIONS
     assert r["score"] == 50 and len(r["headlines"][0]) == 220
+
+
+def test_suggest_topics_shapes_and_fails_closed(monkeypatch):
+    calls = []
+
+    def ask(task, request, ctx="", temperature=0.8):
+        calls.append(task)
+        return {"topics": [{"topic": "How we cut onboarding from 11 to 4 days", "goal": "saves", "why": "real story"},
+                           {"topic": "x" * 300, "goal": "weird"}, "plain string idea", {"no": "topic"}]}
+
+    monkeypatch.setattr(writer, "_ask", ask)
+    out = writer.suggest_topics(ctx="CTX")
+    assert calls == ["plan"] and len(out) == 3
+    assert out[0]["goal"] == "saves" and out[1]["goal"] == "comments" and len(out[1]["topic"]) == 200
+    monkeypatch.setattr(writer, "_ask", lambda *a, **k: {"topics": []})
+    with pytest.raises(writer.WriterError):
+        writer.suggest_topics()
+
+
+def test_writer_retries_malformed_json_once(monkeypatch):
+    replies = iter(['{"variants": [{"post": "broken', json.dumps({"post": "Fixed on the second try, a proper post."})])
+
+    class C:
+        class chat:
+            class completions:
+                @staticmethod
+                def create(**kw):
+                    return type("R", (), {"choices": [type("Ch", (), {"message": type("M", (), {"content": next(replies)})})]})
+
+    monkeypatch.setattr(writer, "_client", lambda: C)
+    assert writer.rewrite("some post text here", "shorter").startswith("Fixed on the second try")

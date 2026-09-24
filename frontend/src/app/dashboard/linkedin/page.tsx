@@ -9,7 +9,7 @@ import { LoadingButton } from '@/components/shared/LoadingButton';
 import { formatDateTime } from '@/lib/utils';
 import {
   Bot, CalendarClock, Check, ChevronDown, ClipboardCheck, ExternalLink, FileText, Image as ImageIcon, Layers,
-  Linkedin, Lock, Paperclip, PenLine, RefreshCw, Send, Sparkles, Trash2, UserRound, Wand2, Wrench, X,
+  Lightbulb, Linkedin, Lock, Paperclip, PenLine, RefreshCw, Send, Sparkles, Trash2, UserRound, Wand2, Wrench, X,
 } from 'lucide-react';
 import { Banner, Checks, CopyButton, IssueList, VerdictBadge, errText, inputCls } from './_components/shared';
 import { BrandModal, BrandTab } from './_components/BrandProfile';
@@ -273,7 +273,7 @@ function Studio() {
       {tab === 'queue' && <Queue posts={posts} accounts={status?.accounts || []} onEdit={editPost} onChanged={refresh} setError={setError} setNotice={setNotice} onCreate={() => setTab('create')} />}
       {tab === 'autopilot' && <AutopilotPanel accounts={activeAccounts} setError={setError} setNotice={setNotice} onChanged={refresh} />}
       {tab === 'tools' && <SkillsPanel onDraft={draftFrom} setError={setError} setNotice={setNotice} />}
-      {tab === 'brand' && <BrandTab setError={setError} setNotice={setNotice} onSaved={refresh} />}
+      {tab === 'brand' && <BrandTab setNotice={setNotice} onSaved={refresh} />}
     </div>
   );
 }
@@ -357,6 +357,7 @@ function Composer(props: {
   const [formula, setFormula] = useState(seed?.formula || '');
   const [showOptions, setShowOptions] = useState(false);
   const [variants, setVariants] = useState<Variant[]>([]);
+  const [ideas, setIdeas] = useState<{ topic: string; goal: string; why: string }[]>([]);
   const [rewriteOpen, setRewriteOpen] = useState(false);
   const [instruction, setInstruction] = useState('');
   const [aiBusy, setAiBusy] = useState('');
@@ -383,6 +384,14 @@ function Composer(props: {
     try { return await fn(); } catch (e) { setError(errText(e, 'The AI request failed.')); return undefined; } finally { setAiBusy(''); }
   }
 
+  const suggest = () => run('topics', async () => {
+    const r = await api.post('/api/linkedin/ai/topics', { hint: topic.trim().length >= 3 && !ideas.some((i) => i.topic === topic) ? topic : '' });
+    setIdeas(r.data.topics || []);
+  });
+  const pickIdea = (i: { topic: string; goal: string }) => {
+    setTopic(i.topic);
+    if (GOALS.some(([v]) => v === i.goal)) setGoal(i.goal as Goal);
+  };
   const generate = () => run('draft', async () => {
     const r = await api.post('/api/linkedin/ai/draft', { topic, goal, length, formula, variants: 3 });
     setVariants(r.data.variants || []);
@@ -446,10 +455,29 @@ function Composer(props: {
       <div className="xl:col-span-3 space-y-4">
         {/* 1. ask the AI */}
         <GlassCard className="p-5 space-y-3">
-          <label className="text-sm font-semibold text-offwhite flex items-center gap-2"><Sparkles className="w-4 h-4 text-sky-300" /> What do you want to post about?</label>
+          <div className="flex items-center justify-between gap-2 flex-wrap">
+            <label className="text-sm font-semibold text-offwhite flex items-center gap-2"><Sparkles className="w-4 h-4 text-sky-300" /> What do you want to post about?</label>
+            <LoadingButton size="sm" variant="secondary" isLoading={aiBusy === 'topics'} onClick={suggest}
+                           icon={<Lightbulb className="w-3.5 h-3.5" />} title="Topic ideas from your brand profile and stories">
+              {ideas.length ? 'More ideas' : 'Suggest topics'}
+            </LoadingButton>
+          </div>
           <textarea value={topic} onChange={(e) => setTopic(e.target.value)} rows={2} maxLength={600}
-                    placeholder="e.g. 3 mistakes founders make when hiring their first salesperson"
+                    placeholder="e.g. 3 mistakes founders make when hiring their first salesperson - or tap Suggest topics"
                     className={`${inputCls} text-[15px]`} />
+          {ideas.length > 0 && (
+            <div className="space-y-1.5">
+              <p className="text-[11px] text-ice/50">Ideas from your brand profile - tap one to use it:</p>
+              <div className="flex flex-col gap-1.5">
+                {ideas.map((i) => (
+                  <button key={i.topic} onClick={() => pickIdea(i)} title={i.why}
+                          className={`text-left text-xs px-3 py-2 rounded-xl border transition-colors ${topic === i.topic ? 'bg-steel/20 border-steel/50 text-offwhite' : 'bg-navy/60 border-ocean/25 text-ice/75 hover:border-steel/40 hover:text-offwhite'}`}>
+                    {i.topic}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
           <div className="flex flex-wrap gap-2 items-center">
             <LoadingButton isLoading={aiBusy === 'draft'} disabled={topic.trim().length < 3} onClick={generate} icon={<Sparkles className="w-4 h-4" />}>Write 3 posts</LoadingButton>
             <LoadingButton variant="secondary" isLoading={aiBusy === 'carousel'} disabled={topic.trim().length < 3} onClick={carousel} icon={<Layers className="w-4 h-4" />}>Make a carousel</LoadingButton>

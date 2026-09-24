@@ -201,10 +201,18 @@ def build_pool(supabase) -> KeyPool:
         return KeyPool.from_keys(env_keys()) if not rows else KeyPool(keys)
 
     def on_change(k: PoolKey, reason: str) -> None:
-        supabase.table(TABLE).update({
-            "status": k.status, "credits_remaining": k.credits_remaining, "last_error": reason[:300] or None,
-            "updated_at": _now(),
-        }).eq("id", k.id).execute()
+        status, remaining = k.status, k.credits_remaining
+
+        def write() -> None:
+            try:
+                supabase.table(TABLE).update({
+                    "status": status, "credits_remaining": remaining, "last_error": reason[:300] or None,
+                    "updated_at": _now(),
+                }).eq("id", k.id).execute()
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("SocialCrawl key status write failed: %s", exc)
+        # same single-thread writer as usage rows -> writes land in order
+        _usage_writer.submit(write)
         logger.info("SocialCrawl key ...%s -> %s (%s)", k.hint, k.status, reason)
 
     def on_usage(k: PoolKey, credits: int, remaining: int | None) -> None:

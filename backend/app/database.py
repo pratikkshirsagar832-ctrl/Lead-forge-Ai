@@ -40,7 +40,20 @@ def _http_client() -> httpx.Client:
 
 
 def _create(url: str, key: str) -> Client:
-    return create_client(url, key, options=ClientOptions(httpx_client=_http_client()))
+    try:  # supabase-py >= 2.2x: every sub-client shares the pool
+        return create_client(url, key, options=ClientOptions(httpx_client=_http_client()))
+    except TypeError:  # older supabase-py (production pins 2.13): swap the DB session only
+        client = create_client(url, key)
+        try:
+            old = client.postgrest.session
+            client.postgrest.session = httpx.Client(
+                base_url=old.base_url, headers=old.headers, timeout=old.timeout, http2=False,
+                transport=httpx.HTTPTransport(retries=2, limits=httpx.Limits(
+                    max_connections=100, max_keepalive_connections=20, keepalive_expiry=15.0)))
+            old.close()
+        except Exception:  # noqa: BLE001 - keep the default client rather than fail
+            pass
+        return client
 
 
 def get_supabase_client() -> Client:

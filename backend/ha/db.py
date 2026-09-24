@@ -254,7 +254,20 @@ class SupabaseStore(Store):
         http = httpx.Client(http2=False, timeout=httpx.Timeout(120.0, connect=10.0),
                             transport=httpx.HTTPTransport(retries=2, limits=httpx.Limits(
                                 max_connections=50, max_keepalive_connections=10, keepalive_expiry=15.0)))
-        self._client = create_client(url, service_role_key, options=ClientOptions(httpx_client=http))
+        try:
+            self._client = create_client(url, service_role_key, options=ClientOptions(httpx_client=http))
+        except TypeError:  # older supabase-py: swap only the PostgREST session
+            self._client = create_client(url, service_role_key)
+            try:
+                old = self._client.postgrest.session
+                http.close()
+                self._client.postgrest.session = httpx.Client(
+                    base_url=old.base_url, headers=old.headers, timeout=old.timeout, http2=False,
+                    transport=httpx.HTTPTransport(retries=2, limits=httpx.Limits(
+                        max_connections=50, max_keepalive_connections=10, keepalive_expiry=15.0)))
+                old.close()
+            except Exception:  # noqa: BLE001
+                pass
         # Lazily probed: True when the table has the user_id column that
         # migration v8 (security hardening) added. Probed once per table so a
         # pre-v8 database degrades instead of failing every insert.

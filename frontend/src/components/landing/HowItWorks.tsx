@@ -31,8 +31,8 @@ const steps = [
   },
   {
     number: '04',
-    title: 'Personalized Pitch',
-    description: 'AI writes customized email drafts referencing specific issues on their website — dramatically increasing reply rates.',
+    title: 'Track & Close',
+    description: 'Move every lead through your sales pipeline, add notes, export to CSV and keep your LinkedIn active with AI posts.',
     icon: SendHorizonal,
     color: 'from-amber-400/20 to-rose/20',
     iconColor: 'text-amber-400',

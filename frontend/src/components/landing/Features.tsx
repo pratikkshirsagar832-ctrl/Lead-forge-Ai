@@ -23,8 +23,8 @@ const features = [
   },
   {
     icon: <MessageSquare className="w-6 h-6" />,
-    title: 'AI Pitch Generation',
-    description: 'Generate hyper-personalized outreach pitches based on website context, missing features, and pain points.',
+    title: 'LinkedIn Studio',
+    description: 'AI writes your LinkedIn posts and carousels in your voice, suggests topics, and schedules or auto-posts them for you.',
     gradient: 'from-cta-light/20 to-steel/20',
     color: 'text-cta-light',
     accent: 'via-cta',

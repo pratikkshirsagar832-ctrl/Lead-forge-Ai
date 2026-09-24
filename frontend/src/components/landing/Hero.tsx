@@ -50,7 +50,7 @@ export function Hero() {
             className="text-xl md:text-2xl text-ice/60 mb-10 max-w-3xl mx-auto leading-relaxed"
           >
             Stop wasting hours manually searching. Hyperclients automatically extracts businesses,
-            analyzes their websites, and drafts personalized pitches —{' '}
+            finds people asking for your service on LinkedIn, and analyzes their websites —{' '}
             <span className="text-ice/90 font-semibold">all in one click</span>.
           </motion.p>
 

@@ -21,9 +21,12 @@ interface PlanData {
   searches_per_month?: number;
   leads_per_month?: number;
   ai_calls_monthly?: number;
-  team_seats: number;
+  linkedin_posts_monthly?: number;
   sort_order: number;
 }
+
+// Team seats per plan (backend: app/routers/auth.py PLAN_SEATS).
+const TEAM_SEATS: Record<string, number> = { pro: 2, agency: 10 };
 
 const PLAN_ICONS: Record<string, typeof Zap> = {
   free: Zap,
@@ -41,24 +44,26 @@ const PLAN_COLORS: Record<string, string> = {
 
 function getFeatures(plan: PlanData): string[] {
   const searches = plan.searches_per_month ?? plan.searches_per_day;
+  const posts = plan.linkedin_posts_monthly || 0;
+  const seats = TEAM_SEATS[plan.id] || 0;
   const features: string[] = [
-    `${plan.linkedin_hq_leads_monthly} HQ LinkedIn leads/mo`,
-    `${plan.gmb_leads_monthly} GMB leads/mo`,
+    `${plan.linkedin_hq_leads_monthly} LinkedIn buyer leads/mo (fresh, AI-verified)`,
+    `${plan.gmb_leads_monthly} Google Maps leads/mo`,
     `${searches} searches/mo`,
-    ...(plan.ai_calls_monthly ? [`${plan.ai_calls_monthly} AI pitches/mo`] : []),
-    'Leads management',
-    'Website analysis',
   ];
-  if (plan.id !== 'free') features.push('AI pitch generation');
-  if (plan.id === 'pro' || plan.id === 'agency') {
-    features.push('CSV export', 'Priority support', 'Advanced analytics');
+  if (posts > 0) {
+    features.push(
+      `LinkedIn Studio: ${posts} AI posts/mo`,
+      'Post scheduling + autopilot',
+      'AI carousels, topic ideas & post checks',
+    );
   }
-  if (plan.id === 'agency') {
-    features.push('API access', 'Dedicated support');
-  }
-  if (plan.team_seats > 0) {
-    features.push(`${plan.team_seats} team seats`);
-  }
+  if (plan.ai_calls_monthly) features.push(`${plan.ai_calls_monthly} AI writing credits/mo`);
+  features.push('Sales pipeline CRM', 'Website analysis', 'Developer API (pay per lead)');
+  if (plan.id === 'pro' || plan.id === 'agency') features.push('CSV export');
+  if (seats > 0) features.push(`${seats} team seats`);
+  if (plan.id === 'pro') features.push('Priority support');
+  if (plan.id === 'agency') features.push('Dedicated support');
   return features;
 }
 

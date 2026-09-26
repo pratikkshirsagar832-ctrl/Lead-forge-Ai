@@ -197,7 +197,7 @@ async def list_plans():
     supabase = get_supabase_admin()
     try:
         try:
-            resp = supabase.table("plans").select("id,name,leads_per_day,searches_per_day,searches_per_month,leads_per_month,ai_calls_monthly,gmb_leads_monthly,linkedin_hq_leads_monthly,linkedin_posts_monthly,billing_cycle_days,sort_order,price_monthly").order("sort_order").execute()
+            resp = supabase.table("plans").select("id,name,leads_per_day,searches_per_day,searches_per_month,leads_per_month,ai_calls_monthly,gmb_leads_monthly,linkedin_hq_leads_monthly,billing_cycle_days,sort_order,price_monthly").order("sort_order").execute()
         except Exception as col_err:
             # Pre-v16 / partial schema (e.g. missing billing_cycle_days):
             # fall back to whole-row read rather than 500ing public pricing.

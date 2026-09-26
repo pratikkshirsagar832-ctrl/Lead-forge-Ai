@@ -49,20 +49,11 @@ class Settings(BaseSettings):
     # backend admin endpoints (/api/admin/*). Empty = admin endpoints disabled.
     admin_api_token: str = ""
 
-    # LinkedIn Studio — official LinkedIn API only. Two LinkedIn apps:
-    #   member app: "Sign In with LinkedIn (OpenID Connect)" + "Share on LinkedIn"
-    #   pages app:  "Community Management API" (LinkedIn review; separate app)
-    linkedin_client_id: str = ""
-    linkedin_client_secret: str = ""
-    linkedin_pages_client_id: str = ""
-    linkedin_pages_client_secret: str = ""
-    linkedin_pages_enabled: bool = False
-    linkedin_redirect_uri: str = "https://hyperclients.online/api/linkedin/callback"
-    linkedin_api_version: str = "202608"
-    linkedin_token_key: str = ""          # Fernet key (base64, 32 bytes) for tokens at rest
-    linkedin_daily_post_cap: int = 5      # per connected account, safety cap
-    linkedin_scheduler_enabled: bool = True
-    linkedin_scheduler_interval_s: int = 30
+    # Fernet key (base64, 32 bytes) that encrypts secrets at rest - the
+    # SocialCrawl API keys in the socialcrawl_keys table (token_crypto).
+    # Keeps its historical env name LINKEDIN_TOKEN_KEY: changing the key would
+    # make every stored key undecryptable.
+    linkedin_token_key: str = ""
 
     razorpay_key_id: str = ""
     razorpay_key_secret: str = ""

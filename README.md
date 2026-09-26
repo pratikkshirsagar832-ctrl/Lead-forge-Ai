@@ -1,6 +1,6 @@
 # Hyperclients (Lead Forge AI)
 
-**AI lead generation and LinkedIn growth platform.** Find people who are asking for your service right now on LinkedIn, pull local businesses from Google Maps, qualify everything with AI, and grow your own LinkedIn with an AI writing and scheduling studio.
+**AI lead generation platform.** Find people who are asking for your service right now on LinkedIn, pull local businesses from Google Maps, and qualify everything with AI.
 
 > **Production:** [https://hyperclients.online](https://hyperclients.online)
 
@@ -13,7 +13,6 @@
 | **LinkedIn buyer leads** | SocialCrawl searches public LinkedIn posts with buyer phrases ("can anyone recommend an accountant"), DeepSeek classifies each post, and only genuine, fresh buyers are saved: exactly the number you asked for |
 | **Google Maps leads** | A Go scraper pulls local businesses; websites can be analysed on demand |
 | **CRM + AI outreach** | Pipeline board, notes, CSV export, AI pitches and short outreach messages |
-| **LinkedIn Studio** | AI posts, carousels, scheduling and autopilot through LinkedIn's official API (Pro / Agency) |
 | **Public API** | Pay-per-lead REST API with a prepaid wallet and signed webhooks (`/v1`) |
 | **Teams** | Pro and Agency owners add team seats that share the owner's plan |
 
@@ -26,7 +25,7 @@
 | Frontend | Next.js 16 (app router), React 18, TypeScript 5, Tailwind CSS 4, Zustand, Framer Motion |
 | Backend | Python 3.12, FastAPI, uvicorn |
 | Database / auth | Supabase (Postgres + RLS, email + Google login) |
-| AI | DeepSeek (lead classification, LinkedIn Studio), OpenAI (pitches, website analysis) |
+| AI | DeepSeek (lead classification), OpenAI (pitches, website analysis) |
 | Data sources | SocialCrawl (LinkedIn posts), Go google-maps-scraper (Maps), Scrapling (websites) |
 | Payments | Razorpay |
 | Deploy | Docker Compose on a VPS behind nginx |
@@ -67,7 +66,7 @@ Tests: `cd backend && python -m pytest tests ha/tests -q` and `cd frontend && np
 SUPABASE_URL=https://xxx.supabase.co
 SUPABASE_ANON_KEY=...
 SUPABASE_SERVICE_ROLE_KEY=...
-DEEPSEEK_API_KEY=...            # lead classifier + LinkedIn Studio AI
+DEEPSEEK_API_KEY=...            # lead classifier
 OPENAI_API_KEY=...              # pitches + website analysis
 SOCIALCRAWL_API_KEY=sc_...      # LinkedIn post search
 SOCIALCRAWL_API_KEYS=sc_...,sc_...  # more keys; rotated automatically when one runs out
@@ -77,11 +76,7 @@ RAZORPAY_KEY_SECRET=...
 FRONTEND_URL=https://hyperclients.online
 ENVIRONMENT=production
 
-# LinkedIn Studio (see docs/15-LINKEDIN-STUDIO.md)
-LINKEDIN_CLIENT_ID=...
-LINKEDIN_CLIENT_SECRET=...
-LINKEDIN_REDIRECT_URI=https://hyperclients.online/api/linkedin/callback
-LINKEDIN_TOKEN_KEY=...          # Fernet key - never change once users connect
+LINKEDIN_TOKEN_KEY=...          # Fernet key encrypting stored SocialCrawl keys - never change it
 ```
 
 ### `frontend/.env.local` (template: `frontend/.env.example`)
@@ -101,20 +96,18 @@ ADMIN_API_TOKEN=...             # same value as the backend
 ```
 backend/
   app/
-    main.py                 FastAPI app, routers, LinkedIn scheduler
+    main.py                 FastAPI app, routers
     routers/                auth, search, leads, dashboard, ai, subscriptions,
-                            developer, public_api (/v1), linkedin_studio
+                            developer, public_api (/v1)
     services/
       hyperagent_service.py LinkedIn lead engine wiring (SocialCrawl + DeepSeek)
       pipeline.py, scraper_service.py   Google Maps pipeline
-      linkedin_*.py         LinkedIn Studio (API client, writer, scheduler, lint)
       plans.py, usage.py    plans, quotas, team seats
-    linkedin_skills/        vendored MIT LinkedIn writing skills (AI prompts)
   ha/                       lead engine: query builder, discovery, classifier, scoring
   google-maps-scraper/      Go scraper (built in the Docker image)
   tests/, ha/tests/
 frontend/
-  src/app/                  pages (dashboard, search, leads, linkedin studio, blogs, admin)
+  src/app/                  pages (dashboard, search, leads, blogs, admin)
   src/components/, src/lib/, src/stores/, src/hooks/
   lib/                      server-side blog / admin helpers
   data/                     seed content for the blog (runtime copy lives in a Docker volume)
@@ -152,7 +145,6 @@ Blogs and drafts published from `/admin` are stored in the `blog-data` Docker vo
 | File | Content |
 |---|---|
 | `docs/14-PUBLIC-API.md` | Public API v1, wallet, webhooks |
-| `docs/15-LINKEDIN-STUDIO.md` | LinkedIn Studio setup and internals |
 | `docs/linkedin-pipeline-audit.md` | LinkedIn lead engine deep dive |
 | `docs/01` - `docs/12` | Original project docs (some sections predate the SocialCrawl engine) |
 

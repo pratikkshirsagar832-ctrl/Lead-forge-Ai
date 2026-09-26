@@ -1,7 +1,7 @@
 'use client';
 
 import { motion } from 'framer-motion';
-import { Map, Zap, Filter, LayoutDashboard, Target, Sparkles, Shield, BarChart3, MessageSquare } from 'lucide-react';
+import { Map, Zap, Filter, LayoutDashboard, Target, Sparkles, Shield, BarChart3, Users } from 'lucide-react';
 import { ScrollReveal } from '@/lib/animations';
 
 const features = [
@@ -22,9 +22,9 @@ const features = [
     accent: 'via-amber-500',
   },
   {
-    icon: <MessageSquare className="w-6 h-6" />,
-    title: 'LinkedIn Studio',
-    description: 'AI writes your LinkedIn posts and carousels in your voice, suggests topics, and schedules or auto-posts them for you.',
+    icon: <Users className="w-6 h-6" />,
+    title: 'LinkedIn Buyer Leads',
+    description: 'Find people posting on LinkedIn that they need your service right now. Every post is qualified by AI and the newest buyers come first.',
     gradient: 'from-cta-light/20 to-steel/20',
     color: 'text-cta-light',
     accent: 'via-cta',

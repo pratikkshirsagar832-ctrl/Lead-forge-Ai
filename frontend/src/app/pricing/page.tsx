@@ -21,7 +21,6 @@ interface PlanData {
   searches_per_month?: number;
   leads_per_month?: number;
   ai_calls_monthly?: number;
-  linkedin_posts_monthly?: number;
   sort_order: number;
 }
 
@@ -44,20 +43,12 @@ const PLAN_COLORS: Record<string, string> = {
 
 function getFeatures(plan: PlanData): string[] {
   const searches = plan.searches_per_month ?? plan.searches_per_day;
-  const posts = plan.linkedin_posts_monthly || 0;
   const seats = TEAM_SEATS[plan.id] || 0;
   const features: string[] = [
     `${plan.linkedin_hq_leads_monthly} LinkedIn buyer leads/mo (fresh, AI-verified)`,
     `${plan.gmb_leads_monthly} Google Maps leads/mo`,
     `${searches} searches/mo`,
   ];
-  if (posts > 0) {
-    features.push(
-      `LinkedIn Studio: ${posts} AI posts/mo`,
-      'Post scheduling + autopilot',
-      'AI carousels, topic ideas & post checks',
-    );
-  }
   if (plan.ai_calls_monthly) features.push(`${plan.ai_calls_monthly} AI writing credits/mo`);
   features.push('Sales pipeline CRM', 'Website analysis', 'Developer API (pay per lead)');
   if (plan.id === 'pro' || plan.id === 'agency') features.push('CSV export');

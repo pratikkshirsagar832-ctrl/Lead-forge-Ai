@@ -1,8 +1,9 @@
-"""Encryption at rest for third-party OAuth tokens (LinkedIn).
+"""Encryption at rest for third-party secrets (the SocialCrawl API key pool).
 
-Fernet (AES-128-CBC + HMAC-SHA256) keyed by ``LINKEDIN_TOKEN_KEY``. Tokens
-are encrypted before they touch the database and are never returned to the
-browser. Generate a key with:
+Fernet (AES-128-CBC + HMAC-SHA256) keyed by ``LINKEDIN_TOKEN_KEY`` (a
+historical name - keep it, or every stored key becomes undecryptable).
+Secrets are encrypted before they touch the database and are never returned
+to the browser. Generate a key with:
 
     python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
 """

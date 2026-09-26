@@ -1,285 +1,334 @@
-﻿'use client';
-
-import { useState } from 'react';
-import { motion } from 'framer-motion';
+import type { Metadata } from 'next';
+import Link from 'next/link';
 import {
-  Globe,
-  Loader2,
-  CheckCircle2,
-  XCircle,
-  AlertTriangle,
   ArrowRight,
+  Bot,
+  CheckCircle2,
+  ChevronDown,
+  FileCode2,
   Gauge,
-  FileSearch,
-  RefreshCw,
+  Heading,
+  ImageIcon,
+  Network,
+  Tags,
 } from 'lucide-react';
 import { BlogBackground } from '@/components/blog-background';
 import { Footer } from '@/components/landing/Footer';
 import Header from '@/components/landing/Header';
+import { SeoChecker } from './_components/SeoChecker';
 
-interface SeoCheck {
-  id: string;
-  label: string;
-  passed: boolean;
-  points: number;
-  max: number;
-  detail: string;
-}
+const SITE_URL = (process.env.NEXT_PUBLIC_SITE_URL || 'https://hyperclients.online').replace(/\/+$/, '');
+const PAGE_URL = `${SITE_URL}/tools/seo-score-checker`;
 
-interface SeoResult {
-  score: number;
-  grade: string;
-  url: string;
-  title: string;
-  metaDescription: string;
-  wordCount: number;
-  checks: SeoCheck[];
-}
+const TITLE = 'Free SEO Score Checker | Online Website SEO Audit Tool';
+const DESCRIPTION =
+  "Use our free SEO Score Checker to analyze your website's SEO. Check meta tags, headings, alt text, sitemap, robots.txt, and more.";
 
-const GRADE_STYLES: Record<string, { text: string; ring: string; glow: string }> = {
-  A: { text: 'text-emerald-400', ring: '#10B981', glow: 'shadow-emerald-500/20' },
-  B: { text: 'text-brand-accent-light', ring: '#FFB020', glow: 'shadow-brand-accent/20' },
-  C: { text: 'text-amber-400', ring: '#F59E0B', glow: 'shadow-amber-500/20' },
-  D: { text: 'text-orange-400', ring: '#FB923C', glow: 'shadow-orange-500/20' },
-  F: { text: 'text-rose-400', ring: '#F43F5E', glow: 'shadow-rose-500/20' },
+export const metadata: Metadata = {
+  title: TITLE,
+  description: DESCRIPTION,
+  keywords: ['seo score checker', 'online seo score checker', 'seo score checker free', 'website seo audit tool'],
+  alternates: { canonical: PAGE_URL },
+  openGraph: { title: TITLE, description: DESCRIPTION, url: PAGE_URL, siteName: 'Hyperclients', type: 'website' },
+  twitter: { card: 'summary_large_image', title: TITLE, description: DESCRIPTION },
 };
 
-const GRADE_LABEL: Record<string, string> = {
-  A: 'Excellent',
-  B: 'Good',
-  C: 'Average',
-  D: 'Needs work',
-  F: 'Poor',
+const BENEFITS = [
+  'Identify on-page SEO issues',
+  'Find missing or incomplete meta tags',
+  'Review your heading structure',
+  'Identify missing image alt text',
+  'Check important technical SEO elements',
+  'Review robots.txt availability',
+  'Check for an XML sitemap',
+  'Find areas that need optimization',
+  'Track improvements after making SEO changes',
+];
+
+const ANALYZES = [
+  {
+    icon: Tags,
+    title: 'Meta Tags',
+    body: 'Meta titles and meta descriptions help search engines and users understand the topic of a webpage. Optimized metadata can also help create a clear and relevant search result. The checker helps you identify potential issues with these important SEO elements.',
+  },
+  {
+    icon: Heading,
+    title: 'Headings',
+    body: 'A well-organized heading structure makes your content easier to scan and understand. Proper use of H1, H2, and other headings can help establish a logical content hierarchy.',
+  },
+  {
+    icon: ImageIcon,
+    title: 'Image Alt Text',
+    body: 'Alternative text helps describe images to users who rely on assistive technologies and can provide search engines with additional context. The checker can help identify images that may be missing useful alt attributes.',
+  },
+  {
+    icon: Bot,
+    title: 'Robots.txt',
+    body: 'The robots.txt file provides instructions to search engine crawlers about which areas of a website they can access. Reviewing robots.txt is an important part of a basic technical SEO audit.',
+  },
+  {
+    icon: Network,
+    title: 'XML Sitemap',
+    body: 'An XML sitemap helps search engines discover important URLs on your website. Checking sitemap availability is useful when reviewing the technical SEO setup of a website.',
+  },
+];
+
+const STEPS = [
+  'Enter your website URL into the SEO Score Checker.',
+  'Click the check button to start the analysis.',
+  'Review the SEO audit results and identify elements that need improvement.',
+  'Make the necessary changes to your website.',
+  'Run another check after implementing your improvements to measure progress.',
+];
+
+const AUDIENCE = [
+  'SEO professionals',
+  'Digital marketers',
+  'Website owners',
+  'Freelancers',
+  'Agencies',
+  'Bloggers',
+  'Business owners',
+];
+
+const FAQS = [
+  {
+    q: 'What is an SEO Score Checker?',
+    a: 'An SEO Score Checker is a tool that analyzes important SEO factors on a webpage, including meta tags, headings, image alt text, sitemap, and robots.txt. It helps identify areas that may need optimization.',
+  },
+  {
+    q: 'How can I check my website SEO score?',
+    a: 'Enter your website URL into the Hyperclients SEO Score Checker and start the analysis. The tool reviews key SEO elements and provides insights into areas that may need improvement.',
+  },
+  {
+    q: 'Is the Hyperclients SEO Score Checker free?',
+    a: 'Yes, you can use the Hyperclients SEO Score Checker to perform a basic SEO analysis of your website without paying for the tool.',
+  },
+  {
+    q: 'What factors does an SEO Score Checker analyze?',
+    a: 'The tool can check important elements such as meta titles, meta descriptions, heading structure, image alt text, robots.txt, XML sitemap, and other on-page SEO factors.',
+  },
+  {
+    q: 'Does an SEO score guarantee higher Google rankings?',
+    a: 'No. An SEO score is an indicator of website optimization and does not guarantee higher rankings. Google rankings also depend on content quality, search intent, backlinks, competition, technical SEO, user experience, and other factors.',
+  },
+  {
+    q: 'How often should I check my website SEO score?',
+    a: 'You can check your SEO score regularly, especially after publishing new pages, updating content, making technical SEO changes, or redesigning your website. Regular audits can help you identify and fix SEO issues over time.',
+  },
+];
+
+const JSON_LD = {
+  '@context': 'https://schema.org',
+  '@graph': [
+    {
+      '@type': 'WebApplication',
+      name: 'Hyperclients SEO Score Checker',
+      url: PAGE_URL,
+      description: DESCRIPTION,
+      applicationCategory: 'BusinessApplication',
+      operatingSystem: 'Any',
+      offers: { '@type': 'Offer', price: '0', priceCurrency: 'USD' },
+    },
+    {
+      '@type': 'FAQPage',
+      mainEntity: FAQS.map(({ q, a }) => ({
+        '@type': 'Question',
+        name: q,
+        acceptedAnswer: { '@type': 'Answer', text: a },
+      })),
+    },
+  ],
 };
 
-function normalizeUrl(raw: string): string {
-  const trimmed = raw.trim();
-  if (!trimmed) return '';
-  if (/^https?:\/\//i.test(trimmed)) return trimmed;
-  return `https://${trimmed}`;
+function SectionHeading({ children }: { children: React.ReactNode }) {
+  return <h2 className="text-2xl md:text-3xl font-bold text-offwhite font-heading mb-4">{children}</h2>;
 }
 
 export default function SeoScoreCheckerPage() {
-  const [url, setUrl] = useState('');
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState('');
-  const [result, setResult] = useState<SeoResult | null>(null);
-
-  async function runCheck(e?: React.FormEvent) {
-    e?.preventDefault();
-    const normalized = normalizeUrl(url);
-    if (!normalized) {
-      setError('Please enter a website URL.');
-      return;
-    }
-    setLoading(true);
-    setError('');
-    setResult(null);
-    try {
-      const res = await fetch('/api/tools/seo-score', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ url: normalized }),
-      });
-      const data = await res.json();
-      if (!res.ok) {
-        setError(data?.error || 'Something went wrong. Try again.');
-        return;
-      }
-      setResult(data);
-    } catch {
-      setError('Could not reach the checker. Try again.');
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  const gs = result ? GRADE_STYLES[result.grade] || GRADE_STYLES.F : null;
-  const circumference = 2 * Math.PI * 64;
-
   return (
     <div className="relative min-h-screen bg-navy text-ice font-sans overflow-hidden">
+      <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: JSON.stringify(JSON_LD) }} />
       <BlogBackground />
       <Header />
-      <div className="container relative z-10 mx-auto px-6 pt-28 pb-20 max-w-4xl">
-        <p className="text-xs font-semibold uppercase tracking-widest text-brand-accent-light mb-2 flex items-center gap-2">
-          <Gauge className="w-4 h-4" /> Free Website Audit Tool
-        </p>
-        <h1 className="text-4xl md:text-5xl font-bold text-offwhite font-heading mb-3">
-          Website <span className="gradient-text-premium">Audit</span>
-        </h1>
-        <p className="text-ice/80 text-lg mb-10">
-          Paste any website URL and get an instant on-page audit — title, headings, alt text, meta
-          tags, robots.txt, sitemap and more. Free, no login required.
-        </p>
 
-        <form
-          onSubmit={runCheck}
-          className="glass-card rounded-2xl p-3 flex flex-col sm:flex-row gap-3 mb-10"
-        >
-          <div className="flex-1 flex items-center gap-3 bg-navy/50 rounded-xl px-4 border border-steel/20 focus-within:border-brand-accent/50 transition-colors">
-            <Globe className="w-4.5 h-4.5 text-ice/40 shrink-0" />
-            <input
-              type="text"
-              inputMode="url"
-              value={url}
-              onChange={(e) => setUrl(e.target.value)}
-              placeholder="https://example.com"
-              className="w-full bg-transparent py-3.5 text-sm text-offwhite placeholder:text-text-muted/60 outline-none"
-              aria-label="Website URL"
-            />
+      <main className="container relative z-10 mx-auto px-6 pt-28 pb-20 max-w-4xl">
+        {/* ── Hero + tool ── */}
+        <section id="checker" className="scroll-mt-28">
+          <p className="text-xs font-semibold uppercase tracking-widest text-brand-accent-light mb-2 flex items-center gap-2">
+            <Gauge className="w-4 h-4" /> Free Website SEO Audit Tool
+          </p>
+          <h1 className="text-4xl md:text-5xl font-bold text-offwhite font-heading mb-4">
+            SEO <span className="gradient-text-premium">Score Checker</span>
+          </h1>
+          <p className="text-ice/80 text-lg leading-relaxed mb-3">
+            Want to know how well your website is optimized for search engines? Use the Hyperclients SEO Score
+            Checker to analyze your website and identify important SEO issues that may affect its visibility,
+            crawlability, and user experience.
+          </p>
+          <p className="text-ice/65 leading-relaxed mb-8">
+            With an online SEO score checker, you can quickly review essential SEO elements without manually
+            checking every page. Simply enter your website URL, run the analysis, and discover areas that may need
+            improvement.
+          </p>
+
+          <SeoChecker />
+
+          <ul className="mt-4 flex flex-wrap gap-x-5 gap-y-1.5 text-xs text-ice/50">
+            {['100% free', 'No login required', 'Results in seconds'].map((t) => (
+              <li key={t} className="flex items-center gap-1.5">
+                <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" /> {t}
+              </li>
+            ))}
+          </ul>
+        </section>
+
+        {/* ── What is ── */}
+        <section className="mt-20">
+          <SectionHeading>What Is an SEO Score Checker?</SectionHeading>
+          <p className="text-ice/80 leading-relaxed mb-4">
+            An SEO Score Checker is a tool that evaluates a webpage based on important search engine optimization
+            factors. It helps identify common on-page and technical SEO issues so you can understand what is working
+            well and what needs attention.
+          </p>
+          <p className="text-ice/80 leading-relaxed">
+            The Hyperclients SEO score checker free tool allows you to perform a quick website SEO analysis without
+            complicated setup. You can use the results to identify optimization opportunities and improve your
+            website&apos;s overall SEO health.
+          </p>
+        </section>
+
+        {/* ── Why ── */}
+        <section className="mt-16">
+          <SectionHeading>Why Check Your Website SEO Score?</SectionHeading>
+          <p className="text-ice/80 leading-relaxed mb-6">
+            Search engines need to crawl, understand, and index your webpages before they can appear in relevant
+            search results. Issues such as missing meta tags, poor heading structure, missing image alt text, or
+            technical configuration problems can affect how effectively search engines understand your website.
+          </p>
+          <div className="glass-card rounded-2xl p-6 md:p-8">
+            <h3 className="text-sm font-bold uppercase tracking-widest text-brand-accent-light mb-5">
+              Regular website SEO checks can help you
+            </h3>
+            <ul className="grid sm:grid-cols-2 gap-x-8 gap-y-3">
+              {BENEFITS.map((b) => (
+                <li key={b} className="flex items-start gap-2.5 text-[15px] text-ice/85">
+                  <CheckCircle2 className="w-4.5 h-4.5 text-emerald-400 shrink-0 mt-0.5" /> {b}
+                </li>
+              ))}
+            </ul>
           </div>
-          <button
-            type="submit"
-            disabled={loading}
-            className="btn-gradient-cyan rounded-xl px-8 py-3.5 text-sm inline-flex items-center justify-center gap-2 disabled:opacity-60 disabled:cursor-not-allowed shrink-0"
-          >
-            {loading ? (
-              <>
-                <Loader2 className="w-4 h-4 animate-spin" /> Analyzing…
-              </>
-            ) : (
-              <>
-                Check Score <ArrowRight className="w-4 h-4" />
-              </>
-            )}
-          </button>
-        </form>
+          <p className="text-ice/70 leading-relaxed mt-6">
+            Using an online SEO score checker can save time by bringing several basic SEO checks together in one
+            place.
+          </p>
+        </section>
 
-        {error && (
-          <motion.div
-            initial={{ opacity: 0, y: 8 }}
-            animate={{ opacity: 1, y: 0 }}
-            className="flex items-start gap-3 glass-card rounded-xl px-5 py-4 border-rose/30 mb-8"
-          >
-            <AlertTriangle className="w-5 h-5 text-rose shrink-0 mt-0.5" />
-            <p className="text-sm text-ice/85">{error}</p>
-          </motion.div>
-        )}
-
-        {result && gs && (
-          <motion.div
-            initial={{ opacity: 0, y: 16 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.4 }}
-            className="glass-card-premium rounded-2xl overflow-hidden"
-          >
-            <div className="p-6 md:p-10 grid md:grid-cols-[auto_1fr] gap-8 items-center border-b border-steel/10">
-              <div className="relative w-40 h-40 mx-auto md:mx-0">
-                <svg viewBox="0 0 160 160" className="w-full h-full -rotate-90">
-                  <circle cx="80" cy="80" r="64" fill="none" stroke="rgba(42,53,224,0.15)" strokeWidth="12" />
-                  <motion.circle
-                    cx="80"
-                    cy="80"
-                    r="64"
-                    fill="none"
-                    stroke={gs.ring}
-                    strokeWidth="12"
-                    strokeLinecap="round"
-                    strokeDasharray={circumference}
-                    initial={{ strokeDashoffset: circumference }}
-                    animate={{ strokeDashoffset: circumference * (1 - result.score / 100) }}
-                    transition={{ duration: 1.2, ease: 'easeOut' }}
-                  />
-                </svg>
-                <div className="absolute inset-0 flex flex-col items-center justify-center">
-                  <span className="text-5xl font-bold font-heading text-offwhite">{result.score}</span>
-                  <span className={`text-xs font-bold mt-1 ${gs.text}`}>GRADE {result.grade}</span>
-                </div>
-              </div>
-              <div>
-                <p className="text-xs font-semibold uppercase tracking-widest text-text-muted mb-1.5">
-                  {GRADE_LABEL[result.grade]}
-                </p>
-                <h2 className="text-2xl md:text-3xl font-bold font-heading text-offwhite mb-3 break-words">
-                  {result.title || 'No page title'}
-                </h2>
-                <p className="text-ice/70 text-sm mb-5 break-words">{result.url}</p>
-                {result.metaDescription && (
-                  <p className="text-sm text-ice/60 leading-relaxed mb-4">{result.metaDescription}</p>
-                )}
-                <div className="flex flex-wrap gap-2 text-xs text-text-muted">
-                  <span className="px-2.5 py-1 rounded-full bg-ocean/40 border border-steel/15">
-                    {result.wordCount.toLocaleString()} words
+        {/* ── What it analyzes ── */}
+        <section className="mt-16">
+          <SectionHeading>What Does the Hyperclients SEO Checker Analyze?</SectionHeading>
+          <p className="text-ice/80 leading-relaxed mb-6">
+            The Hyperclients SEO Score Checker reviews several important elements of your webpage.
+          </p>
+          <div className="grid md:grid-cols-2 gap-5">
+            {ANALYZES.map(({ icon: Icon, title, body }, i) => (
+              <div
+                key={title}
+                className={`glass-card-premium rounded-2xl p-6 ${i === ANALYZES.length - 1 ? 'md:col-span-2' : ''}`}
+              >
+                <div className="flex items-center gap-3 mb-3">
+                  <span className="inline-flex items-center justify-center w-10 h-10 rounded-xl bg-primary/20 border border-primary/30">
+                    <Icon className="w-5 h-5 text-brand-accent-light" />
                   </span>
-                  <span className="px-2.5 py-1 rounded-full bg-ocean/40 border border-steel/15">
-                    {result.checks.length} checks
-                  </span>
+                  <h3 className="text-lg font-bold text-offwhite font-heading">{title}</h3>
                 </div>
-                <button
-                  onClick={runCheck}
-                  disabled={loading}
-                  className="mt-6 inline-flex items-center gap-2 text-xs font-semibold text-brand-accent hover:text-brand-accent-light transition-colors disabled:opacity-50"
-                >
-                  <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} /> Re-run check
-                </button>
+                <p className="text-ice/75 leading-relaxed text-[15px]">{body}</p>
               </div>
-            </div>
+            ))}
+          </div>
+        </section>
 
-            <div className="p-6 md:p-10">
-              <h3 className="flex items-center gap-2 text-sm font-bold uppercase tracking-widest text-brand-accent-light mb-6">
-                <FileSearch className="w-4 h-4" /> Audit Breakdown
-              </h3>
-              <div className="space-y-4">
-                {result.checks.map((check, i) => (
-                  <motion.div
-                    key={check.id}
-                    initial={{ opacity: 0, x: -8 }}
-                    animate={{ opacity: 1, x: 0 }}
-                    transition={{ delay: 0.5 + i * 0.06, duration: 0.3 }}
-                    className="flex items-start gap-4"
-                  >
-                    {check.passed ? (
-                      <CheckCircle2 className="w-5 h-5 text-emerald-400 shrink-0 mt-0.5" />
-                    ) : check.points > 0 ? (
-                      <AlertTriangle className="w-5 h-5 text-amber-400 shrink-0 mt-0.5" />
-                    ) : (
-                      <XCircle className="w-5 h-5 text-rose shrink-0 mt-0.5" />
-                    )}
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center justify-between gap-3 mb-1.5">
-                        <span className="text-sm font-semibold text-offwhite">{check.label}</span>
-                        <span className="text-xs font-bold text-text-muted shrink-0">
-                          {check.points}/{check.max}
-                        </span>
-                      </div>
-                      <div className="h-1.5 rounded-full bg-ocean/40 overflow-hidden mb-1.5">
-                        <motion.div
-                          className="h-full rounded-full"
-                          style={{
-                            background: check.passed
-                              ? 'linear-gradient(90deg, #10B981, #34D399)'
-                              : check.points > 0
-                                ? 'linear-gradient(90deg, #F59E0B, #FBBF24)'
-                                : '#F43F5E',
-                          }}
-                          initial={{ width: 0 }}
-                          animate={{ width: `${(check.points / check.max) * 100}%` }}
-                          transition={{ delay: 0.7 + i * 0.06, duration: 0.5, ease: 'easeOut' }}
-                        />
-                      </div>
-                      <p className="text-xs text-ice/55 leading-relaxed break-words">{check.detail}</p>
-                    </div>
-                  </motion.div>
-                ))}
-              </div>
-
-              <div className="mt-10 glass-card rounded-2xl p-6 md:p-8">
-                <h3 className="text-xl font-bold text-offwhite font-heading mb-2">
-                  Want ready-to-buy leads instead of audits?
-                </h3>
-                <p className="text-ice/80 leading-relaxed text-sm mb-5">
-                  Hyperclients finds local businesses with weak or missing websites and scores them by
-                  opportunity — so you pitch the ones ready to buy a redesign or website retainer.
+        {/* ── How to use ── */}
+        <section className="mt-16">
+          <SectionHeading>How to Use the Hyperclients SEO Score Checker</SectionHeading>
+          <p className="text-ice/80 leading-relaxed mb-6">Checking your website is simple:</p>
+          <ol className="space-y-3">
+            {STEPS.map((step, i) => (
+              <li key={step} className="glass-card rounded-xl px-5 py-4 flex items-start gap-4">
+                <span className="inline-flex items-center justify-center w-8 h-8 rounded-full bg-brand-accent/15 text-brand-accent-light text-sm font-bold shrink-0 ring-1 ring-brand-accent/30">
+                  {i + 1}
+                </span>
+                <p className="text-ice/85 leading-relaxed pt-1">
+                  <span className="font-semibold text-offwhite">Step {i + 1}:</span> {step}
                 </p>
-                <a href="/login" className="btn-gradient-cyan rounded-xl px-6 py-3 text-sm inline-flex items-center gap-2">
-                  Try It Free <ArrowRight className="w-4 h-4" />
-                </a>
-              </div>
-            </div>
-          </motion.div>
-        )}
-      </div>
+              </li>
+            ))}
+          </ol>
+          <p className="text-ice/70 leading-relaxed mt-6">
+            The SEO score checker free tool can be useful when performing regular website audits, reviewing newly
+            published pages, or checking the impact of SEO changes.
+          </p>
+        </section>
+
+        {/* ── Who ── */}
+        <section className="mt-16">
+          <SectionHeading>Who Can Use This SEO Audit Tool?</SectionHeading>
+          <p className="text-ice/80 leading-relaxed mb-5">
+            The Hyperclients SEO Score Checker can be useful for SEO professionals, digital marketers, website
+            owners, freelancers, agencies, bloggers, and business owners.
+          </p>
+          <ul className="flex flex-wrap gap-2 mb-5">
+            {AUDIENCE.map((a) => (
+              <li key={a} className="px-3 py-1.5 rounded-full text-sm bg-ocean/40 border border-steel/15 text-ice/80">
+                {a}
+              </li>
+            ))}
+          </ul>
+          <p className="text-ice/80 leading-relaxed">
+            Whether you manage a small business website, ecommerce store, service website, or blog, a basic SEO
+            audit can help you identify optimization opportunities and technical issues.
+          </p>
+        </section>
+
+        {/* ── FAQ ── */}
+        <section className="mt-16">
+          <SectionHeading>Frequently Asked Questions</SectionHeading>
+          <div className="space-y-3">
+            {FAQS.map(({ q, a }, i) => (
+              <details key={q} className="group glass-card rounded-xl px-5 py-4" open={i === 0}>
+                <summary className="flex cursor-pointer list-none items-center justify-between gap-4 font-semibold text-offwhite [&::-webkit-details-marker]:hidden">
+                  <h3 className="text-base">{i + 1}. {q}</h3>
+                  <ChevronDown className="w-4 h-4 text-ice/50 shrink-0 transition-transform group-open:rotate-180" />
+                </summary>
+                <p className="mt-3 text-ice/75 leading-relaxed text-[15px]">{a}</p>
+              </details>
+            ))}
+          </div>
+        </section>
+
+        {/* ── CTA ── */}
+        <section className="mt-16 glass-card-premium rounded-2xl p-6 md:p-10 text-center">
+          <FileCode2 className="w-8 h-8 text-brand-accent-light mx-auto mb-3" />
+          <h2 className="text-2xl md:text-3xl font-bold text-offwhite font-heading mb-3">
+            Check your website SEO score now
+          </h2>
+          <p className="text-ice/75 leading-relaxed mb-6 max-w-xl mx-auto">
+            Run a free SEO audit in seconds, then find clients who need exactly this kind of help with
+            Hyperclients.
+          </p>
+          <div className="flex flex-col sm:flex-row gap-3 justify-center">
+            <a href="#checker" className="btn-gradient-cyan rounded-xl px-6 py-3 text-sm inline-flex items-center justify-center gap-2">
+              Check SEO Score <ArrowRight className="w-4 h-4" />
+            </a>
+            <Link
+              href="/login?mode=signup"
+              className="rounded-xl px-6 py-3 text-sm font-semibold inline-flex items-center justify-center gap-2 border border-steel/30 text-ice hover:bg-ocean/40 transition-colors"
+            >
+              Find Leads Free
+            </Link>
+          </div>
+        </section>
+      </main>
       <Footer />
     </div>
   );

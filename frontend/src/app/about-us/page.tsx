@@ -6,6 +6,7 @@ import Header from '@/components/landing/Header';
 import { Footer } from '@/components/landing/Footer';
 
 export const metadata: Metadata = {
+  alternates: { canonical: '/about-us' },
   title: 'About Us — Hyperclients',
   description:
     'HyperClients is a local business intelligence platform that surfaces high-intent leads by reading the signals hidden inside Google My Business profiles.',

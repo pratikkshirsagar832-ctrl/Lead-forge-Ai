@@ -10,6 +10,7 @@ import Header from '../../components/landing/Header';
 export const dynamic = 'force-dynamic';
 
 export const metadata: Metadata = {
+  alternates: { canonical: '/blogs' },
   title: 'Blog — Hyperclients',
   description:
     'Lead generation insights for SEO agencies and freelancers: how to find businesses that are ready to buy, not just ready to talk.',

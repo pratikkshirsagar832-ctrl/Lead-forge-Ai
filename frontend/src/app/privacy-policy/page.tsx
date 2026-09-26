@@ -2,6 +2,7 @@ import type { Metadata } from 'next';
 import { ContentPage, PolicySection } from '@/components/landing/ContentPage';
 
 export const metadata: Metadata = {
+  alternates: { canonical: '/privacy-policy' },
   title: 'Privacy Policy — Hyperclients',
   description: 'How Hyperclients collects, uses, and protects your personal data.',
 };

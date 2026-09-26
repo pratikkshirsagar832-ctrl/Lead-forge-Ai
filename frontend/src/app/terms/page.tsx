@@ -2,6 +2,7 @@ import type { Metadata } from 'next';
 import { ContentPage, PolicySection } from '@/components/landing/ContentPage';
 
 export const metadata: Metadata = {
+  alternates: { canonical: '/terms' },
   title: 'Terms & Conditions — Hyperclients',
   description: 'The terms governing your use of the HyperClients platform.',
 };

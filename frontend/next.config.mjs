@@ -12,6 +12,21 @@ const nextConfig = {
     contentDispositionType: 'attachment',
     contentSecurityPolicy: "default-src 'self'; script-src 'none'; sandbox;",
   },
+  async redirects() {
+    return [
+      // One canonical host: www -> apex (nginx does this too; this keeps it
+      // true even if the proxy config is ever rebuilt without it).
+      {
+        source: '/:path*',
+        has: [{ type: 'host', value: 'www.hyperclients.online' }],
+        destination: 'https://hyperclients.online/:path*',
+        permanent: true,
+      },
+      // LinkedIn Studio was removed; old bookmarks land on the dashboard.
+      { source: '/dashboard/linkedin', destination: '/dashboard', permanent: true },
+      { source: '/dashboard/linkedin/:path*', destination: '/dashboard', permanent: true },
+    ];
+  },
   async rewrites() {
     // Proxy FastAPI endpoints (/api/searches, /api/leads, /api/auth, ...) to the
     // Python backend. Local Next.js API routes under /api/tools and the admin

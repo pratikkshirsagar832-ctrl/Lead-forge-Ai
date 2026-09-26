@@ -1,3 +1,4 @@
+import { SITE_URL } from '@/lib/site';
 import type { Metadata } from 'next';
 import { Montserrat, Space_Grotesk } from 'next/font/google';
 import Script from 'next/script';
@@ -10,8 +11,11 @@ const spaceGrotesk = Space_Grotesk({ subsets: ['latin'], variable: '--font-headi
 
 
 export const metadata: Metadata = {
+  // Relative canonicals/OG URLs resolve against the non-www https origin.
+  metadataBase: new URL(SITE_URL),
   title: 'Hyperclients',
   description: 'Automated Lead Generation Engine',
+  openGraph: { siteName: 'Hyperclients', type: 'website' },
   icons: {
     icon: [
       { url: '/hyperclients-icon.svg', type: 'image/svg+xml' },

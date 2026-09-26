@@ -2,6 +2,7 @@ import type { Metadata } from 'next';
 import { ContentPage, PolicySection } from '@/components/landing/ContentPage';
 
 export const metadata: Metadata = {
+  alternates: { canonical: '/refund-policy' },
   title: 'Refund & Cancellation Policy — Hyperclients',
   description: 'HyperClients refund and cancellation policy.',
 };

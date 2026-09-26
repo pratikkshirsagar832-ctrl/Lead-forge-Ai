@@ -17,16 +17,26 @@ export default function AuthCallbackPage() {
     if (ran.current) return; // the code can only be exchanged once
     ran.current = true;
 
+    const query = new URLSearchParams(window.location.search);
+    const hash = new URLSearchParams(window.location.hash.replace(/^#/, ''));
+    // Password-reset links sign the user in with a recovery session; send them
+    // to the "set new password" form instead of the dashboard. Implicit links
+    // say so in the hash; PKCE links rely on the flag /login set.
+    const isRecovery = hash.get('type') === 'recovery' || localStorage.getItem('hc_password_reset') === '1';
+
     const done = () => {
       // A real login always wins over an old "continue as guest" flag.
       clearGuestSession();
+      if (isRecovery) {
+        localStorage.removeItem('hc_password_reset');
+        router.replace('/login?mode=reset');
+        return;
+      }
       router.replace('/dashboard');
     };
 
     (async () => {
       try {
-        const query = new URLSearchParams(window.location.search);
-        const hash = new URLSearchParams(window.location.hash.replace(/^#/, ''));
         const providerError = query.get('error_description') || hash.get('error_description');
         if (providerError) {
           setError(providerError);

@@ -11,6 +11,7 @@ import { Badge } from '@/components/shared/Badge';
 import { LoadingButton } from '@/components/shared/LoadingButton';
 import { SearchProgressCard } from '@/components/dashboard/SearchProgressCard';
 import { UpgradeModal } from '@/components/shared/UpgradeModal';
+import { PostTypeBadge } from '@/components/dashboard/PostTypeBadge';
 import { API_ROUTES } from '@/lib/constants';
 import { useSearchStore } from '@/stores/searchStore';
 import { MapPin, Briefcase, SearchIcon, Sparkles, Globe, Star, Phone, ChevronRight, Users, AlertCircle, Search, Linkedin, Mail, Clock, ExternalLink, Unlock, Check, BadgeCheck, Lock } from 'lucide-react';
@@ -73,14 +74,7 @@ function LiveResultCard({ lead, index }: { lead: any; index: number }) {
                     </Badge>
                   )}
                   <SourceBadge source={lead.source} />
-                  {lead.source === 'linkedin' && (
-                    <span className={`text-[9px] px-1.5 py-0.5 rounded font-semibold border ${
-                      lead.post_type === 'buyer' || lead.post_type === 'agency' ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20'
-                      : 'bg-white/5 text-ice/50 border-white/10'
-                    }`}>
-                      {lead.post_type === 'buyer' ? 'Freelancer Needed' : lead.post_type === 'agency' ? 'Agency Wanted' : 'Post'}
-                    </span>
-                  )}
+                  {lead.source === 'linkedin' && <PostTypeBadge postType={lead.post_type} />}
                   {lead.headline && (
                     <span className="text-[9px] px-1.5 py-0.5 rounded bg-white/5 text-ice/50 font-medium border border-white/10 max-w-[140px] truncate">
                       {lead.headline}

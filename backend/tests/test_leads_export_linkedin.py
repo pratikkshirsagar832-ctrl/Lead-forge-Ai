@@ -219,3 +219,46 @@ def test_linkedin_rows_are_scoped_to_the_owning_user(monkeypatch):
 
     assert "Ada Buyer" in csv_text
     assert "Someone Else" not in csv_text
+
+
+def _two_lane_rows():
+    """One Freelancer search and one Agency search, one lead each."""
+    rows = _fixture_rows()
+    rows["searches"] = [
+        {"id": "s-li", "user_id": "user-1", "source": "linkedin", "lead_types": ["freelancer"]},
+        {"id": "s-ag", "user_id": "user-1", "source": "linkedin", "lead_types": ["agency"]},
+    ]
+    rows["ha_leads"].append({
+        "id": "li-ag", "search_id": "s-ag", "lead_type": "need_agency",
+        "author_name": "Agency Seeker", "post_url": "https://linkedin.com/posts/3",
+        "post_text": "Looking for a marketing agency", "post_date": "2026-09-12",
+    })
+    return rows
+
+
+def test_agency_search_leads_are_badged_agency_not_freelancer(monkeypatch):
+    """Every LinkedIn lead used to be mapped to post_type 'buyer', so leads
+    from an Agency search showed "Freelancer Needed" in the pipeline."""
+    _wire(monkeypatch, FakeSupabase(_two_lane_rows()))
+    leads = leads_router._fetch_linkedin_leads(leads_router.get_supabase_admin(), "user-1")
+    by_name = {l["business_name"]: l["post_type"] for l in leads}
+    assert by_name == {"Ada Buyer": "buyer", "Agency Seeker": "agency"}
+
+
+def test_post_type_filter_separates_the_two_lanes(monkeypatch):
+    _wire(monkeypatch, FakeSupabase(_two_lane_rows()))
+    client = leads_router.get_supabase_admin()
+    agency = leads_router._fetch_linkedin_leads(client, "user-1", post_type="agency")
+    freelancer = leads_router._fetch_linkedin_leads(client, "user-1", post_type="buyer")
+    assert [l["business_name"] for l in agency] == ["Agency Seeker"]
+    assert [l["business_name"] for l in freelancer] == ["Ada Buyer"]
+
+
+def test_selected_search_role_wins_over_a_mislabelled_row():
+    """The lane the user picked decides the badge, even for an older row
+    that was stored with the other lead_type."""
+    row = {"lead_type": "need_freelancer"}
+    assert leads_router.post_type_for(row, ["agency"]) == "agency"
+    assert leads_router.post_type_for({"lead_type": "need_agency"}) == "agency"
+    assert leads_router.post_type_for({"lead_type": "need_freelancer"}) == "buyer"
+    assert leads_router.post_type_for({}, ["buyer"]) == "buyer"  # legacy role

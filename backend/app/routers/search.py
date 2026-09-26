@@ -423,7 +423,7 @@ def get_search_results(
         # Enrich leads with search source for frontend rendering
         items = response.data or []
         if items:
-            search_row = supabase.table("searches").select("source, niche").eq("id", search_id).limit(1).execute()
+            search_row = supabase.table("searches").select("source, niche, lead_types").eq("id", search_id).limit(1).execute()
             srow = (search_row.data or [{}])[0] if search_row.data else {}
             search_source = srow.get("source", "google_maps")
             for item in items:
@@ -435,15 +435,11 @@ def get_search_results(
                         item["business_name"] = item["author_name"]
                     if not item.get("linkedin_url") and item.get("author_profile_url"):
                         item["linkedin_url"] = item["author_profile_url"]
-                    if not item.get("post_type") and item.get("lead_type"):
-                        # Map Hyperagent lead_type to frontend post_type. Only
-                        # the two requestable buyer types are stored (strict
-                        # single-lane: freelancer XOR agency, never mixed).
-                        lt = item["lead_type"]
-                        item["post_type"] = {
-                            "need_freelancer": "buyer",
-                            "need_agency": "agency",
-                        }.get(lt, "buyer")
+                    if not item.get("post_type"):
+                        # Badge follows the lane the user picked for this
+                        # search (Freelancer XOR Agency, never mixed).
+                        from app.routers.leads import post_type_for
+                        item["post_type"] = post_type_for(item, srow.get("lead_types"))
                     if not item.get("headline") and item.get("author_name"):
                         item["headline"] = item["author_name"]
                     if not item.get("posted_at") and item.get("post_date"):

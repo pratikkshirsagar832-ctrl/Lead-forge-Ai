@@ -54,7 +54,7 @@ def _sanitize_search(value: str | None, max_len: int = 100) -> str | None:
 def list_leads(
     search_id: Optional[str] = Query(None, description="Filter by search ID"),
     source: Optional[str] = Query(None, description="Filter by source (google_maps/linkedin)"),
-    post_type: Optional[str] = Query(None, description="Filter LinkedIn leads by post type (buyer)"),
+    post_type: Optional[str] = Query(None, description="Filter LinkedIn leads by post type (buyer/agency)"),
     lead_category: Optional[str] = Query(None, description="Filter by category (hot/warm)"),
     user_status: Optional[str] = Query(None, description="Filter by user status"),
     is_favorite: Optional[bool] = Query(None, description="Filter favorites only"),
@@ -86,7 +86,7 @@ def list_leads(
         raise HTTPException(status_code=400, detail="Invalid user_status")
     if lead_category is not None and lead_category not in _ALLOWED_LEAD_CATEGORY:
         raise HTTPException(status_code=400, detail="Invalid lead_category")
-    if post_type is not None and post_type not in ("buyer",):
+    if post_type is not None and post_type not in _ALLOWED_POST_TYPE:
         raise HTTPException(status_code=400, detail="Invalid post_type")
     safe_search = _sanitize_search(search)
 
@@ -210,7 +210,7 @@ def _fetch_linkedin_leads(
     """
     s_query = (
         supabase.table("searches")
-        .select("id")
+        .select("id, lead_types")
         .eq("user_id", user_id)
         .eq("source", "linkedin")
     )
@@ -218,14 +218,13 @@ def _fetch_linkedin_leads(
         s_query = s_query.eq("id", search_id)
     s_rows = s_query.execute().data or []
     li_ids = [r["id"] for r in s_rows]
+    # The role the user picked for each search (Freelancer / Agency) decides
+    # the badge - see _post_type_for.
+    role_by_search = {r["id"]: r.get("lead_types") for r in s_rows}
     li_items: list[dict] = []
     if li_ids:
         for chunk in _chunks(li_ids, 200):
             q = supabase.table("ha_leads").select("*").in_("search_id", chunk)
-            if post_type:
-                lt = {"buyer": "need_freelancer"}.get(post_type)
-                if lt:
-                    q = q.eq("lead_type", lt)
             if user_status:
                 # user_status exists after migration v10; before it,
                 # fall back to the engine lifecycle column.
@@ -238,8 +237,11 @@ def _fetch_linkedin_leads(
     for r in li_items:
         if search and search.lower() not in (r.get("author_name") or "").lower():
             continue
-        mapped = _map_ha_lead(r)
+        mapped = _map_ha_lead(r, role_by_search.get(r.get("search_id")))
         if is_favorite is not None and bool(mapped.get("is_favorite")) != bool(is_favorite):
+            continue
+        # Filtered after mapping: the type comes from the search's role first.
+        if post_type and mapped.get("post_type") != post_type:
             continue
         out.append(mapped)
     return out
@@ -311,12 +313,32 @@ def _owned_ha_lead(supabase, lead_id: str, user_id: str) -> bool:
         return False
 
 
-def _map_ha_lead(row: dict) -> dict:
+_ALLOWED_POST_TYPE = ("buyer", "agency")
+# Engine lead_type -> the post_type the frontend badges ("buyer" renders as
+# "Freelancer Needed", "agency" as "Agency Needed").
+_POST_TYPE_BY_LEAD_TYPE = {"need_freelancer": "buyer", "need_agency": "agency", "our_agency": "agency"}
+_POST_TYPE_BY_ROLE = {"freelancer": "buyer", "buyer": "buyer", "agency": "agency"}
+
+
+def post_type_for(row: dict, search_lead_types=None) -> str:
+    """Badge type of a LinkedIn lead.
+
+    The role the user SELECTED for the search wins (a search runs in exactly
+    one lane - Freelancer or Agency - and every lead it saves belongs to that
+    lane); the stored lead_type is the fallback for rows without a search
+    role. Every lead used to be mapped to "buyer", so Agency searches showed
+    "Freelancer Needed" everywhere.
+    """
+    for role in search_lead_types or []:
+        mapped = _POST_TYPE_BY_ROLE.get(str(role or "").strip().lower())
+        if mapped:
+            return mapped
+    return _POST_TYPE_BY_LEAD_TYPE.get(row.get("lead_type") or "", "buyer")
+
+
+def _map_ha_lead(row: dict, search_lead_types=None) -> dict:
     """Map a `ha_leads` row to the LeadListItem shape the frontend renders."""
-    lead_type = row.get("lead_type") or ""
-    post_type = {
-        "need_freelancer": "buyer",
-    }.get(lead_type, "buyer")
+    post_type = post_type_for(row, search_lead_types)
 
     score = row.get("overall_quality_score")
     try:
@@ -364,9 +386,9 @@ def _map_ha_lead(row: dict) -> dict:
     }
 
 
-def _map_ha_lead_detail(row: dict, user_id: str) -> dict:
+def _map_ha_lead_detail(row: dict, user_id: str, search_lead_types=None) -> dict:
     """Map a `ha_leads` row to the LeadDetail schema (LinkedIn lead page)."""
-    d = _coerce_lead(_map_ha_lead(row))
+    d = _coerce_lead(_map_ha_lead(row, search_lead_types))
     d.update({
         "user_id": user_id,
         "google_key": None,
@@ -388,7 +410,7 @@ CSV_EXPORT_PLANS = {"pro", "agency"}
 async def export_leads_csv(
     search_id: Optional[str] = Query(None, description="Filter by search ID"),
     source: Optional[str] = Query(None, description="Filter by source (google_maps/linkedin)"),
-    post_type: Optional[str] = Query(None, description="Filter LinkedIn leads by post type (buyer)"),
+    post_type: Optional[str] = Query(None, description="Filter LinkedIn leads by post type (buyer/agency)"),
     lead_category: Optional[str] = Query(None),
     user_status: Optional[str] = Query(None),
     is_favorite: Optional[bool] = Query(None),
@@ -626,13 +648,13 @@ async def get_lead_detail(
             ha_row = ha.data[0]
             srow = (
                 supabase.table("searches")
-                .select("user_id")
+                .select("user_id, lead_types")
                 .eq("id", ha_row.get("search_id"))
                 .limit(1)
                 .execute()
             )
             if srow.data and srow.data[0].get("user_id") == current_user["id"]:
-                return _map_ha_lead_detail(ha_row, current_user["id"])
+                return _map_ha_lead_detail(ha_row, current_user["id"], srow.data[0].get("lead_types"))
 
         raise HTTPException(status_code=404, detail="Lead not found")
     except HTTPException:

@@ -2,6 +2,7 @@ import { Badge } from '@/components/shared/Badge';
 
 const POST_TYPE_CONFIG: Record<string, { label: string; className: string }> = {
   buyer: { label: 'Freelancer Needed', className: 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30' },
+  agency: { label: 'Agency Needed', className: 'bg-sky-500/15 text-sky-400 border-sky-500/30' },
   unknown: { label: 'Post', className: 'bg-white/5 text-ice/50 border-white/10' },
 };
 

@@ -1,101 +1,76 @@
 import { StatsCards } from '@/components/dashboard/StatsCards';
 import { GlassCard } from '@/components/shared/GlassCard';
-import { Rocket, Target, Users, TrendingUp, Sparkles } from 'lucide-react';
+import { HeroScene } from '@/components/dashboard/HeroScene';
+import { Search, Target, Kanban, History, ArrowUpRight } from 'lucide-react';
 import Link from 'next/link';
 
 export const metadata = {
   title: 'Dashboard | Hyperclients',
 };
 
+const QUICK = [
+  { href: '/dashboard/leads?category=hot', title: 'Hot leads', body: 'Your highest-intent buyers', icon: Target },
+  { href: '/dashboard/pipeline', title: 'Sales pipeline', body: 'Move deals from new to won', icon: Kanban },
+  { href: '/dashboard/history', title: 'Search history', body: 'Every search and its results', icon: History },
+];
+
 export default function DashboardOverview() {
   return (
-    <div className="space-y-8 animate-in fade-in duration-500">
-      <div className="animate-fade-in-down">
-        <h1 className="text-3xl font-bold text-offwhite tracking-tight" style={{ fontFamily: 'var(--font-heading)' }}>
+    <div className="space-y-8">
+      <header className="animate-fade-in-down">
+        <p className="text-xs font-semibold text-steel/80 mb-2">Overview</p>
+        <h1 className="text-4xl md:text-[2.75rem] font-bold text-offwhite tracking-[-0.02em] leading-[1.05]" style={{ fontFamily: 'var(--font-heading)' }}>
           Dashboard
         </h1>
-        <p className="text-ice/60 mt-2">Welcome to Hyperclients.</p>
-      </div>
+        <p className="text-ice/60 mt-2 max-w-xl">Find people who need your service, reply first, and track every deal.</p>
+      </header>
 
       <StatsCards />
 
-      <div className="bento-grid lg:grid-cols-3">
-        <GlassCard className="col-span-1 lg:col-span-2 p-0 overflow-hidden bg-gradient-to-br from-steel/30 via-ocean/20 to-navy/80 border border-ocean/30 elevation-2" delay={0.1}>
-          <div className="p-8 relative">
-            <div className="absolute top-0 right-0 w-64 h-64 bg-gradient-to-bl from-violet/10 to-transparent rounded-full blur-3xl pointer-events-none" />
-            <div className="relative z-10">
-              <Sparkles className="w-5 h-5 text-amber mb-4" />
-              <h2 className="text-2xl font-bold text-offwhite mb-3" style={{ fontFamily: 'var(--font-heading)' }}>
+      <div className="grid gap-5 lg:grid-cols-3">
+        <GlassCard className="lg:col-span-2 p-0" delay={0.1}>
+          <div className="grid items-center gap-2 md:grid-cols-[1.05fr_1fr]">
+            <div className="relative z-10 p-8 md:p-10">
+              <span className="tile-3d-amber inline-grid h-11 w-11 place-items-center rounded-xl text-navy">
+                <Search className="h-5 w-5" strokeWidth={2.5} />
+              </span>
+              <h2 className="mt-6 text-3xl font-bold text-offwhite tracking-[-0.02em] leading-tight [text-wrap:balance]" style={{ fontFamily: 'var(--font-heading)' }}>
                 Ready to find more clients?
               </h2>
-              <p className="text-ice/70 mb-8 max-w-md leading-relaxed">
-                Start a new search to find genuine buyers on LinkedIn or local businesses on Google Maps, analyze them with AI, and reach your hottest prospects in minutes.
+              <p className="mt-3 max-w-md text-ice/70 leading-relaxed">
+                Find genuine buyers on LinkedIn or local businesses on Google Maps. Newest buyers arrive first, while the search is still running.
               </p>
               <Link
                 href="/dashboard/search"
-                className="inline-flex items-center justify-center px-6 py-3 rounded-xl bg-gradient-to-r from-cta to-cta-light text-white font-semibold hover:opacity-90 transition-opacity duration-200"
+                className="btn-3d-gold mt-8 inline-flex h-12 items-center gap-2 rounded-xl px-6 text-[15px]"
               >
-                <Rocket className="w-5 h-5 mr-2" />
-                Start a Search
+                <Search className="h-4.5 w-4.5" strokeWidth={2.5} />
+                Start a search
               </Link>
+            </div>
+            <div className="hidden md:block pr-6">
+              <HeroScene />
             </div>
           </div>
         </GlassCard>
 
-        <div className="space-y-4">
-          <GlassCard className="p-6" hoverEffect delay={0.15}>
-            <div className="flex items-center gap-4 mb-4">
-              <div className="p-3 rounded-xl bg-emerald-500/10 text-emerald-400">
-                <Target className="w-6 h-6" />
-              </div>
-              <div>
-                <h3 className="font-semibold text-offwhite" style={{ fontFamily: 'var(--font-heading)' }}>Hot Leads</h3>
-                <p className="text-sm text-ice/60">Highest opportunity</p>
-              </div>
-            </div>
-            <Link
-              href="/dashboard/leads?category=hot"
-              className="mt-4 block w-full text-center py-2.5 rounded-xl border border-steel/30 text-ice/80 font-medium hover:bg-steel/10 hover:text-offwhite hover:border-steel/50 transition-all duration-200"
-            >
-              View Hot Leads
+        <div className="grid gap-4">
+          {QUICK.map(({ href, title, body, icon: Icon }, i) => (
+            <Link key={href} href={href} className="group block rounded-2xl focus-visible:outline-2 focus-visible:outline-steel">
+              <GlassCard className="p-5 h-full flex items-center" hoverEffect tilt={4} delay={0.15 + i * 0.05}>
+                <div className="flex items-center gap-4">
+                  <span className="tile-3d grid h-11 w-11 shrink-0 place-items-center rounded-xl text-steel transition-transform duration-300 group-hover:-translate-y-0.5">
+                    <Icon className="h-5 w-5" />
+                  </span>
+                  <div className="min-w-0 flex-1">
+                    <h3 className="font-semibold text-offwhite" style={{ fontFamily: 'var(--font-heading)' }}>{title}</h3>
+                    <p className="text-sm text-ice/55">{body}</p>
+                  </div>
+                  <ArrowUpRight className="h-5 w-5 text-ice/30 transition-all duration-300 group-hover:text-steel group-hover:-translate-y-0.5 group-hover:translate-x-0.5" />
+                </div>
+              </GlassCard>
             </Link>
-          </GlassCard>
-
-          <GlassCard className="p-6" hoverEffect delay={0.2}>
-            <div className="flex items-center gap-4 mb-4">
-              <div className="p-3 rounded-xl bg-amber-500/10 text-amber-400">
-                <Users className="w-6 h-6" />
-              </div>
-              <div>
-                <h3 className="font-semibold text-offwhite" style={{ fontFamily: 'var(--font-heading)' }}>Pipeline</h3>
-                <p className="text-sm text-ice/60">Manage your contacts</p>
-              </div>
-            </div>
-            <Link
-              href="/dashboard/leads?status=new"
-              className="mt-4 block w-full text-center py-2.5 rounded-xl border border-steel/30 text-ice/80 font-medium hover:bg-steel/10 hover:text-offwhite hover:border-steel/50 transition-all duration-200"
-            >
-              View Pipeline
-            </Link>
-          </GlassCard>
-
-          <GlassCard className="p-6" hoverEffect delay={0.25}>
-            <div className="flex items-center gap-4 mb-4">
-              <div className="p-3 rounded-xl bg-violet-500/10 text-violet-400">
-                <TrendingUp className="w-6 h-6" />
-              </div>
-              <div>
-                <h3 className="font-semibold text-offwhite" style={{ fontFamily: 'var(--font-heading)' }}>Analytics</h3>
-                <p className="text-sm text-ice/60">Track your growth</p>
-              </div>
-            </div>
-            <Link
-              href="/dashboard/history"
-              className="mt-4 block w-full text-center py-2.5 rounded-xl border border-steel/30 text-ice/80 font-medium hover:bg-steel/10 hover:text-offwhite hover:border-steel/50 transition-all duration-200"
-            >
-              View History
-            </Link>
-          </GlassCard>
+          ))}
         </div>
       </div>
     </div>

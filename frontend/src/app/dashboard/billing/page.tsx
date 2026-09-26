@@ -17,7 +17,7 @@ import Link from 'next/link';
 
 const PLAN_META: Record<string, { name: string; icon: ElementType; color: string; bg: string }> = {
   free: { name: 'Free', icon: Zap, color: 'text-ice/60', bg: 'bg-ocean/20' },
-  solo: { name: 'Solo', icon: Star, color: 'text-sky-400', bg: 'bg-sky-500/10' },
+  solo: { name: 'Solo', icon: Star, color: 'text-steel', bg: 'bg-steel/10' },
   pro: { name: 'Pro', icon: Star, color: 'text-violet', bg: 'bg-violet/20' },
   agency: { name: 'Agency', icon: Building2, color: 'text-amber-400', bg: 'bg-amber-500/10' },
 };

@@ -50,18 +50,16 @@ function LeadsContent() {
   return (
     <div className="space-y-6 animate-in fade-in duration-500 max-w-7xl mx-auto">
       <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-6 relative">
-        <div className="absolute -inset-10 bg-gradient-to-r from-steel/10 via-ocean/5 to-transparent blur-3xl rounded-full pointer-events-none -z-10" />
-
         <div className="relative">
-          <h1 className="text-3xl font-extrabold text-offwhite tracking-tight flex items-center gap-3">
-            Leads Pipeline
+          <p className="text-xs font-semibold text-steel/80 mb-2">Leads</p>
+          <h1 className="text-3xl md:text-[2.5rem] font-bold text-offwhite tracking-[-0.02em] leading-[1.08]" style={{ fontFamily: 'var(--font-heading)' }}>
+            Your leads
           </h1>
           <p className="text-ice/60 mt-2 text-sm font-medium">Manage, filter, and review discovered leads from your search campaigns.</p>
         </div>
         <div className="relative">
-          <div className="absolute -inset-0.5 bg-gradient-to-r from-steel to-ice rounded-xl blur opacity-30" />
-          <div className="relative flex items-center gap-2 text-sm font-bold text-offwhite bg-navy border border-steel/20 px-4 py-2 rounded-xl">
-            <span className="text-steel">{totalCount.toLocaleString()}</span> total found
+          <div className="key-3d relative flex items-center gap-2 text-sm font-semibold text-ice/70 px-4 py-2.5 rounded-xl">
+            <span className="text-steel text-base font-bold tabular">{totalCount.toLocaleString()}</span> total found
           </div>
         </div>
       </div>
@@ -76,8 +74,8 @@ function LeadsContent() {
         <div className="relative z-10 p-12 text-center bg-gradient-to-br from-ocean/30 to-navy rounded-2xl">
           <EmptyState
             title="No leads match your criteria"
-            description="Try removing some filters, changing your search params, or running a new Hyperclients search operation altogether."
-            actionText="Initialize Search Pipeline"
+            description="Try removing a filter, or run a new search to find fresh buyers."
+            actionText="Start a search"
             actionHref="/dashboard/search"
           />
         </div>

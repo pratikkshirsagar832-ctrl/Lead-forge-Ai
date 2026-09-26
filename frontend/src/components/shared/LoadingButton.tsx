@@ -29,11 +29,11 @@ export const LoadingButton = forwardRef<HTMLButtonElement, LoadingButtonProps>(
     },
     ref
   ) => {
-    const baseStyles = 'relative inline-flex items-center justify-center font-semibold tracking-wide transition-all duration-300 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-navy disabled:opacity-50 disabled:cursor-not-allowed overflow-hidden rounded-xl';
+    const baseStyles = 'relative inline-flex items-center justify-center font-semibold tracking-wide transition-colors duration-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-offset-navy disabled:opacity-50 disabled:cursor-not-allowed rounded-xl';
 
     const variants: Record<string, string> = {
       primary:
-        'bg-steel text-offwhite hover:bg-steel/80 focus:ring-steel/50',
+        'btn-3d-teal focus:ring-steel/50',
       secondary:
         'bg-ocean/60 text-ice border border-steel/30 hover:bg-ocean/80 hover:text-offwhite focus:ring-steel/30',
       danger:
@@ -45,13 +45,13 @@ export const LoadingButton = forwardRef<HTMLButtonElement, LoadingButtonProps>(
       gradient:
         'bg-gradient-to-r from-steel to-ocean text-offwhite hover:from-steel/90 hover:to-ocean/90 focus:ring-steel/50',
       gold:
-        'bg-gradient-to-r from-amber to-amber-dark text-navy font-bold hover:from-amber-dark hover:to-amber focus:ring-amber/50',
+        'btn-3d-gold focus:ring-amber/50',
       premium:
         'bg-gradient-to-r from-primary to-steel text-offwhite hover:from-primary/90 hover:to-steel/90 focus:ring-steel/50',
       neon:
         'btn-neon text-offwhite focus:ring-accent-cyan/50',
       'gradient-cyan':
-        'btn-gradient-cyan text-navy focus:ring-accent-cyan/50',
+        'btn-3d-gold focus:ring-amber/50',
       'gradient-purple':
         'btn-gradient-purple text-navy focus:ring-violet-500/50',
       glass:
@@ -64,11 +64,16 @@ export const LoadingButton = forwardRef<HTMLButtonElement, LoadingButtonProps>(
       lg: 'text-base px-7 py-3.5',
     };
 
+    // Raised 3D variants press physically via CSS; framer's scale would
+    // override that transform, so it only animates the flat variants.
+    const raised = variant === 'primary' || variant === 'gold' || variant === 'gradient-cyan';
+    const still = disabled || isLoading || raised;
+
     return (
       <motion.button
         ref={ref}
-        whileTap={{ scale: disabled || isLoading ? 1 : 0.97 }}
-        whileHover={disabled || isLoading ? {} : { scale: 1.02 }}
+        whileTap={still ? undefined : { scale: 0.97 }}
+        whileHover={still ? undefined : { scale: 1.02 }}
         className={cn(
           baseStyles,
           variants[variant] || variants.primary,

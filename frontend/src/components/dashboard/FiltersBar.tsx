@@ -9,7 +9,7 @@ export function FiltersBar() {
   const { filters, setFilters, exportCsv, isExporting } = useLeads();
 
   return (
-    <div className="rounded-2xl border border-ocean/25 bg-gradient-to-br from-ocean/20 to-navy/60 shadow-lg shadow-navy/20 backdrop-blur-sm">
+    <div className="surface-3d rounded-2xl">
       <div className="flex flex-col md:flex-row gap-4 p-4">
         <div className="flex-1 relative group">
           <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none">
@@ -20,7 +20,7 @@ export function FiltersBar() {
             placeholder="Search business name..."
             value={filters.search}
             onChange={(e) => setFilters({ search: e.target.value })}
-            className="w-full pl-10 pr-4 py-2.5 rounded-xl border border-ocean/30 bg-navy/60 text-sm text-ice placeholder-ice/30 focus:bg-navy/90 focus:border-steel/60 focus:ring-2 focus:ring-steel/20 outline-none transition-all"
+            className="w-full pl-10 pr-4 py-2.5 rounded-xl well-3d border border-transparent text-sm text-ice placeholder-ice/30 focus:border-steel/50 focus:ring-2 focus:ring-steel/20 outline-none transition-all"
           />
         </div>
 

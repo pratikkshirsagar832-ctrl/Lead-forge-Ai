@@ -3,6 +3,7 @@
 import { forwardRef, type ReactNode } from 'react';
 import { cn } from '@/lib/utils';
 import { motion, type HTMLMotionProps } from 'framer-motion';
+import { usePointer3D } from '@/hooks/usePointer3D';
 
 interface GlassCardProps extends HTMLMotionProps<'div'> {
   hoverEffect?: boolean;
@@ -12,8 +13,15 @@ interface GlassCardProps extends HTMLMotionProps<'div'> {
   delay?: number;
   gradient?: boolean;
   interactive?: boolean;
+  /** Tilt toward the cursor in 3D (degrees; `true` = 5). Off on touch / reduced motion. */
+  tilt?: boolean | number;
 }
 
+/**
+ * The dashboard's base surface: a lit 3D panel (top-edge highlight, mint rim,
+ * teal-tinted depth shadow) with a cursor spotlight, optional 3D tilt and a
+ * soft lift on hover.
+ */
 export const GlassCard = forwardRef<HTMLDivElement, GlassCardProps>(
   ({
     className,
@@ -23,44 +31,39 @@ export const GlassCard = forwardRef<HTMLDivElement, GlassCardProps>(
     delay = 0,
     gradient = false,
     interactive = false,
+    tilt = false,
     children,
+    style,
+    onPointerMove,
+    onPointerLeave,
     ...props
   }, ref) => {
+    const maxDeg = tilt === true ? 5 : typeof tilt === 'number' ? tilt : 0;
+    const p3d = usePointer3D(maxDeg);
+
     return (
       <motion.div
         ref={ref}
         initial={{ opacity: 0, y: 16 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.45, delay, ease: [0.25, 0.1, 0.25, 1] }}
-        whileHover={hoverEffect ? {
-          borderColor: 'rgba(19, 224, 194, 0.3)',
-          transition: { duration: 0.25, ease: 'easeOut' },
-        } : undefined}
+        whileHover={hoverEffect ? { y: -3, transition: { type: 'spring', stiffness: 300, damping: 22 } } : undefined}
+        onPointerMove={(e) => { p3d.handlers.onPointerMove(e); onPointerMove?.(e); }}
+        onPointerLeave={(e) => { p3d.handlers.onPointerLeave(); onPointerLeave?.(e); }}
+        style={{ ...(p3d.style || {}), ...(style || {}) }}
         className={cn(
-          'relative group overflow-hidden rounded-2xl bg-gradient-to-br from-sapphire/40 to-navy/85 border border-steel/20 transition-colors duration-300',
+          'surface-3d spotlight relative group overflow-hidden rounded-2xl',
           gradient && 'before:absolute before:inset-0 before:bg-gradient-to-br before:from-violet/5 before:via-transparent before:to-teal/5 before:pointer-events-none',
           glowBorder && 'animate-border-glow',
           interactive && 'cursor-pointer',
-          elevation === 1 && 'elevation-1',
-          elevation === 2 && 'elevation-2',
           elevation === 3 && 'elevation-3',
           elevation === 4 && 'elevation-4',
           className
         )}
         {...props}
       >
-        {/* Premium top edge glow */}
-        <div className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-steel/50 to-transparent pointer-events-none" />
-        <div className="absolute inset-x-0 bottom-0 h-px bg-gradient-to-r from-transparent via-steel/10 to-transparent pointer-events-none" />
-
-        {/* Left accent line on hover */}
-        <div className="absolute left-0 top-1/3 bottom-1/3 w-0.5 bg-gradient-to-b from-violet/0 via-violet/40 to-violet/0 opacity-0 group-hover:opacity-100 transition-all duration-500 pointer-events-none" />
-
-        {/* Hover overlay */}
-        {hoverEffect && (
-          <div className="absolute inset-0 opacity-0 group-hover:opacity-100 transition-opacity duration-500 bg-gradient-to-br from-steel/[0.04] to-transparent pointer-events-none" />
-        )}
-
+        {/* Lit top edge (light source: top-left) */}
+        <div className="absolute inset-x-6 top-0 h-px bg-gradient-to-r from-transparent via-steel/45 to-transparent pointer-events-none" />
         {children}
       </motion.div>
     );

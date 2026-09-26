@@ -499,3 +499,171 @@ h1, h2, h3, h4, h5, h6 {
   from { transform: translateY(0); }
   to { transform: translateY(-50%); }
 }
+
+/* ══════════════════════════════════════════════════════════════════════
+   3D DEPTH SYSTEM (brand palette only: #06231F deep · #0D4F4A teal ·
+   #4FD8C3 mint · #FFB020 amber). One light source: top-left.
+   ══════════════════════════════════════════════════════════════════════ */
+
+/* Layered, lit surface: top-edge highlight, hairline mint rim, and a
+   teal-tinted contact + ambient shadow (never flat black). */
+.surface-3d {
+  background:
+    linear-gradient(160deg, rgba(18, 69, 61, 0.55) 0%, rgba(10, 43, 38, 0.72) 45%, rgba(6, 35, 31, 0.9) 100%);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.07),
+    inset 0 0 0 1px rgba(79, 216, 195, 0.09),
+    0 1px 2px rgba(1, 12, 10, 0.55),
+    0 14px 34px -14px rgba(1, 12, 10, 0.85),
+    0 30px 70px -40px rgba(13, 79, 74, 0.9);
+  backdrop-filter: blur(18px) saturate(120%);
+  -webkit-backdrop-filter: blur(18px) saturate(120%);
+}
+
+/* Cursor spotlight + rim light. The element sets --mx/--my (px) on
+   pointer move; both layers fade in on hover only. */
+.spotlight { position: relative; isolation: isolate; }
+.spotlight::before,
+.spotlight::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.35s ease;
+}
+.spotlight::before {
+  /* -1 inside the isolated context: lights the surface, never the text. */
+  z-index: -1;
+  background: radial-gradient(420px circle at var(--mx, 50%) var(--my, 0%), rgba(79, 216, 195, 0.10), transparent 60%);
+}
+.spotlight::after {
+  z-index: 2;
+  padding: 1px;
+  background: radial-gradient(260px circle at var(--mx, 50%) var(--my, 0%), rgba(79, 216, 195, 0.55), rgba(255, 176, 32, 0.18) 45%, transparent 70%);
+  -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+}
+.spotlight:hover::before,
+.spotlight:hover::after { opacity: 1; }
+
+/* Raised 3D buttons: a visible bottom edge that compresses on press. */
+.btn-3d-gold,
+.btn-3d-teal {
+  position: relative;
+  transform: translateY(0);
+  transition: transform 0.18s cubic-bezier(0.3, 0.7, 0.4, 1), box-shadow 0.18s ease, filter 0.2s ease;
+  will-change: transform;
+}
+.btn-3d-gold {
+  color: #06231F;
+  font-weight: 700;
+  background: linear-gradient(180deg, #FFC64D 0%, #FFB020 55%, #F2A312 100%);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.55),
+    inset 0 -1px 0 rgba(120, 70, 0, 0.25),
+    0 4px 0 #B8740A,
+    0 12px 26px -8px rgba(255, 176, 32, 0.55);
+}
+.btn-3d-teal {
+  color: #F1F5F9;
+  font-weight: 600;
+  background: linear-gradient(180deg, #16756B 0%, #0D4F4A 60%, #0B433E 100%);
+  box-shadow:
+    inset 0 1px 0 rgba(79, 216, 195, 0.35),
+    inset 0 0 0 1px rgba(79, 216, 195, 0.12),
+    0 4px 0 #04201C,
+    0 12px 26px -10px rgba(13, 79, 74, 0.9);
+}
+.btn-3d-gold:hover:not(:disabled),
+.btn-3d-teal:hover:not(:disabled) { transform: translateY(-1px); filter: brightness(1.05); }
+.btn-3d-gold:active:not(:disabled) {
+  transform: translateY(3px);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.4), 0 1px 0 #B8740A, 0 4px 10px -4px rgba(255, 176, 32, 0.5);
+}
+.btn-3d-teal:active:not(:disabled) {
+  transform: translateY(3px);
+  box-shadow: inset 0 1px 0 rgba(79, 216, 195, 0.3), 0 1px 0 #04201C, 0 4px 10px -4px rgba(13, 79, 74, 0.8);
+}
+.btn-3d-gold:focus-visible,
+.btn-3d-teal:focus-visible { outline: 2px solid #4FD8C3; outline-offset: 3px; }
+
+/* Pressed-in (inset) well for inputs and segmented controls. */
+.well-3d {
+  background: linear-gradient(180deg, rgba(3, 20, 17, 0.75), rgba(6, 35, 31, 0.6));
+  box-shadow: inset 0 2px 6px rgba(1, 10, 8, 0.7), inset 0 0 0 1px rgba(79, 216, 195, 0.08), 0 1px 0 rgba(255, 255, 255, 0.04);
+}
+
+/* Raised key (segmented options, chips); `.is-active` = lit + pressed. */
+.key-3d {
+  background: linear-gradient(180deg, rgba(18, 69, 61, 0.7), rgba(10, 43, 38, 0.85));
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06), 0 2px 0 rgba(1, 12, 10, 0.9), 0 6px 14px -8px rgba(1, 12, 10, 0.9);
+  transition: transform 0.18s ease, box-shadow 0.18s ease, background 0.2s ease, color 0.2s ease;
+}
+.key-3d:hover:not(:disabled) { transform: translateY(-1px); }
+.key-3d.is-active {
+  transform: translateY(1px);
+  background: linear-gradient(180deg, rgba(79, 216, 195, 0.18), rgba(13, 79, 74, 0.55));
+  box-shadow: inset 0 1px 0 rgba(79, 216, 195, 0.35), inset 0 0 0 1px rgba(79, 216, 195, 0.35), 0 1px 0 rgba(1, 12, 10, 0.9), 0 0 24px -6px rgba(79, 216, 195, 0.45);
+}
+
+/* Film grain: breaks digital flatness (fixed, non-interactive). */
+.grain::after {
+  content: '';
+  position: fixed;
+  inset: -50%;
+  pointer-events: none;
+  opacity: 0.045;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+  z-index: 1;
+}
+
+/* Receding perspective grid floor for the ambient scene. */
+.scene-floor {
+  position: absolute;
+  left: -25%;
+  right: -25%;
+  bottom: -10%;
+  height: 70%;
+  transform: perspective(900px) rotateX(62deg);
+  transform-origin: 50% 100%;
+  background-image:
+    linear-gradient(rgba(79, 216, 195, 0.09) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(79, 216, 195, 0.09) 1px, transparent 1px);
+  background-size: 64px 64px;
+  -webkit-mask-image: linear-gradient(to top, rgba(0, 0, 0, 0.9), transparent 75%);
+  mask-image: linear-gradient(to top, rgba(0, 0, 0, 0.9), transparent 75%);
+  animation: floor-drift 18s linear infinite;
+}
+@keyframes floor-drift { from { background-position: 0 0; } to { background-position: 0 64px; } }
+
+@keyframes float-3d {
+  0%, 100% { transform: translate3d(0, 0, 0); }
+  50% { transform: translate3d(0, -10px, 0); }
+}
+.float-3d { animation: float-3d 7s ease-in-out infinite; }
+
+.tabular { font-variant-numeric: tabular-nums; }
+
+/* Raised icon tile (brand teal body, mint rim, dark edge). */
+.tile-3d {
+  background: linear-gradient(160deg, #16756B 0%, #0D4F4A 55%, #0A3F3A 100%);
+  box-shadow:
+    inset 0 1px 0 rgba(79, 216, 195, 0.45),
+    inset 0 0 0 1px rgba(79, 216, 195, 0.15),
+    0 3px 0 #04201C,
+    0 12px 24px -10px rgba(13, 79, 74, 0.95);
+}
+.tile-3d-amber {
+  background: linear-gradient(160deg, #FFC64D 0%, #FFB020 60%, #E39A10 100%);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.6),
+    0 3px 0 #9C6208,
+    0 12px 24px -10px rgba(255, 176, 32, 0.6);
+}
+
+/* 3D stage: children keep their depth (translateZ) instead of flattening. */
+.stage-3d { perspective: 1200px; }
+.preserve-3d { transform-style: preserve-3d; }

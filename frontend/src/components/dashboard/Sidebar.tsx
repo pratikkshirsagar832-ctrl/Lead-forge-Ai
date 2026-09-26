@@ -77,7 +77,7 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
   const planBadge = subscription?.plan_name || 'Free';
   const planColor = planBadge === 'Pro' ? 'bg-violet/20 text-violet border-violet/30'
     : planBadge === 'Agency' ? 'text-amber-400 bg-amber-500/10 border-amber-500/30'
-    : planBadge === 'Solo' ? 'text-sky-400 bg-sky-500/10 border-sky-500/30'
+    : planBadge === 'Solo' ? 'text-steel bg-steel/10 border-steel/30'
     : 'text-ice/50 bg-ocean/20 border-steel/20';
 
   const remaining = subscription?.remaining_searches ?? 1;
@@ -93,17 +93,17 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
         <div className="fixed inset-0 bg-navy/80 backdrop-blur-sm z-20 lg:hidden" onClick={onClose} />
       )}
       <div className={cn(
-        'w-64 bg-gradient-to-b from-navy via-sapphire/20 to-navy flex flex-col h-screen fixed top-0 left-0 border-r border-steel/20 z-30 transition-transform duration-300 backdrop-blur-sm',
+        'w-64 flex flex-col h-[100dvh] fixed top-0 left-0 z-30 transition-transform duration-300',
+        'bg-[linear-gradient(180deg,rgba(10,43,38,0.92),rgba(6,35,31,0.96))] backdrop-blur-xl',
+        'shadow-[inset_-1px_0_0_rgba(79,216,195,0.10),12px_0_40px_-20px_rgba(1,12,10,0.9)]',
         'lg:translate-x-0',
         open ? 'translate-x-0' : '-translate-x-full'
       )}>
-        {/* Premium top accent line */}
-        <div className="absolute top-0 left-4 right-4 h-px bg-gradient-to-r from-transparent via-steel/30 to-transparent pointer-events-none" />
 
         <div className="p-6 flex items-center justify-between">
           <Link href="/dashboard" className="flex items-center gap-2 group" onClick={onClose}>
-            <div className="bg-gradient-to-br from-primary to-brand-accent rounded-lg p-1">
-              <Image src="/hyperclients-icon.png" alt="Hyperclients" width={40} height={40} className="object-contain" />
+            <div className="rounded-xl p-1.5 bg-gradient-to-br from-[#16756B] to-[#0D4F4A] shadow-[inset_0_1px_0_rgba(79,216,195,0.4),0_3px_0_#04201C,0_10px_20px_-8px_rgba(13,79,74,0.9)] transition-transform duration-300 group-hover:-translate-y-0.5 group-hover:rotate-[-4deg]">
+              <Image src="/hyperclients-icon.png" alt="Hyperclients" width={32} height={32} className="object-contain" />
             </div>
             <span className="font-bold text-xl tracking-tight text-offwhite" style={{ fontFamily: 'var(--font-heading)' }}>Hyperclients</span>
           </Link>
@@ -112,7 +112,7 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
           </button>
         </div>
 
-        <nav className="flex-1 px-3 py-2 space-y-0.5 overflow-y-auto">
+        <nav className="flex-1 px-3 py-2 space-y-1 overflow-y-auto" aria-label="Dashboard">
           {navItems.map((item, idx) => {
             const isActive = pathname === item.href || (item.href !== '/dashboard' && pathname.startsWith(item.href));
             return (
@@ -120,30 +120,35 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
                 key={item.name}
                 href={item.href}
                 onClick={onClose}
+                aria-current={isActive ? 'page' : undefined}
                 className={cn(
-                  'flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition-all duration-200 group relative overflow-hidden',
-                  isActive
-                    ? 'bg-gradient-to-r from-steel/20 to-steel/5 text-offwhite border border-steel/20 shadow-sm'
-                    : 'text-ice/50 hover:text-offwhite hover:bg-ocean/30 hover:border-steel/10 border border-transparent'
+                  'flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition-colors duration-200 group relative focus-visible:outline-2 focus-visible:outline-steel',
+                  isActive ? 'text-offwhite' : 'text-ice/55 hover:text-offwhite'
                 )}
               >
-                {isActive && (
-                  <div className="absolute left-0 top-1/3 bottom-1/3 w-0.5 bg-gradient-to-b from-steel/60 to-violet/60 rounded-full" />
+                {isActive ? (
+                  // One raised, lit pill that glides between items.
+                  <motion.span
+                    layoutId="nav-active"
+                    transition={{ type: 'spring', stiffness: 380, damping: 32 }}
+                    className="absolute inset-0 rounded-xl key-3d is-active"
+                  >
+                    <span className="absolute left-0 top-2 bottom-2 w-[3px] rounded-full bg-steel shadow-[0_0_12px_rgba(79,216,195,0.9)]" />
+                  </motion.span>
+                ) : (
+                  <span className="absolute inset-0 rounded-xl bg-white/[0.03] opacity-0 group-hover:opacity-100 transition-opacity" />
                 )}
-                <item.icon className={cn('w-4.5 h-4.5 shrink-0', isActive ? 'text-steel' : 'text-ice/40 group-hover:text-ice/70')} />
-                {item.name}
-                {isActive && (
-                  <span className="ml-auto w-1.5 h-1.5 rounded-full bg-steel/60 animate-pulse-slow" />
-                )}
+                <item.icon className={cn('relative w-[18px] h-[18px] shrink-0 transition-all duration-200', isActive ? 'text-steel drop-shadow-[0_0_6px_rgba(79,216,195,0.6)]' : 'text-ice/40 group-hover:text-ice/75 group-hover:-translate-y-px')} />
+                <span className="relative">{item.name}</span>
               </Link>
             );
           })}
         </nav>
 
         {/* User section */}
-        <div className="p-4 border-t border-steel/15 space-y-3">
+        <div className="m-3 p-3 rounded-2xl surface-3d space-y-3">
           <div className="flex items-center gap-3 px-2">
-            <div className="w-8 h-8 rounded-full bg-gradient-to-br from-violet to-steel flex items-center justify-center text-xs font-bold text-offwhite shrink-0 overflow-hidden shadow-lg shadow-violet/10">
+            <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-[#16756B] to-[#0D4F4A] flex items-center justify-center text-sm font-bold text-steel shrink-0 overflow-hidden shadow-[inset_0_1px_0_rgba(79,216,195,0.35),0_2px_0_#04201C]">
               {/* Local initial avatar — never send the account email to a third
                   party (ui-avatars.com) on every dashboard load. */}
               <span className="select-none">
@@ -175,9 +180,9 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
                 <span>Searches used (monthly)</span>
                 <span>{remaining}/{searchesPerDay}</span>
               </div>
-              <div className="h-1.5 rounded-full bg-ocean/30 overflow-hidden">
+              <div className="h-1.5 rounded-full well-3d overflow-hidden">
                 <motion.div
-                  className={cn('h-full rounded-full', remaining > 0 ? 'bg-gradient-to-r from-steel to-violet' : 'bg-rose-500')}
+                  className={cn('h-full rounded-full', remaining > 0 ? 'bg-gradient-to-r from-steel to-brand-accent' : 'bg-rose-500')}
                   initial={{ width: 0 }}
                   animate={{ width: `${Math.min(100, ((searchesPerDay - remaining) / searchesPerDay) * 100)}%` }}
                   transition={{ duration: 0.8, ease: 'easeOut' }}
@@ -191,9 +196,9 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
                 <span>LinkedIn leads used</span>
                 <span>{linkedinUsed}/{linkedinMonthly}</span>
               </div>
-              <div className="h-1.5 rounded-full bg-ocean/30 overflow-hidden">
+              <div className="h-1.5 rounded-full well-3d overflow-hidden">
                 <motion.div
-                  className={cn('h-full rounded-full', linkedinUsed < linkedinMonthly ? 'bg-gradient-to-r from-sky-400 to-blue-500' : 'bg-rose-500')}
+                  className={cn('h-full rounded-full', linkedinUsed < linkedinMonthly ? 'bg-gradient-to-r from-steel to-teal' : 'bg-rose-500')}
                   initial={{ width: 0 }}
                   animate={{ width: `${Math.min(100, linkedinMonthly > 0 ? (linkedinUsed / linkedinMonthly) * 100 : 0)}%` }}
                   transition={{ duration: 0.8, ease: 'easeOut' }}
@@ -207,9 +212,9 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
                 <span>GMB leads used</span>
                 <span>{gmbUsed}/{gmbMonthly}</span>
               </div>
-              <div className="h-1.5 rounded-full bg-ocean/30 overflow-hidden">
+              <div className="h-1.5 rounded-full well-3d overflow-hidden">
                 <motion.div
-                  className={cn('h-full rounded-full', gmbUsed < gmbMonthly ? 'bg-gradient-to-r from-emerald-400 to-teal' : 'bg-rose-500')}
+                  className={cn('h-full rounded-full', gmbUsed < gmbMonthly ? 'bg-gradient-to-r from-brand-accent to-brand-accent-light' : 'bg-rose-500')}
                   initial={{ width: 0 }}
                   animate={{ width: `${Math.min(100, gmbMonthly > 0 ? (gmbUsed / gmbMonthly) * 100 : 0)}%` }}
                   transition={{ duration: 0.8, ease: 'easeOut' }}

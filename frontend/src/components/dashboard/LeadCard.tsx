@@ -1,9 +1,10 @@
 import { GlassCard } from '@/components/shared/GlassCard';
 import { Badge } from '@/components/shared/Badge';
 import { PostTypeBadge, WorkTypeBadge } from '@/components/dashboard/PostTypeBadge';
+import { FreshnessChip, UrgencyChip } from '@/components/dashboard/LeadChips';
 import { LEAD_CATEGORIES, USER_STATUSES } from '@/lib/constants';
-import { formatNumber, formatPostedAgo, truncate } from '@/lib/utils';
-import { MapPin, Globe, Star, Phone, ChevronRight, Heart, Linkedin, Mail, Clock, ExternalLink, Users } from 'lucide-react';
+import { formatNumber, truncate } from '@/lib/utils';
+import { MapPin, Globe, Star, Phone, ChevronRight, Heart, Linkedin, Mail, ExternalLink, Users } from 'lucide-react';
 import Link from 'next/link';
 
 import type { LeadListItem } from '@/lib/types';
@@ -47,8 +48,7 @@ export function LeadCard({ lead, onToggleFavorite, isUpdatingFav }: LeadCardProp
     : 'text-ice/40';
 
   return (
-    <GlassCard hoverEffect className="flex flex-col group transition-all overflow-hidden relative">
-      <div className="absolute inset-0 bg-gradient-to-br from-steel/[0.02] to-transparent pointer-events-none" />
+    <GlassCard hoverEffect tilt={4} className="flex flex-col group overflow-hidden relative">
       <div className="p-5 flex-1 cursor-default relative z-10">
         <div className="flex justify-between items-start mb-3">
           <div className="flex gap-1.5 items-center flex-wrap">
@@ -66,12 +66,12 @@ export function LeadCard({ lead, onToggleFavorite, isUpdatingFav }: LeadCardProp
               </span>
             )}
             {isLinkedinSource ? (
-              <span className="text-[10px] px-1.5 py-0.5 rounded bg-sky-500/10 text-sky-400 font-semibold flex items-center gap-0.5 border border-sky-500/20">
+              <span className="text-[10px] px-1.5 py-0.5 rounded bg-steel/10 text-steel font-semibold flex items-center gap-0.5 border border-steel/25">
                 <Linkedin className="w-2.5 h-2.5" />
                 LinkedIn
               </span>
             ) : (
-              <span className="text-[10px] px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-400 font-semibold flex items-center gap-0.5 border border-emerald-500/20">
+              <span className="text-[10px] px-1.5 py-0.5 rounded bg-brand-accent/10 text-brand-accent font-semibold flex items-center gap-0.5 border border-brand-accent/25">
                 <MapPin className="w-2.5 h-2.5" />
                 Maps
               </span>
@@ -83,7 +83,7 @@ export function LeadCard({ lead, onToggleFavorite, isUpdatingFav }: LeadCardProp
                 className={`text-[11px] font-bold px-2 py-1 rounded-md border ${
                   lead.ai_confidence_score >= 0.8 ? 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30'
                   : lead.ai_confidence_score >= 0.6 ? 'bg-amber-500/15 text-amber-400 border-amber-500/30'
-                  : 'bg-sky-500/15 text-sky-400 border-sky-500/30'
+                  : 'bg-steel/10 text-steel border-steel/25'
                 }`}
                 title="AI lead score (0-1)"
               >
@@ -97,6 +97,8 @@ export function LeadCard({ lead, onToggleFavorite, isUpdatingFav }: LeadCardProp
               onToggleFavorite(lead.id, lead.is_favorite);
             }}
             disabled={isUpdatingFav}
+            aria-label={lead.is_favorite ? 'Remove from favourites' : 'Add to favourites'}
+            aria-pressed={lead.is_favorite}
             className="p-1.5 -mr-1.5 rounded-full hover:bg-steel/15 transition-colors text-ice/30 hover:text-rose-400 disabled:opacity-50"
           >
             <Heart
@@ -170,12 +172,10 @@ export function LeadCard({ lead, onToggleFavorite, isUpdatingFav }: LeadCardProp
                   <span className="line-clamp-2 leading-snug text-[13px] text-amber-100/80">{lead.ai_pitch}</span>
                 </div>
               )}
-              {lead.posted_at && (
-                <div className="flex items-center gap-2.5 text-sm text-ice/40">
-                  <div className="p-1.5 shrink-0 rounded-lg bg-ocean/25 text-steel/50 transition-colors">
-                    <Clock className="w-3.5 h-3.5" />
-                  </div>
-                  <span className="text-[13px]">Posted {formatPostedAgo(lead.posted_at)}</span>
+              {(lead.posted_at || lead.urgency != null) && (
+                <div className="flex items-center gap-1.5 pt-0.5">
+                  <FreshnessChip postedAt={lead.posted_at} />
+                  <UrgencyChip urgency={lead.urgency} />
                 </div>
               )}
             </>
@@ -218,7 +218,7 @@ export function LeadCard({ lead, onToggleFavorite, isUpdatingFav }: LeadCardProp
 
       <Link
         href={`/dashboard/leads/${lead.id}`}
-        className="relative z-10 px-5 py-3 border-t border-ocean/20 bg-navy/40 hover:bg-steel/10 flex items-center justify-between text-xs font-semibold text-steel hover:text-ice transition-all duration-300 group/link"
+        className="relative z-10 mt-auto px-5 py-3 border-t border-white/[0.05] bg-[#031411]/40 hover:bg-steel/10 flex items-center justify-between text-xs font-semibold text-steel hover:text-offwhite transition-colors duration-300 group/link"
       >
         <span>View Full Profile</span>
         <ChevronRight className="w-3.5 h-3.5 transition-transform duration-300 group-hover/link:translate-x-1" />

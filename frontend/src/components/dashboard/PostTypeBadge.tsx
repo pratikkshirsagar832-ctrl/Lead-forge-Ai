@@ -1,13 +1,13 @@
 import { Badge } from '@/components/shared/Badge';
 
 const POST_TYPE_CONFIG: Record<string, { label: string; className: string }> = {
-  buyer: { label: 'Freelancer Needed', className: 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30' },
-  agency: { label: 'Agency Needed', className: 'bg-sky-500/15 text-sky-400 border-sky-500/30' },
+  buyer: { label: 'Freelancer Needed', className: 'bg-steel/15 text-steel border-steel/30' },
+  agency: { label: 'Agency Needed', className: 'bg-brand-accent/15 text-brand-accent border-brand-accent/30' },
   unknown: { label: 'Post', className: 'bg-white/5 text-ice/50 border-white/10' },
 };
 
 export const WORK_TYPE_CONFIG: Record<string, { label: string; className: string }> = {
-  remote: { label: '🌍 Remote', className: 'bg-sky-500/15 text-sky-400 border-sky-500/30' },
+  remote: { label: '🌍 Remote', className: 'bg-steel/15 text-steel border-steel/30' },
   contract: { label: '📄 Contract', className: 'bg-violet-500/15 text-violet-400 border-violet-500/30' },
   part_time: { label: '⏱️ Part-time', className: 'bg-teal-500/15 text-teal-400 border-teal-500/30' },
   full_time_onsite: { label: '🏢 On-site', className: 'bg-rose-500/15 text-rose-400 border-rose-500/30' },

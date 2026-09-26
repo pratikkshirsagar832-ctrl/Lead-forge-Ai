@@ -195,7 +195,7 @@ export default function LeadDetailPage() {
                     <Badge
                       variant="outline"
                       className={isLinkedinSource
-                        ? 'border-sky-500/30 text-sky-400 bg-sky-500/5'
+                        ? 'border-steel/30 text-steel bg-steel/5'
                         : 'border-emerald-500/30 text-emerald-400 bg-emerald-500/5'}
                     >
                       {isLinkedinSource
@@ -212,7 +212,7 @@ export default function LeadDetailPage() {
                           ? 'border-emerald-500/30 text-emerald-400 bg-emerald-500/5'
                           : lead.ai_confidence_score >= 0.6
                             ? 'border-amber-500/30 text-amber-400 bg-amber-500/5'
-                            : 'border-sky-500/30 text-sky-400 bg-sky-500/5'
+                            : 'border-steel/30 text-steel bg-steel/5'
                       }
                     >
                       {Math.round(lead.ai_confidence_score * 100)}% AI Match
@@ -359,7 +359,7 @@ export default function LeadDetailPage() {
           {isLinkedinSource ? (
             <GlassCard className="p-6">
               <div className="flex items-center gap-3">
-                <div className="p-2.5 rounded-full bg-sky-500/20 text-sky-400 shrink-0">
+                <div className="p-2.5 rounded-full bg-steel/20 text-steel shrink-0">
                   <CheckCircle2 className="w-6 h-6" />
                 </div>
                 <div>

@@ -1,11 +1,13 @@
 'use client';
 
+import { useEffect, useState } from 'react';
 import { useSearchStore } from '@/stores/searchStore';
 import { Badge } from '@/components/shared/Badge';
 import { LoadingButton } from '@/components/shared/LoadingButton';
+import { GlassCard } from '@/components/shared/GlassCard';
 import { SEARCH_STATUSES } from '@/lib/constants';
 import { motion } from 'framer-motion';
-import { Loader2, CheckCircle, XCircle, Search, Sparkles, MapPin, Linkedin } from 'lucide-react';
+import { CheckCircle, XCircle, Users, ScanSearch, Timer, MapPin, Linkedin, ArrowRight, Lightbulb } from 'lucide-react';
 import Link from 'next/link';
 
 interface SearchProgressCardProps {
@@ -13,13 +15,47 @@ interface SearchProgressCardProps {
   isCancelling: boolean;
 }
 
-const STOP_REASON_LABELS: Record<string, string> = {
-  empty_rounds_stop: 'Stopped — no more new buyers were appearing in the pool',
-  ceiling_hit: 'Stopped — provider-spend ceiling reached for this search',
-  deadline_hit: 'Stopped — time limit reached',
-  query_pool_exhausted: 'Query ideas exhausted for this niche',
-  iteration_cap: 'Reached the maximum rounds for this search',
+// Why a search ended short, in plain words, plus what to try next.
+const STOP_REASON_HELP: Record<string, { title: string; tip: string }> = {
+  empty_rounds_stop: { title: 'No more new buyers were posting right now', tip: 'Try again later today, or describe your service more broadly (e.g. "video editing" instead of "YouTube shorts editing").' },
+  ceiling_hit: { title: 'This search reached its limit before finding more', tip: 'Try a broader wording or the other lane (Freelancer / Agency).' },
+  deadline_hit: { title: 'This search ran out of time', tip: 'Run it again - new buyer posts appear every hour.' },
+  query_pool_exhausted: { title: 'We tried every phrasing for this niche', tip: 'Use a more common name for your service, or add a second service.' },
+  iteration_cap: { title: 'This search reached its maximum rounds', tip: 'Run it again later for fresh posts.' },
 };
+
+function formatElapsed(total: number): string {
+  const s = Math.max(0, Math.floor(total));
+  const m = Math.floor(s / 60);
+  return m > 0 ? `${m}m ${String(s % 60).padStart(2, '0')}s` : `${s}s`;
+}
+
+/** 3D radar: a tilted ring with a sweeping beam while the search runs. */
+function Radar({ state }: { state: 'running' | 'completed' | 'failed' }) {
+  if (state !== 'running') {
+    const ok = state === 'completed';
+    return (
+      <motion.span
+        initial={{ scale: 0.6, rotateY: -90, opacity: 0 }}
+        animate={{ scale: 1, rotateY: 0, opacity: 1 }}
+        transition={{ type: 'spring', stiffness: 260, damping: 18 }}
+        className={`${ok ? 'tile-3d text-steel' : 'bg-rose-500/15 text-rose-400 ring-1 ring-rose-500/30'} grid h-16 w-16 place-items-center rounded-2xl`}
+      >
+        {ok ? <CheckCircle className="h-8 w-8" /> : <XCircle className="h-8 w-8" />}
+      </motion.span>
+    );
+  }
+  return (
+    <div className="stage-3d grid h-16 w-16 place-items-center" aria-hidden="true">
+      <div className="preserve-3d relative h-16 w-16 [transform:rotateX(58deg)]">
+        <div className="absolute inset-0 rounded-full border border-steel/40 shadow-[0_0_24px_rgba(79,216,195,0.35)]" />
+        <div className="absolute inset-3 rounded-full border border-steel/25" />
+        <div className="absolute inset-0 rounded-full bg-[conic-gradient(from_0deg,rgba(79,216,195,0.55),transparent_28%)] motion-safe:animate-spin [animation-duration:1.6s]" />
+      </div>
+      <span className="absolute h-2.5 w-2.5 rounded-full bg-brand-accent shadow-[0_0_14px_rgba(255,176,32,0.9)]" />
+    </div>
+  );
+}
 
 export function SearchProgressCard({ onCancel, isCancelling }: SearchProgressCardProps) {
   const { progress } = useSearchStore();
@@ -29,152 +65,126 @@ export function SearchProgressCard({ onCancel, isCancelling }: SearchProgressCar
     : SEARCH_STATUSES.queued;
   const percentage = progress ? (isFinished ? 100 : Math.max(5, progress.progress_percent || 0)) : 0;
 
-  // "Total Found" stays honest to the requested count: if the engine reviewed
-  // 98 posts but the user asked for 3 leads, show 3 (the delivered count), never
-  // 98 (which is the number of posts reviewed, not leads found).
+  // Elapsed ticks locally between polls so the timer feels live.
+  const [tick, setTick] = useState(0);
+  useEffect(() => {
+    if (isFinished) return;
+    const id = setInterval(() => setTick((t) => t + 1), 1000);
+    return () => clearInterval(id);
+  }, [isFinished, progress?.elapsed_seconds]);
+  useEffect(() => { setTick(0); }, [progress?.elapsed_seconds]);
+
+  // "Found" stays honest to the requested count: never the number of posts
+  // reviewed, only delivered leads, capped at what was asked for.
   const requestedCount = progress?.requested_count ?? null;
   const totalFound = progress?.total_results ?? 0;
   const displayedFound = requestedCount ? Math.min(Number(totalFound), Number(requestedCount)) : Number(totalFound);
 
   if (!progress) return null;
 
+  const isLinkedIn = progress.source === 'linkedin';
+  const radarState = !isFinished ? 'running' : progress.status === 'completed' ? 'completed' : 'failed';
+  const stopHelp = isFinished && progress.stop_reason && progress.stop_reason !== 'target_reached'
+    && requestedCount != null && displayedFound < requestedCount
+    ? STOP_REASON_HELP[progress.stop_reason] : undefined;
+
+  const stats = [
+    { label: 'Leads found', value: requestedCount ? `${displayedFound} / ${requestedCount}` : String(displayedFound), icon: Users },
+    { label: isLinkedIn ? 'Posts checked' : 'Processed', value: String(progress.processed_count || 0), icon: ScanSearch },
+    { label: 'Time', value: formatElapsed((progress.elapsed_seconds || 0) + (isFinished ? 0 : tick)), icon: Timer },
+  ];
+
   return (
-    <motion.div
-      initial={{ opacity: 0, scale: 0.95, y: 10 }}
-      animate={{ opacity: 1, scale: 1, y: 0 }}
-      className="max-w-3xl mx-auto mt-8 relative"
-    >
-      {/* Premium glow border */}
-      <div className="absolute -inset-[1px] bg-gradient-to-r from-steel/30 via-violet/20 to-teal/20 rounded-2xl blur opacity-30 animate-pulse-slow" />
-      <div className="relative bg-gradient-to-br from-sapphire/50 to-navy/90 rounded-2xl p-8 border border-steel/25 shadow-2xl shadow-black/40 overflow-hidden">
-
-        {/* Ambient glow */}
-        <div className="absolute top-0 right-0 -mr-20 -mt-20 w-64 h-64 rounded-full bg-steel/10 blur-3xl pointer-events-none" />
-        <div className="absolute bottom-0 left-0 -ml-20 -mb-20 w-80 h-80 rounded-full bg-violet/10 blur-3xl pointer-events-none" />
-
-        <div className="relative z-10">
-              <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-8 gap-4">
-            <div>
-              <div className="flex items-center gap-3 mb-1.5">
-                <h3 className="text-xl font-bold text-offwhite tracking-tight" style={{ fontFamily: 'var(--font-heading)' }}>
-                  Search Progress
-                </h3>
-                <Badge variant={
-                  progress.status === 'completed' ? 'success' :
-                  progress.status === 'failed' ? 'error' :
-                  progress.status === 'cancelled' ? 'outline' : 'info'
-                } dot>
-                  {statusConfig.label}
-                </Badge>
-                <Badge variant="outline" className="text-[10px] gap-1">
-                  {progress.source === 'linkedin' ? <Linkedin className="w-3 h-3 text-sky-400" /> : <MapPin className="w-3 h-3 text-emerald-400" />}
-                  {progress.source === 'linkedin' ? 'LinkedIn' : 'Maps'}
-                </Badge>
-              </div>
-              <p className="text-sm text-ice/60 font-medium">{progress.message || 'Initializing pipeline...'}</p>
-            </div>
+    <GlassCard className="max-w-3xl mx-auto mt-2 rounded-3xl p-6 md:p-8">
+      <div className="flex items-start gap-5">
+        <Radar state={radarState} />
+        <div className="min-w-0 flex-1">
+          <div className="flex flex-wrap items-center gap-2 mb-1.5">
+            <h3 className="text-xl font-bold text-offwhite tracking-tight" style={{ fontFamily: 'var(--font-heading)' }}>
+              {!isFinished ? 'Searching' : progress.status === 'completed' ? 'Search complete' : progress.status === 'cancelled' ? 'Search cancelled' : 'Search stopped'}
+            </h3>
+            <Badge variant={
+              progress.status === 'completed' ? 'success' :
+              progress.status === 'failed' ? 'error' :
+              progress.status === 'cancelled' ? 'outline' : 'info'
+            } dot>
+              {statusConfig.label}
+            </Badge>
+            <Badge variant="outline" className="text-[10px] gap-1">
+              {isLinkedIn ? <Linkedin className="w-3 h-3 text-steel" /> : <MapPin className="w-3 h-3 text-brand-accent" />}
+              {isLinkedIn ? 'LinkedIn' : 'Maps'}
+            </Badge>
           </div>
-
-          {/* Premium progress bar */}
-          <div className="relative h-2.5 bg-navy/60 rounded-full overflow-hidden mb-8 shadow-inner border border-steel/15">
-            <motion.div
-              className={`absolute top-0 left-0 h-full rounded-full ${
-                progress.status === 'failed' ? 'bg-gradient-to-r from-rose-500 to-rose-400' :
-                progress.status === 'cancelled' ? 'bg-gradient-to-r from-ice/30 to-ice/20' :
-                'bg-gradient-to-r from-steel via-violet to-teal'
-              }`}
-              initial={{ width: 0 }}
-              animate={{ width: `${percentage}%` }}
-              transition={{ duration: 0.8, ease: 'easeOut' }}
-            >
-              {!isFinished && (
-                <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/20 to-transparent animate-shimmer" />
-              )}
-            </motion.div>
-          </div>
-
-          <div className="grid grid-cols-2 md:grid-cols-3 gap-4 mb-8">
-            <div className="bg-steel/[0.03] rounded-xl p-5 border border-steel/10 hover:bg-steel/[0.05] transition-colors relative overflow-hidden group">
-              <div className="absolute inset-0 bg-gradient-to-br from-steel/5 to-transparent opacity-0 group-hover:opacity-100 transition-opacity" />
-              <div className="relative z-10">
-                <div className="flex items-center gap-2 mb-2">
-                  <Search className="w-4 h-4 text-steel" />
-                  <p className="text-xs font-semibold text-ice/60 uppercase tracking-wider">Total Found</p>
-                </div>
-                <p className="text-3xl font-bold text-offwhite tracking-tight">{displayedFound}</p>
-              </div>
-            </div>
-
-            <div className="bg-steel/[0.03] rounded-xl p-5 border border-steel/10 hover:bg-steel/[0.05] transition-colors relative overflow-hidden group">
-              <div className="absolute inset-0 bg-gradient-to-br from-emerald-500/5 to-transparent opacity-0 group-hover:opacity-100 transition-opacity" />
-              <div className="relative z-10">
-                <div className="flex items-center gap-2 mb-2">
-                  <CheckCircle className="w-4 h-4 text-emerald-400" />
-                  <p className="text-xs font-semibold text-ice/60 uppercase tracking-wider">Processed</p>
-                </div>
-                <p className="text-3xl font-bold text-offwhite tracking-tight">{progress.processed_count || 0}</p>
-              </div>
-            </div>
-
-            <div className="bg-steel/[0.03] rounded-xl p-5 border border-steel/10 md:col-span-1 flex items-center justify-center">
-              <div className="shrink-0 p-3 rounded-full bg-steel/10 border border-steel/20">
-                {!isFinished ? (
-                  <Loader2 className="w-5 h-5 text-steel animate-spin" />
-                ) : progress.status === 'completed' ? (
-                  <CheckCircle className="w-6 h-6 text-emerald-400" />
-                ) : (
-                  <XCircle className="w-6 h-6 text-rose-400" />
-                )}
-              </div>
-            </div>
-          </div>
-
-          {/* Completion footnote: skipped count + stop reason (internal
-              provider spend intentionally hidden from the UI) */}
-          {((progress.skipped != null && progress.skipped > 0) ||
-            (isFinished && progress.stop_reason && progress.stop_reason !== 'target_reached')) && (
-            <div className="flex flex-wrap items-center justify-between gap-2 mb-4 px-1 text-[11px] text-ice/40">
-              <span>
-                {progress.skipped != null && progress.skipped > 0 ? `${progress.skipped} skipped` : ''}
-              </span>
-              {isFinished && progress.stop_reason && progress.stop_reason !== 'target_reached' && (
-                <span className="text-amber-400/80 font-medium">
-                  {STOP_REASON_LABELS[progress.stop_reason] || progress.stop_reason}
-                </span>
-              )}
-            </div>
-          )}
-
-          <div className="flex justify-end gap-3 pt-6 border-t border-steel/15 relative z-10">
-            {!isFinished ? (
-              <>
-                <LoadingButton
-                  variant="outline"
-                  onClick={onCancel}
-                  isLoading={isCancelling}
-                  className="border-steel/30 text-ice hover:text-offwhite hover:bg-steel/10"
-                >
-                  Cancel Process
-                </LoadingButton>
-              </>
-            ) : (
-              <>
-                {progress.status === 'completed' && (progress.total_results || 0) > 0 && (
-                  <Link
-                    href="/dashboard/leads"
-                    className="inline-flex items-center justify-center px-6 py-2.5 font-semibold rounded-xl text-offwhite bg-gradient-to-r from-steel to-violet hover:from-steel/90 hover:to-violet/90 transition-all shadow-lg shadow-steel/20 hover:shadow-xl hover:shadow-violet/30 group"
-                  >
-                    <span>View Leads Dashboard</span>
-                    <svg className="w-4 h-4 ml-2 group-hover:translate-x-1 transition-transform" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                      <path d="M5 12h14m-6-6 6 6-6 6" />
-                    </svg>
-                  </Link>
-                )}
-              </>
-            )}
-          </div>
+          <p className="text-sm text-ice/65 leading-relaxed" aria-live="polite">{progress.message || 'Starting your search...'}</p>
         </div>
       </div>
-    </motion.div>
+
+      {/* Lit progress bar in a sunken track */}
+      <div
+        className="well-3d relative mt-7 h-3 rounded-full overflow-hidden"
+        role="progressbar"
+        aria-valuemin={0}
+        aria-valuemax={100}
+        aria-valuenow={Math.round(percentage)}
+      >
+        <motion.div
+          className={`absolute inset-y-0 left-0 rounded-full ${
+            progress.status === 'failed' ? 'bg-gradient-to-r from-rose-500 to-rose-400' :
+            progress.status === 'cancelled' ? 'bg-ice/25' :
+            'bg-gradient-to-r from-teal via-steel to-brand-accent shadow-[0_0_18px_rgba(79,216,195,0.55)]'
+          }`}
+          initial={{ width: 0 }}
+          animate={{ width: `${percentage}%` }}
+          transition={{ type: 'spring', stiffness: 60, damping: 18 }}
+        >
+          {!isFinished && (
+            <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/25 to-transparent animate-shimmer" />
+          )}
+        </motion.div>
+      </div>
+
+      <div className="mt-6 grid grid-cols-3 gap-3">
+        {stats.map(({ label, value, icon: Icon }) => (
+          <div key={label} className="well-3d rounded-2xl p-4">
+            <div className="flex items-center gap-1.5 text-[11px] font-medium text-ice/50">
+              <Icon className="h-3.5 w-3.5 text-steel" /> {label}
+            </div>
+            <p className="mt-1.5 text-2xl md:text-3xl font-bold text-offwhite tracking-tight tabular" style={{ fontFamily: 'var(--font-heading)' }}>
+              {value}
+            </p>
+          </div>
+        ))}
+      </div>
+
+      {stopHelp && (
+        <div className="mt-5 flex items-start gap-3 rounded-2xl bg-brand-accent/[0.07] p-4 ring-1 ring-brand-accent/20">
+          <Lightbulb className="mt-0.5 h-5 w-5 shrink-0 text-brand-accent" />
+          <div>
+            <p className="text-sm font-semibold text-offwhite">{stopHelp.title}</p>
+            <p className="mt-0.5 text-xs text-ice/60 leading-relaxed">{stopHelp.tip}</p>
+          </div>
+        </div>
+      )}
+
+      <div className="mt-6 flex justify-end gap-3">
+        {!isFinished ? (
+          <LoadingButton
+            variant="outline"
+            onClick={onCancel}
+            isLoading={isCancelling}
+            className="border-steel/30 text-ice hover:text-offwhite hover:bg-steel/10"
+          >
+            Cancel search
+          </LoadingButton>
+        ) : (
+          progress.status === 'completed' && (progress.total_results || 0) > 0 && (
+            <Link href="/dashboard/leads" className="btn-3d-gold group inline-flex h-11 items-center gap-2 rounded-xl px-6">
+              View leads
+              <ArrowRight className="h-4 w-4 transition-transform group-hover:translate-x-0.5" />
+            </Link>
+          )
+        )}
+      </div>
+    </GlassCard>
   );
 }

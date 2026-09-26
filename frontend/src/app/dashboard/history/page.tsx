@@ -97,7 +97,7 @@ export default function HistoryPage() {
                           {item.status}
                         </Badge>
                         <Badge variant="outline" className="text-[10px] gap-1">
-                          {item.source === 'linkedin' ? <Linkedin className="w-3 h-3 text-sky-400" /> : <MapPin className="w-3 h-3 text-emerald-400" />}
+                          {item.source === 'linkedin' ? <Linkedin className="w-3 h-3 text-steel" /> : <MapPin className="w-3 h-3 text-brand-accent" />}
                           {item.source === 'linkedin' ? 'LinkedIn' : 'Maps'}
                         </Badge>
                       </div>

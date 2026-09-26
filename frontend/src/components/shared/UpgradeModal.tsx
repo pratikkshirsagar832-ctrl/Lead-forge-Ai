@@ -33,7 +33,7 @@ export function UpgradeModal({ isOpen, onClose, type = 'limit', title: titleOver
         <Link
           href="/dashboard/billing"
           onClick={onClose}
-          className="w-full h-11 rounded-xl font-semibold text-sm flex items-center justify-center gap-2 btn-gradient-cyan transition-all"
+          className="w-full h-11 rounded-xl font-semibold text-sm flex items-center justify-center gap-2 btn-3d-gold"
         >
           <Sparkles className="w-4 h-4" />
           View Plans

@@ -104,6 +104,7 @@ export interface LeadListItem {
   profile_picture_url?: string | null;
   connections_count?: number;
   posted_at?: string | null;
+  urgency?: number | null;
   post_type?: string | null;
   ai_confidence_score?: number | null;
   ai_pitch?: string | null;

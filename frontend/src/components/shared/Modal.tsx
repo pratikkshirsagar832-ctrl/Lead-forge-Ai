@@ -45,7 +45,7 @@ export function Modal({ isOpen, onClose, children, title, maxWidth = 'max-w-md' 
             animate={{ opacity: 1, scale: 1, y: 0 }}
             exit={{ opacity: 0, scale: 0.95, y: 20 }}
             transition={{ duration: 0.2, ease: 'easeOut' }}
-            className={`relative w-full ${maxWidth} glass-card-premium rounded-2xl border border-ocean/20 shadow-2xl`}
+            className={`relative w-full ${maxWidth} surface-3d rounded-3xl`}
           >
             <button
               onClick={onClose}

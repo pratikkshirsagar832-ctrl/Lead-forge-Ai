@@ -12,6 +12,8 @@ import { LoadingButton } from '@/components/shared/LoadingButton';
 import { SearchProgressCard } from '@/components/dashboard/SearchProgressCard';
 import { UpgradeModal } from '@/components/shared/UpgradeModal';
 import { PostTypeBadge } from '@/components/dashboard/PostTypeBadge';
+import { FreshnessChip, UrgencyChip } from '@/components/dashboard/LeadChips';
+import { GlassCard } from '@/components/shared/GlassCard';
 import { API_ROUTES } from '@/lib/constants';
 import { useSearchStore } from '@/stores/searchStore';
 import { MapPin, Briefcase, SearchIcon, Sparkles, Globe, Star, Phone, ChevronRight, Users, AlertCircle, Search, Linkedin, Mail, Clock, ExternalLink, Unlock, Check, BadgeCheck, Lock } from 'lucide-react';
@@ -35,8 +37,8 @@ function SourceBadge({ source }: { source?: string }) {
   return (
     <span className={`text-[9px] px-1.5 py-0.5 rounded font-semibold flex items-center gap-0.5 border ${
       isLinkedIn
-        ? 'bg-sky-500/10 text-sky-400 border-sky-500/20'
-        : 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20'
+        ? 'bg-steel/10 text-steel border-steel/25'
+        : 'bg-brand-accent/10 text-brand-accent border-brand-accent/25'
     }`}>
       {isLinkedIn ? <Linkedin className="w-2.5 h-2.5" /> : <MapPin className="w-2.5 h-2.5" />}
       {isLinkedIn ? 'LinkedIn' : 'Maps'}
@@ -56,12 +58,14 @@ function LiveResultCard({ lead, index }: { lead: any; index: number }) {
 
   return (
     <motion.div
-      initial={{ opacity: 0, y: 20, scale: 0.95 }}
-      animate={{ opacity: 1, y: 0, scale: 1 }}
-      transition={{ duration: 0.4, delay: index * 0.08, ease: 'easeOut' }}
+      layout
+      initial={{ opacity: 0, y: 24, rotateX: -12 }}
+      animate={{ opacity: 1, y: 0, rotateX: 0 }}
+      transition={{ type: 'spring', stiffness: 260, damping: 24, delay: Math.min(index, 8) * 0.06 }}
+      style={{ transformPerspective: 900 }}
     >
-      <Link href={cardHref} target={cardTarget} rel={isLinkedIn ? 'noopener noreferrer' : undefined} className="block group">
-        <div className="glass-card-premium rounded-xl hover:border-steel/30 transition-colors duration-300">
+      <Link href={cardHref} target={cardTarget} rel={isLinkedIn ? 'noopener noreferrer' : undefined} className="block group h-full rounded-2xl focus-visible:outline-2 focus-visible:outline-steel">
+        <GlassCard tilt={5} hoverEffect className="rounded-2xl h-full">
           <div className="p-4">
               <div className="flex items-start justify-between mb-2">
                 <div className="flex items-center gap-2">
@@ -127,14 +131,14 @@ function LiveResultCard({ lead, index }: { lead: any; index: number }) {
                       {lead.post_text}
                     </p>
                   )}
-                  {lead.posted_at && (
-                    <div className="flex items-center gap-1.5 text-ice/40">
-                      <Clock className="w-3 h-3" />
-                      <span>posted {formatPostedAgo(lead.posted_at)}</span>
+                  {(lead.posted_at || lead.urgency != null) && (
+                    <div className="flex items-center gap-1.5 pt-1">
+                      <FreshnessChip postedAt={lead.posted_at} />
+                      <UrgencyChip urgency={lead.urgency} />
                     </div>
                   )}
                   {lead.post_url && (
-                    <div className="flex items-center gap-1.5 text-sky-400">
+                    <div className="flex items-center gap-1.5 text-steel">
                       <ExternalLink className="w-3 h-3" />
                       <a href={lead.post_url} target="_blank" rel="noopener noreferrer" onClick={(e) => e.stopPropagation()} className="truncate hover:underline">
                         View post on LinkedIn
@@ -166,7 +170,7 @@ function LiveResultCard({ lead, index }: { lead: any; index: number }) {
             <span>{isLinkedIn ? 'Open LinkedIn Post' : 'View Profile'}</span>
             <ChevronRight className="w-3 h-3 transition-transform group-hover:translate-x-0.5" />
           </div>
-        </div>
+        </GlassCard>
       </Link>
     </motion.div>
   );
@@ -401,10 +405,11 @@ export default function SearchPage() {
     <div className="space-y-8 animate-in fade-in duration-500">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-3xl font-bold text-offwhite tracking-tight">
-            <span className="gradient-text">{headerLabel}</span>
+          <p className="text-xs font-semibold text-steel/80 mb-2">{source === 'linkedin' ? 'LinkedIn buyers' : 'Google Maps'}</p>
+          <h1 className="text-3xl md:text-[2.5rem] font-bold text-offwhite tracking-[-0.02em] leading-[1.08] [text-wrap:balance]" style={{ fontFamily: 'var(--font-heading)' }}>
+            {headerLabel}
           </h1>
-          <p className="text-ice/50 mt-2 text-sm">
+          <p className="text-ice/55 mt-2 text-sm max-w-2xl">
             {source === 'linkedin'
               ? (linkedinRole === 'agency'
                 ? 'Clients on LinkedIn actively seeking an agency — exact count, newest first.'
@@ -423,15 +428,16 @@ export default function SearchPage() {
             exit={{ opacity: 0, scale: 0.95 }}
             transition={{ duration: 0.3 }}
           >
-            <div className="glass-card-premium rounded-2xl p-8 max-w-3xl mx-auto border-ocean/20">
-              <div className="grid grid-cols-2 gap-3 mb-6">
+            <GlassCard className="rounded-3xl p-6 md:p-9 max-w-3xl mx-auto">
+              <div className="well-3d grid grid-cols-2 gap-1.5 mb-7 p-1.5 rounded-2xl">
                 <button
                   type="button"
                   onClick={() => changeSource('google_maps')}
-                  className={`flex items-center justify-center gap-2 px-4 py-3 rounded-xl border transition-all ${
+                  aria-pressed={source === 'google_maps'}
+                  className={`flex items-center justify-center gap-2 px-4 py-3 rounded-xl transition-all ${
                     source === 'google_maps'
-                      ? 'bg-emerald-500/10 border-emerald-500/40 text-emerald-400'
-                      : 'bg-navy/40 border-ocean/20 text-ice/50 hover:border-ocean/40'
+                      ? 'key-3d is-active text-steel'
+                      : 'text-ice/55 hover:text-offwhite hover:bg-white/[0.03]'
                   }`}
                 >
                   <MapPin className="w-4 h-4" />
@@ -440,10 +446,11 @@ export default function SearchPage() {
                 <button
                   type="button"
                   onClick={() => changeSource('linkedin')}
-                  className={`flex items-center justify-center gap-2 px-4 py-3 rounded-xl border transition-all ${
+                  aria-pressed={source === 'linkedin'}
+                  className={`flex items-center justify-center gap-2 px-4 py-3 rounded-xl transition-all ${
                     source === 'linkedin'
-                      ? 'bg-sky-500/10 border-sky-500/40 text-sky-400'
-                      : 'bg-navy/40 border-ocean/20 text-ice/50 hover:border-ocean/40'
+                      ? 'key-3d is-active text-steel'
+                      : 'text-ice/55 hover:text-offwhite hover:bg-white/[0.03]'
                   }`}
                 >
                   <Linkedin className="w-4 h-4" />
@@ -465,7 +472,7 @@ export default function SearchPage() {
                         {...mapsForm.register('niche')}
                         type="text"
                         placeholder={source === 'linkedin' ? 'Any service, any industry — e.g. video editing, interior design, bookkeeping' : 'e.g. Plumbers, Dentists'}
-                        className="w-full pl-10 pr-4 py-3 rounded-xl border border-ocean/30 bg-navy/60 focus:bg-navy/80 focus:ring-2 focus:ring-steel/40 focus:border-steel/50 transition-all text-offwhite text-lg placeholder-ice/30 outline-none"
+                        className="w-full pl-10 pr-4 py-3 rounded-xl well-3d border border-transparent focus:border-steel/50 focus:ring-2 focus:ring-steel/25 transition-all text-offwhite text-lg placeholder-ice/30 outline-none"
                       />
                     </div>
                     {mapsForm.formState.errors.niche && (
@@ -505,7 +512,7 @@ export default function SearchPage() {
                         {...mapsForm.register('location')}
                         type="text"
                         placeholder="e.g. Dallas TX, London UK, Mumbai"
-                        className="w-full pl-10 pr-4 py-3 rounded-xl border border-ocean/30 bg-navy/60 focus:bg-navy/80 focus:ring-2 focus:ring-steel/40 focus:border-steel/50 transition-all text-offwhite text-lg placeholder-ice/30 outline-none"
+                        className="w-full pl-10 pr-4 py-3 rounded-xl well-3d border border-transparent focus:border-steel/50 focus:ring-2 focus:ring-steel/25 transition-all text-offwhite text-lg placeholder-ice/30 outline-none"
                       />
                     </div>
                     {mapsForm.formState.errors.location && (
@@ -535,10 +542,10 @@ export default function SearchPage() {
                           title={locked ? 'Upgrade to unlock' : `${n} leads ${MAPS_ETA[n] ?? ''}`}
                           className={`px-3 py-3 rounded-xl border text-sm font-semibold transition-all disabled:opacity-50 disabled:cursor-not-allowed inline-flex items-center justify-center gap-1.5 ${
                             locked
-                              ? 'bg-navy/40 border-ocean/20 text-ice/35 hover:border-amber-500/40 hover:text-amber-300'
+                              ? 'well-3d border-transparent text-ice/35 hover:text-brand-accent'
                               : maxResults === n
-                                ? 'bg-emerald-500/10 border-emerald-500/40 text-emerald-400'
-                                : 'bg-navy/60 border-ocean/25 text-ice/60 hover:text-offwhite hover:border-steel/40'
+                                ? 'key-3d is-active border-transparent text-steel'
+                                : 'key-3d border-transparent text-ice/65 hover:text-offwhite'
                           }`}
                         >
                           {locked && <Lock className="w-3.5 h-3.5" />}
@@ -583,10 +590,10 @@ export default function SearchPage() {
                             title={locked ? 'Upgrade to unlock' : `${n} leads`}
                             className={`px-3 py-3 rounded-xl border text-sm font-semibold transition-all disabled:opacity-50 disabled:cursor-not-allowed inline-flex items-center justify-center gap-1.5 ${
                               locked
-                                ? 'bg-navy/40 border-ocean/20 text-ice/35 hover:border-amber-500/40 hover:text-amber-300'
+                                ? 'well-3d border-transparent text-ice/35 hover:text-brand-accent'
                                 : linkedinCount === n
-                                  ? 'bg-emerald-500/10 border-emerald-500/40 text-emerald-400'
-                                  : 'bg-navy/60 border-ocean/25 text-ice/60 hover:text-offwhite hover:border-steel/40'
+                                  ? 'key-3d is-active border-transparent text-steel'
+                                  : 'key-3d border-transparent text-ice/65 hover:text-offwhite'
                             }`}
                           >
                             {locked && <Lock className="w-3.5 h-3.5" />}
@@ -629,20 +636,19 @@ export default function SearchPage() {
                         key={r.key}
                         type="button"
                         onClick={() => setRole(r.key)}
-                        className={`flex items-center gap-2.5 px-3 py-2.5 rounded-xl border text-left transition-all ${
-                          linkedinRole === r.key
-                            ? 'bg-emerald-500/10 border-emerald-500/40'
-                            : 'bg-navy/60 border-ocean/25 hover:border-steel/40'
+                        aria-pressed={linkedinRole === r.key}
+                        className={`flex items-center gap-2.5 px-3 py-2.5 rounded-xl border border-transparent text-left ${
+                          linkedinRole === r.key ? 'key-3d is-active' : 'key-3d'
                         }`}
                       >
-                        <div className={`p-1.5 rounded-lg shrink-0 ${linkedinRole === r.key ? 'bg-emerald-500/15' : 'bg-steel/15'}`}>
-                          <r.icon className={`w-4 h-4 ${linkedinRole === r.key ? 'text-emerald-400' : 'text-steel'}`} />
+                        <div className={`p-1.5 rounded-lg shrink-0 ${linkedinRole === r.key ? 'tile-3d' : 'bg-steel/10'}`}>
+                          <r.icon className="w-4 h-4 text-steel" />
                         </div>
                         <div className="min-w-0">
-                          <p className={`text-xs font-bold leading-tight ${linkedinRole === r.key ? 'text-emerald-300' : 'text-offwhite'}`}>I&apos;m {r.key === 'freelancer' ? 'a Freelancer' : 'an Agency'}</p>
+                          <p className={`text-xs font-bold leading-tight ${linkedinRole === r.key ? 'text-steel' : 'text-offwhite'}`}>I&apos;m {r.key === 'freelancer' ? 'a Freelancer' : 'an Agency'}</p>
                           <p className="text-[10px] text-ice/50 leading-tight mt-0.5 truncate">{r.desc}</p>
                         </div>
-                        {linkedinRole === r.key && <BadgeCheck className="w-4 h-4 text-emerald-400/60 ml-auto shrink-0" />}
+                        {linkedinRole === r.key && <BadgeCheck className="w-4 h-4 text-steel ml-auto shrink-0" />}
                       </button>
                     ))}
                   </div>
@@ -652,8 +658,8 @@ export default function SearchPage() {
                       { icon: Sparkles, title: 'AI verify', desc: 'Every buyer checked for real intent' },
                       { icon: Check, title: 'Deliver', desc: 'Exact lead count, newest first' },
                     ].map((s) => (
-                      <div key={s.title} className="flex items-center gap-2.5 px-3 py-2.5 rounded-xl bg-navy/60 border border-ocean/25">
-                        <div className="p-1.5 rounded-lg bg-steel/15 shrink-0">
+                      <div key={s.title} className="flex items-center gap-2.5 px-3 py-2.5 rounded-xl well-3d">
+                        <div className="p-1.5 rounded-lg tile-3d shrink-0">
                           <s.icon className="w-3.5 h-3.5 text-steel" />
                         </div>
                         <div className="min-w-0">
@@ -675,7 +681,7 @@ export default function SearchPage() {
                 </div>
                 <SearchInfoSection isAtLimit={isAtLimit} remaining={remaining} searchesPerDay={searchesPerDay} isStarting={isStarting} source={source} />
               </form>
-            </div>
+            </GlassCard>
           </motion.div>
         ) : (
           <motion.div
@@ -701,12 +707,20 @@ export default function SearchPage() {
             <>
               <div className="flex items-center justify-between mb-4">
                 <div className="flex items-center gap-2">
-                  <div className="w-7 h-7 rounded-lg bg-gradient-to-br from-steel/20 to-ocean/20 flex items-center justify-center">
+                  <div className="w-8 h-8 rounded-lg tile-3d flex items-center justify-center">
                     <Users className="w-4 h-4 text-steel" />
                   </div>
-                  <h2 className="text-lg font-bold text-offwhite tracking-tight">Live Results</h2>
+                  <h2 className="text-lg font-bold text-offwhite tracking-tight" style={{ fontFamily: 'var(--font-heading)' }}>
+                    {isSearchActive ? 'Arriving live' : 'Results'}
+                  </h2>
+                  {isSearchActive && (
+                    <span className="relative flex h-2 w-2" aria-hidden="true">
+                      <span className="absolute inline-flex h-full w-full rounded-full bg-steel opacity-70 motion-safe:animate-ping" />
+                      <span className="relative inline-flex h-2 w-2 rounded-full bg-steel" />
+                    </span>
+                  )}
                 </div>
-                <span className="text-sm text-ice/40 font-mono">
+                <span className="text-sm text-ice/45 tabular">
                   {visibleLeads.length}{resultsTotal > results.length ? ' / ' + resultsTotal : ''} found
                 </span>
               </div>
@@ -724,10 +738,8 @@ export default function SearchPage() {
                         if (range.key === 'all') setReviewFilter('all');
                         else setReviewFilter({ min: range.min!, max: range.max ?? null });
                       }}
-                      className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all border ${
-                        isActive
-                          ? 'bg-steel/20 border-steel/50 text-offwhite'
-                          : 'bg-navy/60 border-ocean/25 text-ice/60 hover:text-offwhite hover:border-steel/40'
+                      className={`px-3 py-1.5 rounded-lg text-xs font-semibold border border-transparent ${
+                        isActive ? 'key-3d is-active text-steel' : 'key-3d text-ice/65 hover:text-offwhite'
                       }`}
                     >
                       {range.label}
@@ -746,7 +758,7 @@ export default function SearchPage() {
                 <div className="flex justify-center mt-6">
                   <button
                     onClick={unlockResults}
-                    className="btn-gradient-cyan inline-flex items-center gap-2 px-6 py-2.5 rounded-xl text-sm transition-opacity"
+                    className="btn-3d-gold inline-flex items-center gap-2 px-6 py-2.5 rounded-xl text-sm"
                   >
                     <Unlock className="w-4 h-4" />
                     Get More Leads (+{hiddenCount})
@@ -762,7 +774,7 @@ export default function SearchPage() {
             <div className="flex justify-center mt-6 gap-4 flex-wrap">
               {resultsTotal > 0 && (
                 <Link href="/dashboard/leads"
-                  className="btn-gradient-cyan inline-flex items-center justify-center px-6 py-2.5 rounded-xl text-sm transition-opacity"
+                  className="btn-3d-gold inline-flex items-center justify-center px-6 py-2.5 rounded-xl text-sm"
                 >
                   View All Leads in Dashboard
                 </Link>
@@ -850,8 +862,8 @@ function SearchInfoSection({ isAtLimit, remaining, searchesPerDay, isStarting, s
           </div>
         </div>
       ) : (
-        <div className="bg-steel/10 p-4 rounded-xl border border-steel/20 flex items-start gap-3">
-          <Sparkles className="w-5 h-5 text-steel shrink-0 mt-0.5" />
+        <div className="well-3d p-4 rounded-xl flex items-start gap-3">
+          <span className="tile-3d grid h-8 w-8 shrink-0 place-items-center rounded-lg"><Sparkles className="w-4 h-4 text-steel" /></span>
           <p className="text-sm text-ice/70 leading-relaxed">
             {isLinkedIn
               ? 'Hyperclients will scan the latest LinkedIn posts, verify every buyer with AI, and deliver your exact lead count. Usually takes 1-5 minutes.'
@@ -861,7 +873,7 @@ function SearchInfoSection({ isAtLimit, remaining, searchesPerDay, isStarting, s
       )}
 
       <div className="flex items-center justify-between">
-        <span className="text-xs text-ice/40">
+        <span className="text-xs text-ice/45 tabular">
           {remaining}/{searchesPerDay} searches remaining this month
         </span>
         <LoadingButton
@@ -869,8 +881,8 @@ function SearchInfoSection({ isAtLimit, remaining, searchesPerDay, isStarting, s
           isLoading={isStarting}
           size="lg"
           fullWidth={false}
-          variant={isAtLimit ? 'outline' : 'gradient-cyan'}
-          className="text-lg py-4 px-8"
+          variant={isAtLimit ? 'outline' : 'gold'}
+          className="text-lg h-14 px-8"
           disabled={isAtLimit}
         >
           <SearchIcon className="w-5 h-5" />

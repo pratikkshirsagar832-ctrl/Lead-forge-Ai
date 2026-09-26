@@ -320,7 +320,7 @@ app.post("/hooks/hyperclients", express.raw({ type: "application/json" }), (req,
           <p className="text-xs font-semibold uppercase tracking-wide text-ice/40 mb-3">Pricing</p>
           <div className="space-y-3">
             <div className="flex items-center justify-between">
-              <span className="flex items-center gap-2 text-sm text-offwhite"><Linkedin className="w-4 h-4 text-sky-400" /> LinkedIn lead</span>
+              <span className="flex items-center gap-2 text-sm text-offwhite"><Linkedin className="w-4 h-4 text-steel" /> LinkedIn lead</span>
               <span className="text-right">
                 <span className="text-lg font-bold text-offwhite">{usd(wallet?.prices.linkedin_per_lead_usd ?? 0.52)} <span className="text-[11px] font-semibold text-ice/50">per lead</span></span>
                 <span className="block text-[11px] text-ice/50">{inr(wallet?.prices.linkedin_per_lead_inr ?? 50)} in wallet</span>

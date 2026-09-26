@@ -85,9 +85,9 @@ function PipelineCard({ lead, isDragOverlay }: { lead: LeadListItem; isDragOverl
       ref={setNodeRef}
       style={style}
       className={cn(
-        'group rounded-xl border border-steel/15 bg-gradient-to-br from-sapphire/40 to-navy/70 p-3.5 shadow-sm transition-all duration-200',
-        isDragging && 'opacity-50 shadow-lg',
-        isDragOverlay && 'shadow-xl border-steel/30 scale-105 rotate-[1deg]'
+        'surface-3d group rounded-xl p-3.5 transition-transform duration-200 hover:-translate-y-0.5',
+        isDragging && 'opacity-40',
+        isDragOverlay && 'scale-105 rotate-[2deg] shadow-[0_30px_60px_-20px_rgba(1,12,10,0.95),0_0_0_1px_rgba(79,216,195,0.35)]'
       )}
     >
       <div className="flex items-start gap-2">
@@ -105,8 +105,8 @@ function PipelineCard({ lead, isDragOverlay }: { lead: LeadListItem; isDragOverl
           onClick={(e) => e.stopPropagation()}
           className="flex-1 min-w-0 block"
         >
-          <div className="flex items-center gap-2 mb-1">
-            <span className="text-sm font-semibold text-offwhite truncate hover:text-steel transition-colors">
+          <div className="flex flex-wrap items-center gap-1.5 mb-1.5">
+            <span className="basis-full text-sm font-semibold text-offwhite truncate hover:text-steel transition-colors" title={lead.business_name}>
               {lead.business_name}
             </span>
             {lead.lead_category && (
@@ -122,12 +122,12 @@ function PipelineCard({ lead, isDragOverlay }: { lead: LeadListItem; isDragOverl
               </span>
             )}
             {isLinkedinSource ? (
-              <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded-full shrink-0 bg-sky-500/15 text-sky-400 border border-sky-500/25 flex items-center gap-0.5">
+              <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded-full shrink-0 bg-steel/15 text-steel border border-steel/25 flex items-center gap-0.5">
                 <Linkedin className="w-2.5 h-2.5" />
                 LI
               </span>
             ) : (
-              <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded-full shrink-0 bg-emerald-500/15 text-emerald-400 border border-emerald-500/25 flex items-center gap-0.5">
+              <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded-full shrink-0 bg-brand-accent/10 text-brand-accent border border-brand-accent/25 flex items-center gap-0.5">
                 <MapPin className="w-2.5 h-2.5" />
                 Maps
               </span>
@@ -205,7 +205,7 @@ function PipelineCard({ lead, isDragOverlay }: { lead: LeadListItem; isDragOverl
                   <p className="text-[11px] text-ice/50 line-clamp-2">{cleanHeadline}</p>
                 )}
                 {lead.post_text && (
-                  <p className="text-[11px] text-ice/40 italic line-clamp-2 border-l-2 border-sky-500/30 pl-2">
+                  <p className="text-[11px] text-ice/40 italic line-clamp-2 border-l-2 border-steel/30 pl-2">
                     {lead.post_text}
                   </p>
                 )}
@@ -242,7 +242,7 @@ function PipelineCard({ lead, isDragOverlay }: { lead: LeadListItem; isDragOverl
                 target="_blank"
                 rel="noopener noreferrer"
                 onClick={(e) => e.stopPropagation()}
-                className="flex items-center gap-1.5 text-[11px] text-sky-400/80 hover:text-sky-300 transition-colors mt-1"
+                className="flex items-center gap-1.5 text-[11px] text-steel/80 hover:text-offwhite transition-colors mt-1"
                 title="View LinkedIn post"
               >
                 <ExternalLink className="w-3 h-3" />
@@ -302,8 +302,8 @@ function KanbanColumn({
     <div
       ref={setNodeRef}
       className={cn(
-        'flex flex-col rounded-2xl border border-steel/15 bg-gradient-to-b from-sapphire/20 to-navy/50 min-h-[400px] transition-all duration-200',
-        isOver && 'border-steel/40 shadow-lg'
+        'well-3d flex flex-col rounded-2xl min-h-[400px] transition-shadow duration-200',
+        isOver && 'shadow-[inset_0_0_0_1px_rgba(79,216,195,0.5),0_0_30px_-8px_rgba(79,216,195,0.45)]'
       )}
     >
       <div className="flex items-center justify-between px-4 py-3 border-b border-steel/10">
@@ -313,7 +313,7 @@ function KanbanColumn({
             style={{ backgroundColor: stage.color }}
           />
           <h3 className="text-sm font-bold text-offwhite">{stage.label}</h3>
-          <span className="text-[11px] font-semibold text-ice/40 bg-ocean/30 px-1.5 py-0.5 rounded-full">
+          <span className="text-[11px] font-semibold text-ice/55 key-3d px-1.5 py-0.5 rounded-md tabular">
             {leads.length}
           </span>
         </div>
@@ -332,8 +332,8 @@ function KanbanColumn({
 
         {/* Drop zone indicator when dragging over empty column */}
         {leads.length === 0 && activeId && isOver && (
-          <div className="h-20 rounded-xl border-2 border-dashed border-violet/50 bg-violet/10 flex items-center justify-center">
-            <p className="text-xs text-violet">Drop here</p>
+          <div className="h-20 rounded-xl border-2 border-dashed border-steel/50 bg-steel/10 flex items-center justify-center">
+            <p className="text-xs text-steel">Drop here</p>
           </div>
         )}
       </div>
@@ -541,7 +541,6 @@ export default function PipelinePage() {
 
   return (
     <div className="space-y-6 animate-in fade-in duration-500 max-w-7xl mx-auto">
-      <div className="absolute -inset-10 bg-gradient-to-r from-steel/10 via-ocean/5 to-transparent blur-3xl rounded-full pointer-events-none -z-10" />
 
       <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-6 relative">
         <div>

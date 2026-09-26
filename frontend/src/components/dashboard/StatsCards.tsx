@@ -38,60 +38,32 @@ export function StatsCards() {
   }, []);
 
   const cards = [
-    {
-      title: 'Total Searches',
-      value: stats?.total_searches || 0,
-      icon: Search,
-      gradient: 'from-steel/20 via-ocean/15 to-transparent',
-      iconBg: 'bg-steel/20',
-      iconColor: 'text-steel',
-    },
-    {
-      title: 'Total Leads Found',
-      value: stats?.total_leads || 0,
-      icon: Users,
-      gradient: 'from-violet/15 via-steel/10 to-transparent',
-      iconBg: 'bg-violet/20',
-      iconColor: 'text-violet-400',
-    },
-    {
-      title: 'Hot Leads',
-      value: stats?.hot_leads || 0,
-      icon: Flame,
-      gradient: 'from-rose-500/12 via-rose-500/5 to-transparent',
-      iconBg: 'bg-rose-500/20',
-      iconColor: 'text-rose-400',
-    },
-    {
-      title: 'Warm Leads',
-      value: stats?.warm_leads || 0,
-      icon: TrendingUp,
-      gradient: 'from-amber-500/12 via-amber-500/5 to-transparent',
-      iconBg: 'bg-amber-500/20',
-      iconColor: 'text-amber-400',
-    },
+    { title: 'Searches', value: stats?.total_searches || 0, icon: Search, tile: 'tile-3d text-steel' },
+    { title: 'Leads found', value: stats?.total_leads || 0, icon: Users, tile: 'tile-3d text-steel' },
+    { title: 'Hot leads', value: stats?.hot_leads || 0, icon: Flame, tile: 'tile-3d-amber text-navy' },
+    { title: 'Warm leads', value: stats?.warm_leads || 0, icon: TrendingUp, tile: 'tile-3d text-brand-accent' },
   ];
 
   if (error) {
     return (
-      <div className="p-6 bg-ocean/20 border border-steel/20 rounded-2xl flex items-center justify-center">
-        <p className="text-ice/50 text-sm">Unable to load stats right now.</p>
+      <div className="surface-3d rounded-2xl px-6 py-5 flex items-center gap-4">
+        <span className="tile-3d grid h-10 w-10 place-items-center rounded-xl text-steel"><TrendingUp className="h-5 w-5" /></span>
+        <div>
+          <p className="text-sm font-semibold text-offwhite">Stats are unavailable right now</p>
+          <p className="text-xs text-ice/50">Your searches and leads are safe. Refresh in a moment to see the numbers.</p>
+        </div>
       </div>
     );
   }
 
   if (isLoading) {
     return (
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-5">
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 md:gap-5">
         {[1, 2, 3, 4].map((i) => (
-          <div key={i} className="rounded-2xl bg-gradient-to-br from-sapphire/30 to-navy/85 border border-steel/15 p-6">
-            <div className="flex items-center justify-between">
-              <Skeleton className="h-12 w-12 rounded-xl bg-steel/10" />
-              <div className="space-y-2 text-right">
-                <Skeleton className="h-3.5 w-24 ml-auto bg-steel/10" />
-                <Skeleton className="h-8 w-16 ml-auto bg-steel/10" />
-              </div>
-            </div>
+          <div key={i} className="surface-3d rounded-2xl p-5">
+            <Skeleton className="h-11 w-11 rounded-xl bg-steel/10" />
+            <Skeleton className="mt-5 h-8 w-16 bg-steel/10" />
+            <Skeleton className="mt-2 h-3 w-24 bg-steel/10" />
           </div>
         ))}
       </div>
@@ -99,43 +71,23 @@ export function StatsCards() {
   }
 
   return (
-    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-5">
+    <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 md:gap-5">
       {cards.map((card, idx) => (
-        <motion.div
-          key={card.title}
-          initial={{ opacity: 0, y: 24 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.4, delay: idx * 0.1, ease: [0.25, 0.1, 0.25, 1] }}
-        >
-          <GlassCard hoverEffect delay={idx * 0.08} className="relative overflow-hidden">
-            <div className={`absolute inset-0 bg-gradient-to-br ${card.gradient} pointer-events-none`} />
-            <div className="absolute left-0 top-0 bottom-0 w-0.5 bg-gradient-to-b from-transparent via-steel/30 to-transparent opacity-60" />
-
-            {/* Premium corner accent */}
-            <div className="absolute top-0 right-0 w-16 h-16">
-              <div className="absolute top-0 right-0 w-8 h-8 bg-gradient-to-bl from-steel/5 to-transparent rounded-bl-full" />
-            </div>
-
-            <div className="relative p-6">
-              <div className="flex items-center justify-between">
-                <div className={`w-12 h-12 rounded-xl ${card.iconBg} flex items-center justify-center ring-1 ring-white/5 backdrop-blur-sm`}>
-                  <card.icon className={`w-5 h-5 ${card.iconColor}`} />
-                </div>
-                <div className="text-right">
-                  <p className="text-xs font-semibold text-ice/40 uppercase tracking-widest mb-1.5">{card.title}</p>
-                  <motion.p
-                    className="text-3xl font-extrabold text-offwhite leading-none tracking-tight"
-                    initial={{ opacity: 0, scale: 0.5 }}
-                    animate={{ opacity: 1, scale: 1 }}
-                    transition={{ duration: 0.5, delay: 0.2 + idx * 0.1, ease: [0.25, 0.1, 0.25, 1] }}
-                  >
-                    {card.value.toLocaleString()}
-                  </motion.p>
-                </div>
-              </div>
-            </div>
-          </GlassCard>
-        </motion.div>
+        <GlassCard key={card.title} hoverEffect tilt={6} delay={idx * 0.06} className="p-5">
+          <span className={`${card.tile} grid h-11 w-11 place-items-center rounded-xl`}>
+            <card.icon className="h-5 w-5" />
+          </span>
+          <motion.p
+            className="mt-5 text-3xl md:text-4xl font-bold text-offwhite leading-none tracking-[-0.02em] tabular"
+            style={{ fontFamily: 'var(--font-heading)' }}
+            initial={{ opacity: 0, y: 8 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.5, delay: 0.15 + idx * 0.08, ease: [0.25, 0.1, 0.25, 1] }}
+          >
+            {card.value.toLocaleString()}
+          </motion.p>
+          <p className="mt-2 text-xs font-medium text-ice/50">{card.title}</p>
+        </GlassCard>
       ))}
     </div>
   );

@@ -287,7 +287,29 @@ def test_cancel_is_honoured_between_classifier_chunks():
     assert summary.status == "cancelled"
     assert len(batches) == 1
     assert store.get_search(sid)["status"] == "cancelled"
-    assert store.list_leads(search_id=sid) == []
+    # Leads found before the cancel were already delivered live and are kept.
+    assert len(store.list_leads(search_id=sid)) == summary.accepted
+
+
+def test_leads_are_saved_live_while_the_search_runs():
+    """The first accepted leads are persisted before the search finishes, so
+    the results poll can show them immediately (newest buyers first)."""
+    store = MemoryStore()
+    needed = _qualified_within_corpus("7d")  # more than one chunk can hold
+    sid = _mk_search(store, needed=needed)
+    live_counts: list[int] = []
+
+    def progress(stage, found, accepted, scanned, message=""):
+        if stage == "running":
+            live_counts.append(len(store.list_leads(search_id=sid)))
+
+    summary = run_search(sid, store=store, discovery=MockDiscoveryClient(),
+                         classifier=MockClassifier(),
+                         settings=_settings(classifier_concurrency=1), progress=progress)
+    assert summary.accepted == needed
+    assert len(store.list_leads(search_id=sid)) == needed  # still exactly N
+    # Leads were visible mid-run, before the final 'completed' event.
+    assert any(0 < n < needed for n in live_counts), live_counts
 
 
 def test_engine_keeps_looping_until_exactly_n_is_reached():

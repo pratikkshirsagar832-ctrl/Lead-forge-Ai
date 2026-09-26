@@ -504,8 +504,52 @@ def _run_search(
         errors.append(str(exc))
         log.error("Discovery error (search %s): %s", search_id, exc)
         store.update_search(search_id, status="failed", error=str(exc), finished_at=datetime.now(UTC))
-        progress("failed", raw_found, len(accepted), scanned, str(exc))
-        return _summary(search_id, "failed", raw_found, len(accepted), scanned, iterations, str(exc))
+        progress("failed", raw_found, delivered, scanned, str(exc))
+        return _summary(search_id, "failed", raw_found, delivered, scanned, iterations, str(exc))
+
+    def _row(result: "EngineResult") -> dict[str, Any]:
+        p, cl = result.post, result.classification
+        row: dict[str, Any] = {
+            "search_id": search_id,
+            "lead_type": cl.lead_type,
+            "time_window": time_window,
+            "post_url": p.post_url,
+            "author_name": (p.author_name or "").replace("�", "") or None,
+            "author_profile_url": p.author_profile_url,
+            "post_text": (p.text or "").replace("�", ""),
+            "post_date": p.posted_at.date() if p.posted_at else None,
+            # Exact publish time (store drops it on schemas predating v18).
+            "posted_at": p.posted_at,
+            "overall_quality_score": result.qualified.overall,
+            "service_match_score": result.qualified.service_match,
+            "intent_strength": result.qualified.intent_strength,
+        }
+        # Only persist comment counts when the provider actually supplied one
+        # (column may not exist on live DBs before migration_lead_types_v9).
+        if p.num_comments is not None:
+            row["num_comments"] = p.num_comments
+        return row
+
+    # STREAMING DELIVERY: leads are saved the moment they are accepted, so
+    # the user sees the newest buyers while the search is still running
+    # instead of all at once at the end. `delivered` counts rows the store
+    # actually persisted (it may reject some, e.g. already-owned posts), and
+    # is what the exact-N loop stops on.
+    delivered = 0
+    conflicts = 0
+
+    def _deliver(results: list["EngineResult"]) -> int:
+        nonlocal delivered, conflicts
+        want = leads_needed - delivered
+        if want <= 0 or not results:
+            return 0
+        # Newest first within the batch; quality breaks timestamp ties.
+        batch = sorted(results, key=lambda r: (
+            -(r.post.posted_at.timestamp() if r.post.posted_at else 0.0), -r.overall))[:want]
+        got = store.insert_leads_many([_row(r) for r in batch])
+        conflicts += len(batch) - got
+        delivered += got
+        return got
 
     def _cancel_requested() -> bool:
         if should_stop is None:
@@ -522,10 +566,10 @@ def _run_search(
             pending.cancel()
         store.update_search(
             search_id, status="cancelled", error=None,
-            found_count=raw_found, accepted_count=len(accepted),
+            found_count=raw_found, accepted_count=delivered,
             scanned_count=scanned, finished_at=datetime.now(UTC),
         )
-        return _summary(search_id, "cancelled", raw_found, len(accepted), scanned,
+        return _summary(search_id, "cancelled", raw_found, delivered, scanned,
                         iterations, "cancelled by user")
 
     for iteration in range(max_iterations):
@@ -572,7 +616,7 @@ def _run_search(
             plan_state["offset"] += 1
         else:
             used_queries.update(queries)
-        progress("running", raw_found, len(accepted), scanned,
+        progress("running", raw_found, delivered, scanned,
                  f"iteration {iteration + 1}: {len(queries)} queries"
                  + (" (newest posts first)" if narrowed else ""))
 
@@ -653,7 +697,7 @@ def _run_search(
             s_now, d_now = _call_counts()
             under_caps = ((serp_cap <= 0 or s_now < serp_cap)
                           and (llm_cap <= 0 or d_now + len(candidates) < llm_cap))
-            likely_short = len(accepted) + est_yield * len(candidates) < leads_needed
+            likely_short = delivered + est_yield * len(candidates) < leads_needed
             stop_if_empty = (zero_yield_rounds + 1 >= settings.engine_early_stop_empty_rounds
                              and iteration > 0 and not narrowed)
             if under_caps and likely_short and not stop_if_empty:
@@ -677,10 +721,10 @@ def _run_search(
         # chunks instead of only once per (multi-minute) round.
         gained = 0
         pos = 0
-        while pos < len(candidates) and len(accepted) < leads_needed:
+        while pos < len(candidates) and delivered < leads_needed:
             if _cancel_requested():
                 return _cancelled()
-            remaining = leads_needed - len(accepted)
+            remaining = leads_needed - delivered
             size = max(settings.classifier_concurrency, math.ceil(remaining / max(est_yield, 0.02)))
             chunk = candidates[pos:pos + size]
             pos += len(chunk)
@@ -691,10 +735,11 @@ def _run_search(
                 errors.append(msg)
                 log.exception("Classifier batch failed (search %s) - fail-closed", search_id)
                 store.update_search(search_id, status="failed", error=msg, finished_at=datetime.now(UTC))
-                progress("failed", raw_found, len(accepted), scanned, msg)
-                return _summary(search_id, "failed", raw_found, len(accepted), scanned, iterations, msg)
+                progress("failed", raw_found, delivered, scanned, msg)
+                return _summary(search_id, "failed", raw_found, delivered, scanned, iterations, msg)
 
             outcomes = [_judge(p, c) for p, c in zip(chunk, classifications)]
+            chunk_accepted: list[EngineResult] = []
 
             # SNIPPET-FIRST FULL-TEXT ENRICHMENT: borderline verdicts get the public
             # post page fetched and are re-classified on the full text. Bounded by
@@ -810,15 +855,22 @@ def _run_search(
                 elif kind == "accept":
                     # Cross-search ownership was already checked before the LLM call
                     # (Tier 1.1), so every survivor here is a NEW lead.
-                    accepted.append(EngineResult(post=post, classification=classification, qualified=qualified))
-                    gained += 1
+                    result = EngineResult(post=post, classification=classification, qualified=qualified)
+                    accepted.append(result)
+                    chunk_accepted.append(result)
                 else:
                     _note_reject(qualified)
                     _record_reject(post, classification,
                                    reason=qualified.reason or "failed scoring gates",
                                    verdict_type=classification.lead_type)
+            gained += _deliver(chunk_accepted)
             if scanned:
                 est_yield = max(0.02, len(accepted) / scanned)
+            # Live: the status poll picks the saved leads up right away.
+            store.update_search(search_id, found_count=raw_found, accepted_count=delivered,
+                                scanned_count=scanned)
+            progress("running", raw_found, delivered, scanned,
+                     f"delivered {delivered}/{leads_needed} (scanned {scanned})")
 
         if gained:
             zero_yield_rounds = 0
@@ -828,16 +880,16 @@ def _run_search(
         store.update_search(
             search_id,
             found_count=raw_found,
-            accepted_count=len(accepted),
+            accepted_count=delivered,
             scanned_count=scanned,
         )
         _persist_stats()
-        progress("running", raw_found, len(accepted), scanned,
-                 f"accepted {len(accepted)}/{leads_needed} {lead_type} leads (scanned {scanned}, pref-dropped {pref_dropped}, "
+        progress("running", raw_found, delivered, scanned,
+                 f"accepted {delivered}/{leads_needed} {lead_type} leads (scanned {scanned}, pref-dropped {pref_dropped}, "
                  f"content-dropped {dir_dropped}, classify-dropped {classify_failed}, type-mismatch {type_mismatch}, "
                  f"already-owned {dup_existing}, undated {undated_dropped}, stale {stale_dropped}, "
                  f"full-text {enriched}, deleted {dead_dropped}, filled {filled_dropped})")
-        if len(accepted) >= leads_needed:
+        if delivered >= leads_needed:
             stop_reason = "target_reached"
             break
         # CREDIT SAFETY: stop as soon as several rounds added NO new lead -
@@ -860,58 +912,15 @@ def _run_search(
     except Exception:  # noqa: BLE001 - telemetry must never break a search
         log.debug("record_rejections unavailable (ignored)", exc_info=True)
 
-    # -------- slice to EXACTLY N (never overdeliver) -----------------------
-    # NEWEST FIRST: the user wants the LATEST genuine buyers. Recency is the
-    # primary sort key (older low-freshness posts never crowd out a newer one);
-    # quality score is only a tiebreak among posts with the same timestamp.
-    def _sort_key(result: "EngineResult"):
-        posted = result.post.posted_at
-        ts = posted.timestamp() if posted else 0.0
-        return (-ts, -result.overall)
-    accepted.sort(key=_sort_key)
-    top = accepted[:leads_needed]
-
-    if not top and not raw_found and not errors and not deadline_hit:
+    # -------- EXACTLY N (never overdeliver) --------------------------------
+    # Leads were already saved as they were accepted (see _deliver), capped at
+    # N; the results endpoint lists them newest first.
+    if not delivered and not raw_found and not errors and not deadline_hit:
         detail = detail or (
             "no candidate posts returned by Google for this window/query set - "
             + CRAWL_LAG_NOTE
         )
 
-    def _row(result: "EngineResult") -> dict[str, Any]:
-        p, cl = result.post, result.classification
-        row: dict[str, Any] = {
-            "search_id": search_id,
-            "lead_type": cl.lead_type,
-            "time_window": time_window,
-            "post_url": p.post_url,
-            "author_name": (p.author_name or "").replace("�", "") or None,
-            "author_profile_url": p.author_profile_url,
-            "post_text": (p.text or "").replace("�", ""),
-            "post_date": p.posted_at.date() if p.posted_at else None,
-            # Exact publish time (store drops it on schemas predating v18).
-            "posted_at": p.posted_at,
-            "overall_quality_score": result.qualified.overall,
-            "service_match_score": result.qualified.service_match,
-            "intent_strength": result.qualified.intent_strength,
-        }
-        # Only persist comment counts when the provider actually supplied one
-        # (column may not exist on live DBs before migration_lead_types_v9).
-        if p.num_comments is not None:
-            row["num_comments"] = p.num_comments
-        return row
-
-    # EXACT N, NEVER MORE: save the newest N. If the store rejects some rows
-    # (e.g. a post_url another account already owns on a pre-v18 schema),
-    # backfill from the next-newest accepted leads - never exceeding N.
-    delivered = store.insert_leads_many([_row(r) for r in top]) if top else 0
-    conflicts = len(top) - delivered
-    surplus = accepted[len(top):]
-    while delivered < leads_needed and surplus:
-        want = leads_needed - delivered
-        chunk, surplus = surplus[:want], surplus[want:]
-        got = store.insert_leads_many([_row(r) for r in chunk])
-        conflicts += len(chunk) - got
-        delivered += got
     if conflicts:
         detail = (detail + " | " if detail else "") + (
             f"{conflicts} lead(s) could not be saved (already owned elsewhere)")
@@ -959,7 +968,8 @@ def _run_search(
         log.info("Search %s reject breakdown: %s", search_id,
                  ", ".join(f"{k}={v}" for k, v in sorted(reject_reasons.items())))
     _s, _d = _call_counts()
-    newest = top[0].post.posted_at.isoformat() if top and top[0].post.posted_at else "-"
+    dated = [r.post.posted_at for r in accepted if r.post.posted_at]
+    newest = max(dated).isoformat() if dated else "-"
     log.info("Search %s done: status=%s found=%d accepted=%d scanned=%d (iterations=%d) "
              "pref_dropped=%d content_dropped=%d classify_failed=%d type_mismatch=%d dup_owned=%d "
              "undated_dropped=%d stale_dropped=%d full_text=%d full_text_flipped=%d "

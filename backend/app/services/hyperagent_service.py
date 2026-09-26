@@ -552,8 +552,22 @@ def _sync_main_search_row(search_id: str, summary, user_id: str,
     except Exception:
         current_status = None
     if current_status == "cancelled":
-        log.info("Main searches row %s already cancelled — skipping sync, settling quota", search_id)
-        _settle_hyperagent_quota(search_id, user_id)
+        # Leads are saved live as they are found, so a cancelled search keeps
+        # (and is charged for) exactly what it delivered before the cancel.
+        kept = 0
+        try:
+            kept = int(supabase.table("ha_leads").select("id", count="exact")
+                       .eq("search_id", search_id).execute().count or 0)
+        except Exception:  # noqa: BLE001 - settle with 0 rather than fail
+            log.warning("Could not count kept leads for cancelled search %s", search_id)
+        log.info("Main searches row %s already cancelled — keeping %d lead(s), settling quota", search_id, kept)
+        if kept:
+            try:
+                supabase.table("searches").update({"total_results": kept, "hot_leads": kept}) \
+                    .eq("id", search_id).execute()
+            except Exception:  # noqa: BLE001
+                pass
+        _settle_hyperagent_quota(search_id, user_id, kept)
         return
 
     status = summary.status if summary else "failed"

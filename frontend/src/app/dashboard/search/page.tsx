@@ -13,7 +13,7 @@ import { SearchProgressCard } from '@/components/dashboard/SearchProgressCard';
 import { UpgradeModal } from '@/components/shared/UpgradeModal';
 import { API_ROUTES } from '@/lib/constants';
 import { useSearchStore } from '@/stores/searchStore';
-import { MapPin, Briefcase, SearchIcon, Sparkles, Globe, Star, Phone, ChevronRight, Users, AlertCircle, Search, Linkedin, Mail, Clock, ExternalLink, Unlock, Check, BadgeCheck } from 'lucide-react';
+import { MapPin, Briefcase, SearchIcon, Sparkles, Globe, Star, Phone, ChevronRight, Users, AlertCircle, Search, Linkedin, Mail, Clock, ExternalLink, Unlock, Check, BadgeCheck, Lock } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import Link from 'next/link';
 import { LEAD_CATEGORIES } from '@/lib/constants';
@@ -222,6 +222,22 @@ export default function SearchPage() {
     setMaxResults(n);
     try { window.localStorage.setItem('hyperclients_maps_count', String(n)); } catch {}
   };
+  // LinkedIn has its own count (3/5/10): sharing the Maps value sent 20 on a
+  // LinkedIn search while the dropdown showed "3 leads".
+  const LINKEDIN_COUNTS = [3, 5, 10];
+  const MAPS_COUNTS = [20, 50, 80, 100];
+  const [linkedinCount, setLinkedinCountState] = useState<number>(() => {
+    try {
+      const saved = typeof window !== 'undefined' ? window.localStorage.getItem('hyperclients_linkedin_count') : null;
+      const n = saved ? parseInt(saved, 10) : 3;
+      return [3, 5, 10].includes(n) ? n : 3;
+    } catch { return 3; }
+  });
+  const setLinkedinCount = (n: number) => {
+    setLinkedinCountState(n);
+    try { window.localStorage.setItem('hyperclients_linkedin_count', String(n)); } catch {}
+  };
+  const [upgradeReason, setUpgradeReason] = useState<{ title: string; description: string } | null>(null);
   // LinkedIn discovery targets genuine service buyers — freelancer-needed
   // (buyer). Hiring/job-ads are excluded.
   const requestedCount = useSearchStore((s) => s.requestedCount);
@@ -238,12 +254,17 @@ export default function SearchPage() {
   ] as const;
 
   const filteredResults = useMemo(() => {
+    // LinkedIn leads stream in as they are found: always show the NEWEST first.
+    if (progress?.source === 'linkedin') {
+      const ts = (l: (typeof results)[number]) => Date.parse(l.posted_at || '') || 0;
+      return [...results].sort((a, b) => ts(b) - ts(a));
+    }
     if (reviewFilter === 'all') return results;
     return results.filter(l =>
       l.total_reviews >= reviewFilter.min &&
       (reviewFilter.max === null || l.total_reviews <= reviewFilter.max)
     );
-  }, [results, reviewFilter]);
+  }, [results, reviewFilter, progress?.source]);
 
   // LinkedIn: show only the requested count until the user clicks
   // "Get More" — over-delivered extras stay hidden behind the button.
@@ -298,7 +319,7 @@ export default function SearchPage() {
   // Header reflects the service + the exact lead count the user selected
   // (from the active search when one is running, else the live form value).
   const selectedService = progress?.service || mapsForm.watch('niche') || '';
-  const selectedCount = progress?.requested_count || maxResults;
+  const selectedCount = progress?.requested_count || (source === 'linkedin' ? linkedinCount : maxResults);
   // Any input ("I'm a freelance video editor for YouTubers", a long pitch,
   // Hinglish...) is reduced to a short display name; long descriptions fall
   // back to a generic header instead of echoing the whole sentence.
@@ -314,12 +335,45 @@ export default function SearchPage() {
   const searchesPerDay = subscription?.searches_per_day ?? 1;
   const isAtLimit = remaining <= 0;
 
+  // Plan cap per option: an option above what the plan has left this month
+  // is LOCKED (lock icon + upgrade popup) instead of silently running a
+  // smaller search. The smallest option always stays usable - it delivers
+  // whatever is left.
+  const isTrial = subscription?.status === 'trial';
+  const leadsLeft = (src: 'google_maps' | 'linkedin') => {
+    const v = src === 'linkedin' ? subscription?.linkedin_hq_leads_remaining : subscription?.gmb_leads_remaining;
+    return typeof v === 'number' ? Math.max(0, v) : null;
+  };
+  const isCountLocked = (src: 'google_maps' | 'linkedin', n: number) => {
+    const left = leadsLeft(src);
+    const options = src === 'linkedin' ? LINKEDIN_COUNTS : MAPS_COUNTS;
+    return left !== null && n > left && n !== options[0];
+  };
+  const showCountLocked = (src: 'google_maps' | 'linkedin', n: number) => {
+    const left = leadsLeft(src) ?? 0;
+    const kind = src === 'linkedin' ? 'LinkedIn' : 'Google Maps';
+    const monthly = src === 'linkedin' ? subscription?.linkedin_hq_leads_monthly : subscription?.gmb_leads_monthly;
+    setUpgradeReason(isTrial
+      ? {
+          title: "You're on the free trial",
+          description: `Your free trial includes ${monthly ?? left} ${kind} leads, so you can't get ${n} leads in one search`
+            + (left > 0 ? ` (you have ${left} left).` : '.') + ` Upgrade your plan to unlock ${n}-lead searches.`,
+        }
+      : {
+          title: `Only ${left} ${kind} leads left`,
+          description: `You have ${left} ${kind} leads left this month, so a ${n}-lead search isn't available. `
+            + 'Your quota resets on the 1st - or upgrade your plan for more leads.',
+        });
+  };
+
   const onSubmitMaps = async (data: { niche: string; location?: string }) => {
     if (isAtLimit) { setShowUpgradeModal(true); return; }
+    const count = source === 'linkedin' ? linkedinCount : maxResults;
+    if (isCountLocked(source, count)) { showCountLocked(source, count); return; }
     try {
       if (source === 'linkedin') {
         await startSearch(data.niche, data.location ?? '', {
-          source: 'linkedin', enrichEmails: false, maxResults,
+          source: 'linkedin', enrichEmails: false, maxResults: linkedinCount,
           leadTypes: [linkedinRole],
         });
       } else {
@@ -475,21 +529,25 @@ export default function SearchPage() {
                       </span>
                     </label>
                     <div className="grid grid-cols-4 gap-2">
-                      {[20, 50, 80, 100].map(n => {
+                      {MAPS_COUNTS.map(n => {
                         const disabled = isStarting || !!isSearchActive;
+                        const locked = isCountLocked('google_maps', n);
                         return (
                         <button
                           key={n}
                           type="button"
                           disabled={disabled}
-                          onClick={() => setMapsCount(n)}
-                          title={`${n} leads ${MAPS_ETA[n] ?? ''}`}
-                          className={`px-3 py-3 rounded-xl border text-sm font-semibold transition-all disabled:opacity-50 disabled:cursor-not-allowed ${
-                            maxResults === n
-                              ? 'bg-emerald-500/10 border-emerald-500/40 text-emerald-400'
-                              : 'bg-navy/60 border-ocean/25 text-ice/60 hover:text-offwhite hover:border-steel/40'
+                          onClick={() => (locked ? showCountLocked('google_maps', n) : setMapsCount(n))}
+                          title={locked ? 'Upgrade to unlock' : `${n} leads ${MAPS_ETA[n] ?? ''}`}
+                          className={`px-3 py-3 rounded-xl border text-sm font-semibold transition-all disabled:opacity-50 disabled:cursor-not-allowed inline-flex items-center justify-center gap-1.5 ${
+                            locked
+                              ? 'bg-navy/40 border-ocean/20 text-ice/35 hover:border-amber-500/40 hover:text-amber-300'
+                              : maxResults === n
+                                ? 'bg-emerald-500/10 border-emerald-500/40 text-emerald-400'
+                                : 'bg-navy/60 border-ocean/25 text-ice/60 hover:text-offwhite hover:border-steel/40'
                           }`}
                         >
+                          {locked && <Lock className="w-3.5 h-3.5" />}
                           {n}
                         </button>
                         );
@@ -519,29 +577,51 @@ export default function SearchPage() {
                       <Users className="w-4 h-4 text-steel" />
                       Leads Needed
                     </label>
-                    <select
-                      value={maxResults}
-                      onChange={(e) => setMaxResults(Number(e.target.value))}
-                      className="w-full px-3 py-3 rounded-xl border border-ocean/30 bg-navy/60 text-offwhite outline-none focus:ring-2 focus:ring-steel/40"
-                    >
-                      {[3, 5, 10].map(n => (
-                        <option key={n} value={n}>{n} leads</option>
-                      ))}
-                    </select>
+                    <div className="grid grid-cols-3 gap-2">
+                      {LINKEDIN_COUNTS.map(n => {
+                        const locked = isCountLocked('linkedin', n);
+                        return (
+                          <button
+                            key={n}
+                            type="button"
+                            disabled={isStarting || !!isSearchActive}
+                            onClick={() => (locked ? showCountLocked('linkedin', n) : setLinkedinCount(n))}
+                            title={locked ? 'Upgrade to unlock' : `${n} leads`}
+                            className={`px-3 py-3 rounded-xl border text-sm font-semibold transition-all disabled:opacity-50 disabled:cursor-not-allowed inline-flex items-center justify-center gap-1.5 ${
+                              locked
+                                ? 'bg-navy/40 border-ocean/20 text-ice/35 hover:border-amber-500/40 hover:text-amber-300'
+                                : linkedinCount === n
+                                  ? 'bg-emerald-500/10 border-emerald-500/40 text-emerald-400'
+                                  : 'bg-navy/60 border-ocean/25 text-ice/60 hover:text-offwhite hover:border-steel/40'
+                            }`}
+                          >
+                            {locked && <Lock className="w-3.5 h-3.5" />}
+                            {n} leads
+                          </button>
+                        );
+                      })}
+                    </div>
                     {(() => {
-                      // Exact count: the search delivers exactly this many — unless the
+                      // Exact count: the search delivers exactly this many - unless the
                       // monthly quota is smaller, so say that BEFORE the search runs.
-                      const liLeft = subscription?.linkedin_hq_leads_remaining;
-                      if (typeof liLeft === 'number' && liLeft < maxResults) {
+                      const liLeft = leadsLeft('linkedin');
+                      if (liLeft !== null && liLeft < linkedinCount) {
                         return (
                           <p className="text-[11px] text-amber-400/90 mt-1.5">
-                            You have {Math.max(0, liLeft)} LinkedIn leads left this month — this search will deliver {Math.max(0, liLeft)}. Upgrade for the full {maxResults}.
+                            You have {liLeft} LinkedIn leads left this month - this search will deliver {liLeft}. Upgrade for the full {linkedinCount}.
+                          </p>
+                        );
+                      }
+                      if (isTrial && LINKEDIN_COUNTS.some(n => isCountLocked('linkedin', n))) {
+                        return (
+                          <p className="text-[11px] text-ice/40 mt-1.5 flex items-center gap-1">
+                            <Lock className="w-3 h-3" /> Free trial: up to {liLeft} leads per search. Upgrade to unlock more.
                           </p>
                         );
                       }
                       return (
                         <p className="text-[11px] text-ice/40 mt-1.5">
-                          Exactly {maxResults} verified leads — never more, newest first.
+                          Exactly {linkedinCount} verified leads - never more, newest first.
                         </p>
                       );
                     })()}
@@ -742,9 +822,11 @@ export default function SearchPage() {
       )}
 
       <UpgradeModal
-        isOpen={showUpgradeModal || limitHit}
-        onClose={() => { setShowUpgradeModal(false); setLimitHit(false); }}
+        isOpen={showUpgradeModal || limitHit || upgradeReason !== null}
+        onClose={() => { setShowUpgradeModal(false); setLimitHit(false); setUpgradeReason(null); }}
         type="limit"
+        title={upgradeReason?.title}
+        description={upgradeReason?.description}
       />
     </div>
   );

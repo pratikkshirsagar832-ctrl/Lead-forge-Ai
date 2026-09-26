@@ -8,13 +8,16 @@ interface UpgradeModalProps {
   isOpen: boolean;
   onClose: () => void;
   type?: 'limit' | 'expired';
+  /** Overrides for a specific reason (e.g. a lead count above the plan). */
+  title?: string;
+  description?: string;
 }
 
-export function UpgradeModal({ isOpen, onClose, type = 'limit' }: UpgradeModalProps) {
-  const title = type === 'limit' ? 'Search Limit Reached' : 'Trial Expired';
-  const description = type === 'limit'
+export function UpgradeModal({ isOpen, onClose, type = 'limit', title: titleOverride, description: descriptionOverride }: UpgradeModalProps) {
+  const title = titleOverride || (type === 'limit' ? 'Search Limit Reached' : 'Trial Expired');
+  const description = descriptionOverride || (type === 'limit'
     ? 'You have used all your searches for this month (resets on the 1st). Upgrade your plan to continue finding leads without interruption.'
-    : 'Your free trial has ended. Upgrade to a paid plan to keep using Hyperclients and unlock more leads.';
+    : 'Your free trial has ended. Upgrade to a paid plan to keep using Hyperclients and unlock more leads.');
 
   return (
     <Modal isOpen={isOpen} onClose={onClose} title={title}>

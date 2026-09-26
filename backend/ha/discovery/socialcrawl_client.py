@@ -103,6 +103,13 @@ def check_balance(api_key: str, *, base_url: str = "https://www.socialcrawl.dev"
     return {"ok": True, "credits_remaining": remaining, "status": "active", "error": ""}
 
 
+def _float_or_none(value: Any) -> float | None:
+    try:
+        return float(value) if value is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
 def _int_or_none(value: Any) -> int | None:
     try:
         return None if value is None else int(value)
@@ -218,6 +225,9 @@ class SocialCrawlDiscoveryClient(DiscoveryClient):
             profile = username if username.startswith("http") else f"https://www.linkedin.com/in/{username}"
         engagement = post.get("engagement") if isinstance(post.get("engagement"), dict) else {}
         posted = parse_posted_at(post.get("published_at")) or posted_at_from_url(url)
+        computed = item.get("computed") if isinstance(item.get("computed"), dict) else {}
+        labels = computed.get("labels") if isinstance(computed.get("labels"), dict) else {}
+        intent = labels.get("intent") if isinstance(labels.get("intent"), dict) else {}
         return RawPost(
             post_url=url,
             text=text,
@@ -228,6 +238,11 @@ class SocialCrawlDiscoveryClient(DiscoveryClient):
             provider=self.name,
             num_comments=_int_or_none(engagement.get("comments")),
             text_source="full_post",
+            intent_label=(str(intent["label"]) if intent.get("label") else None),
+            intent_buyer=(intent["buyer"] if isinstance(intent.get("buyer"), bool) else None),
+            intent_seller=_float_or_none(intent.get("seller")),
+            intent_urgency=_float_or_none(intent.get("urgency")),
+            intent_confidence=_float_or_none(intent.get("confidence")),
         )
 
     def _fetch(self, query: str, date_posted: str, limit: int) -> tuple[list[RawPost], int]:

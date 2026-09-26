@@ -754,3 +754,29 @@ def test_query_expander_failure_is_silent_and_search_still_works():
     assert summary.status == "completed"
     assert summary.accepted == expected
     assert len(store.list_leads(search_id=sid)) == expected
+
+
+def test_provider_labelled_sellers_are_dropped_before_the_classifier():
+    """A post SocialCrawl confidently labels as promoting/seller never costs a
+    DeepSeek call; unjudged posts are kept (fail-open)."""
+    from engine import _candidate_priority, _provider_says_seller
+
+    seller = RawPost(post_url="https://linkedin.com/posts/s", text="We offer design",
+                     intent_label="promoting", intent_buyer=False, intent_seller=0.95,
+                     intent_confidence=0.9)
+    unsure = RawPost(post_url="https://linkedin.com/posts/u", text="?",
+                     intent_label="promoting", intent_buyer=False, intent_seller=0.6,
+                     intent_confidence=0.9)
+    unjudged = RawPost(post_url="https://linkedin.com/posts/n", text="?")
+    assert _provider_says_seller(seller)
+    assert not _provider_says_seller(unsure)
+    assert not _provider_says_seller(unjudged)
+
+    now = datetime.now(UTC)
+    asker = RawPost(post_url="a", text="", posted_at=now - timedelta(hours=5),
+                    intent_label="asking_for_recommendation", intent_buyer=True, intent_urgency=1.0)
+    urgent_asker = RawPost(post_url="b", text="", posted_at=now - timedelta(hours=9),
+                           intent_label="asking_for_recommendation", intent_buyer=True, intent_urgency=2.5)
+    other_buyer = RawPost(post_url="c", text="", posted_at=now, intent_label="other", intent_buyer=True)
+    ordered = sorted([unjudged, other_buyer, asker, urgent_asker], key=_candidate_priority)
+    assert [p.post_url for p in ordered] == ["b", "a", "c", "https://linkedin.com/posts/n"]

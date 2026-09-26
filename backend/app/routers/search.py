@@ -399,6 +399,8 @@ def get_search_results(
                 supabase.table("ha_leads")
                 .select("*")
                 .eq("search_id", search_id)
+                # Newest buyer first by EXACT publish time (post_date is day-level).
+                .order("posted_at", desc=True)
                 .order("post_date", desc=True)
                 .range(offset, offset + per_page - 1)
                 .execute()

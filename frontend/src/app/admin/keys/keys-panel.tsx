@@ -100,6 +100,17 @@ export default function KeysPanel() {
         {error && <div className="flex items-center gap-2 text-sm text-rose-300 bg-rose-500/10 border border-rose-500/25 rounded-xl px-4 py-3"><AlertCircle className="w-4 h-4 shrink-0" /> {error}</div>}
         {notice && <div className="flex items-center gap-2 text-sm text-emerald-300 bg-emerald-500/10 border border-emerald-500/25 rounded-xl px-4 py-3"><CheckCircle2 className="w-4 h-4 shrink-0" /> {notice}</div>}
 
+        {/* low-balance warning: one LinkedIn search uses ~25-60 credits */}
+        {t && t.credits_remaining < 300 && (
+          <div className="flex items-start gap-2 text-sm text-amber-200 bg-amber-500/10 border border-amber-500/30 rounded-xl px-4 py-3">
+            <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
+            <span>
+              Only <b>{t.credits_remaining.toLocaleString()}</b> SocialCrawl credits left across active keys - roughly{' '}
+              {Math.max(0, Math.floor(t.credits_remaining / 40))} more LinkedIn searches. Top up or add a key so searches don&apos;t fail.
+            </span>
+          </div>
+        )}
+
         {/* totals */}
         {t && (
           <div className="grid grid-cols-2 md:grid-cols-4 gap-3">

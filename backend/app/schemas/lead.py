@@ -31,6 +31,7 @@ class LeadListItem(BaseModel):
     connections_count: int = 0
     posted_at: Optional[datetime] = None
     post_type: Optional[str] = None
+    urgency: Optional[float] = None  # LinkedIn buyer urgency 0-3 (provider label)
     ai_qualified: Optional[bool] = None
     ai_confidence_score: Optional[float] = None
     ai_reason: Optional[str] = None
@@ -80,6 +81,7 @@ class LeadDetail(BaseModel):
     connections_count: int = 0
     posted_at: Optional[datetime] = None
     post_type: Optional[str] = None
+    urgency: Optional[float] = None  # LinkedIn buyer urgency 0-3 (provider label)
     lead_category: str = "warm"
     website_health_score: Optional[int] = None
     ai_pitch: Optional[str] = None

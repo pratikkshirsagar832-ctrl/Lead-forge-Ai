@@ -154,12 +154,13 @@ def _ha_settings() -> HaSettings:
     os.environ["REQUIRE_MODEL_QUALIFIED"] = "1"
     os.environ["STRICT_COUNTRY"] = "0"
     # SocialCrawl engine (setdefault = env-overridable for A/B runs):
-    # - one quoted buyer phrase per query ("single"; OR-packs return junk there),
+    # - one UNQUOTED natural buyer phrase per query ("plain": measured best on
+    #   SocialCrawl; quoted sentences and OR-packs mostly return nothing),
     # - no freshness ladder: results already come newest-first, a narrowed
     #   round would only pay twice for the same queries,
     # - no full-text enrichment: SocialCrawl returns the complete post text,
     # - discovery prefetch + wide DeepSeek fan-out (the ceilings bound spend).
-    os.environ.setdefault("QUERY_STYLE", "single")
+    os.environ.setdefault("QUERY_STYLE", "plain")
     os.environ.setdefault("FRESHNESS_LADDER", "")
     os.environ.setdefault("FULLTEXT_ENRICH", "0")
     os.environ.setdefault("MAX_ENRICH_PER_SEARCH", "0")

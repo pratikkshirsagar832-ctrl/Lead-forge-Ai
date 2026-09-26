@@ -237,3 +237,38 @@ def test_zero_balance_marks_key_exhausted_proactively(monkeypatch):
     SocialCrawlDiscoveryClient(pool).search_posts(['"q"'], datetime.now(UTC) - timedelta(days=7))
     assert [k.status for k in pool.keys] == ["exhausted", "active"]
     assert pool.acquire().key == "sc_next"
+
+
+def test_free_intent_labels_are_mapped_onto_the_post(calls):
+    """SocialCrawl's free intent label (shape verified live 2026-09) rides on
+    RawPost; a post without labels maps to None (never dropped for it)."""
+    q = "looking for graphic designer recommendations"
+    labelled = _item("7508546539989028866", "I am looking for a graphic designer for a book cover")
+    labelled["computed"]["labels"] = {"intent": {
+        "label": "asking_for_recommendation", "confidence": 0.97, "buyer": True,
+        "seller": 0.02, "fits_offer": None, "urgency": 1.86}}
+    calls.replies[q] = FakeResp(200, _body([labelled, _item("7508546539989028867", "no labels here")]))
+    res = SocialCrawlDiscoveryClient("sc_test").search_posts([q], datetime.now(UTC) - timedelta(days=7))
+
+    a, b = res.posts
+    assert (a.intent_label, a.intent_buyer, a.intent_seller, a.intent_urgency, a.intent_confidence) == \
+        ("asking_for_recommendation", True, 0.02, 1.86, 0.97)
+    assert (b.intent_label, b.intent_buyer, b.intent_urgency) == (None, None, None)
+
+
+def test_keys_too_low_for_one_request_leave_rotation():
+    """Production logs showed keys with 3-4 credits (a request needs 5) being
+    tried on every request. They now leave rotation as soon as that is known."""
+    from discovery.keypool import KeyPool
+
+    pool = KeyPool.from_keys(["sc_low", "sc_ok"])
+    low, ok = pool.keys
+    pool.report(low, credits_used=5, credits_remaining=4)
+    assert low.status == "exhausted"
+    assert pool.acquire() is ok
+
+    pool2 = KeyPool.from_keys(["sc_a", "sc_b"])
+    a, b = pool2.keys
+    a.credits_remaining = 3            # e.g. loaded from the DB snapshot
+    assert pool2.acquire() is b        # skipped without a wasted request
+    assert a.status == "exhausted"

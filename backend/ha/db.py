@@ -162,6 +162,8 @@ class MemoryStore(Store):
                     "overall_quality_score": row.get("overall_quality_score"),
                     "service_match_score": row.get("service_match_score"),
                     "intent_strength": row.get("intent_strength"),
+                    "posted_at": row.get("posted_at"),
+                    "urgency": row.get("urgency"),
                     "status": "new",
                     "notes": None,
                     "created_at": _utcnow(),
@@ -358,11 +360,15 @@ class SupabaseStore(Store):
         # Exact publish time (migration v18); dropped on older schemas so a
         # missing column never costs a lead.
         keep_posted_at = any(r.get("posted_at") for r in rows) and self._has_column("ha_leads", "posted_at")
+        # Buyer urgency (migration v24); dropped on older schemas.
+        keep_urgency = any(r.get("urgency") is not None for r in rows) and self._has_column("ha_leads", "urgency")
         payload = []
         for r in rows:
             item = self._jsonable(dict(r))
             if not keep_posted_at:
                 item.pop("posted_at", None)
+            if not keep_urgency:
+                item.pop("urgency", None)
             # RLS on ha_leads scopes rows by user_id (migration v8). Stamp the
             # owner on every row; drop it again on a pre-v8 schema.
             if stamp:

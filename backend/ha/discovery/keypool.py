@@ -15,6 +15,10 @@ from typing import Callable, Optional
 USABLE = "active"
 # A revived key must afford at least one normal request (25 posts = 5 credits).
 MIN_REVIVE_CREDITS = 5
+# SocialCrawl pre-debits 5 credits per post-search request, so a key below
+# this can never serve one: it is taken out of rotation up front instead of
+# costing a failed round-trip (and a retry) on every request.
+MIN_REQUEST_CREDITS = 5
 
 
 @dataclass
@@ -73,11 +77,17 @@ class KeyPool:
             return sorted((k for k in self._keys if k.status == USABLE), key=lambda k: (k.priority, k.order))
 
     def acquire(self, exclude: set[str] | None = None) -> PoolKey | None:
-        """First usable key (by priority) not tried yet in this request."""
+        """First usable key (by priority) not tried yet in this request.
+        Keys KNOWN to hold too few credits for one request are skipped
+        (unknown balance = try it)."""
         exclude = exclude or set()
         for k in self.usable():
-            if k.key not in exclude:
-                return k
+            if k.key in exclude:
+                continue
+            if k.credits_remaining is not None and k.credits_remaining < MIN_REQUEST_CREDITS:
+                self.exhausted(k, f"only {k.credits_remaining} credits left", remaining=k.credits_remaining)
+                continue
+            return k
         return None
 
     def _set_status(self, k: PoolKey, status: str, reason: str = "", remaining: Optional[int] = None) -> None:
@@ -114,8 +124,8 @@ class KeyPool:
                 self._on_usage(k, int(credits_used or 0), remaining if credits_remaining is not None else None)
             except Exception:  # noqa: BLE001
                 pass
-        if credits_remaining is not None and int(credits_remaining) <= 0:
-            self.exhausted(k, "balance reached 0")
+        if credits_remaining is not None and int(credits_remaining) < MIN_REQUEST_CREDITS:
+            self.exhausted(k, f"only {int(credits_remaining)} credits left", remaining=int(credits_remaining))
 
     def revive(self) -> bool:
         """All keys dry: re-check exhausted keys once (someone may have topped

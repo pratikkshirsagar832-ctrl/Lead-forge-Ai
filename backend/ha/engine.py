@@ -443,8 +443,9 @@ def _run_search(
                     log.info("Search %s: query pool dry - refilled %d fresh phrasings", search_id, len(fresh))
                     refill_queue.extend(emit_queries(fresh, plan_state["style"]))
                     continue
-            if query_style(plan_state["style"]) != "legacy":
+            if query_style(plan_state["style"]) not in ("legacy", "plain"):
                 # Last resort: broad unquoted phrasings (bag-of-words recall).
+                # Plain style is already unquoted - nothing broader to try.
                 plan_state["style"] = "legacy"
                 plan_state["offset"] = iteration
                 continue
@@ -524,6 +525,9 @@ def _run_search(
             "service_match_score": result.qualified.service_match,
             "intent_strength": result.qualified.intent_strength,
         }
+        # How pressing the buyer's need is (provider label, 0-3), when known.
+        if getattr(p, "intent_urgency", None) is not None:
+            row["urgency"] = round(float(p.intent_urgency), 2)
         # Only persist comment counts when the provider actually supplied one
         # (column may not exist on live DBs before migration_lead_types_v9).
         if p.num_comments is not None:
@@ -663,6 +667,12 @@ def _run_search(
                 dup_existing += 1
                 log.info("Skipping already-owned lead (from an earlier search): %s", post.post_url)
                 continue
+            # FREE PROVIDER JUDGEMENT: a post the discovery provider itself
+            # confidently labels as selling/promoting is dropped before any
+            # DeepSeek spend. Fail-open: an unjudged post is never dropped.
+            if _provider_says_seller(post):
+                pref_dropped += 1
+                continue
             verdict = prefilter(
                 post.text or "",
                 max_comments=settings.max_comments_allowed,
@@ -686,6 +696,10 @@ def _run_search(
                 except Exception:  # noqa: BLE001 - a broken gate must never kill a search
                     log.debug("content_filter raised for a candidate (kept for classifier)", exc_info=True)
             candidates.append(post)
+
+        # Most promising first (provider intent label, then urgency, then
+        # newest), so the chunked classifier reaches N sooner and stops.
+        candidates.sort(key=_candidate_priority)
 
         # PIPELINE: start the NEXT round's discovery now, so discovery works while
         # DeepSeek classifies this round. Only when the next round is actually
@@ -982,6 +996,30 @@ def _run_search(
              _s, _d, stop_reason)
     progress(status, raw_found, delivered, scanned, final_detail or "search finished")
     return _summary(search_id, status, raw_found, delivered, scanned, iterations, final_detail)
+
+
+# Provider seller label must be this sure before a post is dropped unseen.
+_SELLER_DROP_CONFIDENCE = 0.8
+
+
+def _provider_says_seller(post) -> bool:
+    """True only when the provider CONFIDENTLY labels the post as selling."""
+    label = getattr(post, "intent_label", None)
+    conf = getattr(post, "intent_confidence", None) or 0.0
+    seller = getattr(post, "intent_seller", None) or 0.0
+    return (label == "promoting" and getattr(post, "intent_buyer", None) is False
+            and conf >= _SELLER_DROP_CONFIDENCE and seller >= _SELLER_DROP_CONFIDENCE)
+
+
+def _candidate_priority(post) -> tuple:
+    """Sort key: provider-labelled buyers asking for recommendations first,
+    then other buyers, then unjudged posts; urgency and recency break ties."""
+    label = getattr(post, "intent_label", None)
+    buyer = getattr(post, "intent_buyer", None)
+    tier = 0 if (label == "asking_for_recommendation" and buyer) else 1 if buyer else 2
+    urgency = getattr(post, "intent_urgency", None) or 0.0
+    ts = post.posted_at.timestamp() if getattr(post, "posted_at", None) else 0.0
+    return (tier, -urgency, -ts)
 
 
 def _safe_check(checker: PostCheckFn, url: str):

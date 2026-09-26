@@ -22,7 +22,16 @@ into one query, e.g. ("looking for a video editor" OR "need a video editor")
 -"we offer" ... — sharper results and ~3x the phrasings per search call.
 QUERY_STYLE=legacy restores one unquoted phrasing per query.
 
-SINGLE STYLE (QUERY_STYLE=single, used with the SocialCrawl provider): ONE
+PLAIN STYLE (QUERY_STYLE=plain, the SocialCrawl default): ONE UNQUOTED
+natural buyer phrasing per query, NO negatives, led by the "looking for
+<role> recommendations" / "can anyone recommend <role>" forms. Measured on
+SocialCrawl 2026-09 (8 niches x 4 formats, limit 5): plain phrasing surfaced
+10 posts SocialCrawl itself labelled buyer/asking_for_recommendation, vs 3
+for quoted full sentences with negatives and 1 for quoted intent + keyword.
+Seller posts it lets through are cut for free by the provider's intent label
+(see discovery.socialcrawl_client) and then by the classifier.
+
+SINGLE STYLE (QUERY_STYLE=single): ONE
 quoted buyer phrasing per query + the short negative tail, e.g.
 "can anyone recommend an accountant" -"we offer". SocialCrawl returns
 unrelated posts for OR-packs but sharp, fresh buyer posts for one quoted
@@ -80,7 +89,28 @@ def query_style(style: str | None = None) -> str:
     default), "single" (one quoted phrasing per query) or "legacy" (one
     unquoted phrasing per query)."""
     raw = (style or os.getenv("QUERY_STYLE", "packed") or "packed").strip().lower()
-    return raw if raw in ("legacy", "single") else "packed"
+    return raw if raw in ("legacy", "single", "plain") else "packed"
+
+
+def _plain(phrase: str) -> str:
+    """One unquoted natural phrasing, no negative tail (plain style)."""
+    return _clean_phrase(phrase)
+
+
+def _plain_leads(service: str, lead_type: LeadType) -> list[str]:
+    """Plain-style lead phrasings: the measured best performers first."""
+    svc, naked, _phrase = _split_service(service)
+    if lead_type == LeadType.NEED_AGENCY:
+        nouns = [_org_noun(svc) or f"{_ARTICLE.sub(r'\2', svc)} agency"]
+    else:
+        nouns = (role_variants(naked) or [naked])[:2]
+    out: list[str] = []
+    for n in nouns:
+        n = _clean_phrase(n)
+        if n:
+            out += [f"looking for {n} recommendations", f"can anyone recommend a {n}",
+                    f"need a {n} for our"]
+    return out
 
 
 def _single(phrase: str) -> str:
@@ -582,6 +612,14 @@ def build_plan(service: str, lead_type: LeadType, style: str | None = None) -> Q
     then loose recall packs). style="legacy": one unquoted phrasing per query.
     """
     base_raw, pool_raw = _raw_plan(service, lead_type)
+    if query_style(style) == "plain":
+        phrases, seen = [], set()
+        for p in _plain_leads(service, lead_type) + base_raw + pool_raw:
+            q = _plain(p)
+            if q and q.lower() not in seen:
+                seen.add(q.lower())
+                phrases.append(q)
+        return QueryPlan(base=tuple(phrases[:_SINGLE_BASE_MAX]), pool=tuple(phrases[_SINGLE_BASE_MAX:]))
     if query_style(style) == "single":
         phrases = base_raw + pool_raw
         return QueryPlan(
@@ -794,6 +832,8 @@ def emit_queries(phrases: list[str], style: str | None = None) -> list[str]:
     """Ready-to-run queries for arbitrary phrasings in the active style."""
     if query_style(style) == "legacy":
         return [_with_negatives(_clean_phrase(p)) for p in phrases if _clean_phrase(p)]
+    if query_style(style) == "plain":
+        return [_plain(p) for p in phrases if _clean_phrase(p)]
     if query_style(style) == "single":
         return [_single(p) for p in phrases if _clean_phrase(p)]
     return [_with_negatives(p, PACKED_NEGATIVE_PHRASES) for p in pack_phrases(phrases)]
@@ -850,6 +890,13 @@ def next_queries(service: str, lead_type: LeadType, iteration: int,
             if key in seen:
                 continue
             seen.add(key)
+            merged.append(q)
+    elif style == "plain":
+        merged = [_plain(p) for p in fresh_extra]
+        for q in plan.pool:
+            if q.lower() in seen:
+                continue
+            seen.add(q.lower())
             merged.append(q)
     elif style == "single":
         merged = [_single(p) for p in fresh_extra]

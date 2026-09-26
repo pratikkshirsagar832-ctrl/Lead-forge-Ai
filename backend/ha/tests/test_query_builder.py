@@ -215,3 +215,17 @@ def test_extra_pool_too_short_still_fills_from_deterministic_pool():
     )
     assert first_round[0].startswith('custom buyer phrase -"')
     assert len(first_round) >= 4  # remaining slots come from the template pool
+
+
+def test_plain_style_is_unquoted_natural_phrasing_without_negatives():
+    """Plain style (SocialCrawl default): measured to surface ~3x more genuine
+    buyer posts than quoted sentences with negatives."""
+    from query_builder import next_queries
+
+    for lead_type in ("need_freelancer", "need_agency"):
+        rounds = [next_queries("Graphic design", lead_type, i, style="plain") for i in range(3)]
+        flat = [q for r in rounds for q in r]
+        assert flat, lead_type
+        assert all('"' not in q and " -" not in q for q in flat)
+        assert "recommendations" in rounds[0][0]          # best performer leads
+        assert len(set(q.lower() for q in flat)) == len(flat)  # no repeats across rounds

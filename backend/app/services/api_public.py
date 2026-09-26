@@ -107,6 +107,8 @@ def serialize_linkedin_lead(row: dict[str, Any]) -> dict[str, Any]:
         "quality_score": _num(row.get("overall_quality_score")),
         "service_match_score": _num(row.get("service_match_score")),
         "intent": row.get("intent_strength"),
+        # How pressing the buyer's need is, 0 (low) - 3 (urgent); null if unknown.
+        "urgency": _num(row.get("urgency")),
         "created_at": row.get("created_at"),
     }
 
@@ -142,7 +144,9 @@ def fetch_leads(supabase, search_row: dict[str, Any], limit: int = 500) -> list[
     if search_row.get("source") == "linkedin":
         rows = (
             supabase.table("ha_leads").select("*").eq("search_id", sid)
-            .order("post_date", desc=True).limit(limit).execute().data or []
+            # Newest buyer first by EXACT publish time (post_date is day-level).
+            .order("posted_at", desc=True).order("post_date", desc=True)
+            .limit(limit).execute().data or []
         )
         return [serialize_linkedin_lead(r) for r in rows]
     rows = (

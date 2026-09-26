@@ -46,6 +46,15 @@ class RawPost:
     # public post page was fetched (enrich.py). Tells the classifier whether
     # missing context may simply be truncated.
     text_source: str = "google_snippet"
+    # Provider-side intent judgement when available (SocialCrawl labels every
+    # post for free): label (asking_for_recommendation, promoting, ...),
+    # buyer (bool), seller probability 0-1, urgency 0-3, confidence 0-1.
+    # None = not judged; the engine never drops an unjudged post on these.
+    intent_label: str | None = None
+    intent_buyer: bool | None = None
+    intent_seller: float | None = None
+    intent_urgency: float | None = None
+    intent_confidence: float | None = None
 
 
 def canonical_post_url(url: str) -> str:

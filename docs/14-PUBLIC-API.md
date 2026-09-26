@@ -120,6 +120,7 @@ The LinkedIn engine understands free text in any industry: `"video editing"`, `"
 ### Quality guarantees (LinkedIn)
 - **Genuine buyers only.** An AI checks every post and rejects sellers, job seekers, employee job ads, recruiters, advice or "thought leadership" posts and self-promotion.
 - **Latest posts first.** Only posts from the **last 7 days** are used, sorted newest first by their exact publish time.
+- **Delivered live.** Each lead is saved the moment it is qualified, so `GET /v1/searches/{id}/leads` already returns the first (newest) buyers while the search is still `running`. Poll every 5 s to show them as they arrive.
 - **Live posts only.** Each lead is checked on LinkedIn just before it is delivered. Deleted posts and asks that are already filled ("UPDATE: CONTRACT AWARDED") are replaced, never delivered.
 - **Exact count, never more.** You get exactly `leads` results, or fewer only when not enough genuine buyers exist right now (you pay only for what's delivered).
 
@@ -297,12 +298,14 @@ Query parameters: `limit` (1–100, default 20), `offset` (default 0), `status` 
   "quality_score": 84.5,
   "service_match_score": 92.0,
   "intent": "explicit",
+  "urgency": 2.1,
   "created_at": "2026-09-23T10:16:39Z"
 }
 ```
 - `type` is `freelancer_needed` (mode `freelancer`) or `agency_wanted` (mode `agency`).
 - `intent` is one of `explicit` (a clear ask), `active_search` (sourcing now) or `recommendation` (asking for referrals).
 - `quality_score` and `service_match_score` range from 0 to 100.
+- `urgency` is how pressing the buyer's need reads, from `0` (low) to `3` (urgent); `null` when it could not be judged.
 
 ### Google Maps lead
 ```json

@@ -373,6 +373,7 @@ def _map_ha_lead(row: dict, search_lead_types=None) -> dict:
         # Exact publish time (v18) when known, else the day-level post_date.
         "posted_at": row.get("posted_at") or row.get("post_date") or None,
         "post_type": post_type or None,
+        "urgency": row.get("urgency"),
         # 0-1 confidence saved by POST /api/ai/pitch (None until generated).
         "ai_confidence_score": row.get("ai_confidence_score"),
         "ai_pitch": row.get("ai_pitch") or None,

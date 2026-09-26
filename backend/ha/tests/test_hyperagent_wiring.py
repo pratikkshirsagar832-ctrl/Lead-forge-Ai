@@ -49,7 +49,7 @@ def test_production_settings_are_tuned():
     # SocialCrawl engine defaults.
     assert settings.discovery_provider == "socialcrawl"
     assert settings.socialcrawl_results_per_query == 25
-    assert settings.query_style == "single"
+    assert settings.query_style == "plain"  # measured best on SocialCrawl
     assert settings.freshness_ladder == ""
     assert settings.fulltext_enrich is False
     assert settings.engine_prefetch is True

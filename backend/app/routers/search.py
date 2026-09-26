@@ -501,10 +501,15 @@ def get_search_status(
             row.get("status") == "failed"
             and "restart" in str(row.get("error_message") or "").lower()
         )
+        # A user cancel is written to the main row immediately, while the
+        # engine thread may still report 'running' until it reaches its next
+        # checkpoint. The cancel wins - otherwise the UI kept showing
+        # "Searching..." and a second click failed with "status 'cancelled'".
+        _user_cancelled = row.get("status") == "cancelled"
 
         # For LinkedIn searches, the authoritative state lives in ha_searches
         # (original Hyperagent engine). Pull it and map to main-search fields.
-        if row.get("source") == "linkedin" and not _restart_failed:
+        if row.get("source") == "linkedin" and not _restart_failed and not _user_cancelled:
             try:
                 ha = (
                     supabase.table("ha_searches")
@@ -694,7 +699,11 @@ async def cancel_search_endpoint(
             raise HTTPException(status_code=404, detail="Search not found")
 
         search = response.data[0]
-        if search["status"] in ("completed", "failed", "cancelled"):
+        if search["status"] == "cancelled":
+            # Idempotent: a double click (or a retry after a slow network)
+            # is not an error.
+            return {"message": "Search cancelled", "id": search_id}
+        if search["status"] in ("completed", "failed"):
             raise HTTPException(
                 status_code=400,
                 detail=f"Cannot cancel a search with status '{search['status']}'",
@@ -713,6 +722,17 @@ async def cancel_search_endpoint(
             "message": "Search cancelled by user",
             "completed_at": datetime.now(timezone.utc).isoformat(),
         }).eq("id", search_id).not_.in_("status", ["completed", "failed", "cancelled"]).execute()
+
+        if search.get("source") == "linkedin":
+            # Close the engine row too, so nothing (history, a restart, a
+            # later poll) can ever see this search as still running.
+            try:
+                supabase.table("ha_searches").update({
+                    "status": "cancelled",
+                    "finished_at": datetime.now(timezone.utc).isoformat(),
+                }).eq("id", search_id).in_("status", ["queued", "running"]).execute()
+            except Exception as ha_err:  # noqa: BLE001 - main row is authoritative
+                logger.warning("Could not mark ha_searches %s cancelled: %s", search_id, ha_err)
 
         return {"message": "Search cancelled", "id": search_id}
 

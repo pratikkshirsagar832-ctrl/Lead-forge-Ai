@@ -249,6 +249,9 @@ export function useSearch() {
     } catch (error: any) {
       const detail = error.response?.data?.detail;
       showToast(typeof detail === 'string' ? detail : detail?.message || 'Failed to cancel search', 'error');
+      // Polling was stopped above: resume it so the card reflects the real
+      // state (the search may have finished or been cancelled meanwhile).
+      pollStatus(activeSearchId);
     } finally {
       setIsCancelling(false);
     }

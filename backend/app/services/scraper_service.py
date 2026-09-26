@@ -157,14 +157,25 @@ def _shard_queries(lines: list[str], workers: int) -> list[list[str]]:
     return [s for s in shards if s]
 
 
+def _unique_rows_in(output_file: str) -> int:
+    """Unique businesses in a CSV that is still being written (0 on error)."""
+    try:
+        return len(_parse_csv_results(output_file, 1_000_000, quiet=True))
+    except Exception:  # noqa: BLE001 - partial/locked file: check again next tick
+        return 0
+
+
+def _business_key(r: dict) -> str:
+    key = (r.get("google_key") or "").strip().lower()
+    return key or (r.get("business_name") or "").strip().lower()
+
+
 def _dedupe_businesses(results: list[dict]) -> list[dict]:
     """Drop duplicates across parallel shards (first wins)."""
     seen: set[str] = set()
     out: list[dict] = []
     for r in results:
-        key = (r.get("google_key") or "").strip().lower()
-        if not key:
-            key = (r.get("business_name") or "").strip().lower()
+        key = _business_key(r)
         if not key or key in seen:
             continue
         seen.add(key)
@@ -182,9 +193,15 @@ async def run_maps_scraper(
     concurrency: int | None = None,
     exit_inactivity: str | None = None,
     stop_event=None,
+    should_cancel=None,
 ) -> list[dict]:
     """
     Run the google-maps-scraper binary and return parsed results.
+
+    The process is stopped as soon as the CSV holds `max_results` UNIQUE
+    businesses (the Go binary has no result cap of its own: 5 query variants
+    x ~20 places would otherwise scrape 80-100 rows for a 20-lead request),
+    or as soon as `should_cancel()` returns True.
 
     Args:
         query: Search query, or list of queries (one per line in the input
@@ -276,6 +293,7 @@ async def run_maps_scraper(
         )
         last_report = 0.0
         last_count = 0
+        unique_checked_at = -1
         terminated_early = False
 
         while True:
@@ -288,13 +306,42 @@ async def run_maps_scraper(
                 proc.kill()
                 terminated_early = True
                 break
+            if should_cancel is not None:
+                try:
+                    _cancel = bool(should_cancel())
+                except Exception:
+                    _cancel = False
+                if _cancel:
+                    logger.info(f"[Scraper:{run_id}] Cancelled by user — stopping")
+                    proc.terminate()
+                    terminated_early = True
+                    break
             count = row_counter.count()
             if count != last_count:
                 last_count = count
+            # Target met? Raw rows include businesses repeated across query
+            # variants, so confirm on the de-duplicated set before stopping.
+            if count >= max_results and count != unique_checked_at:
+                unique_checked_at = count
+                unique = await asyncio.to_thread(_unique_rows_in, output_file)
+                if unique >= max_results:
+                    logger.info(
+                        f"[Scraper:{run_id}] Target met: {unique} unique businesses "
+                        f"({count} rows) for {max_results} requested — stopping"
+                    )
+                    if on_progress:
+                        try:
+                            on_progress(max_results)
+                        except Exception:
+                            pass
+                    proc.terminate()
+                    terminated_early = True
+                    break
             if on_progress and now - last_report >= 1.0:
                 last_report = now
                 try:
-                    on_progress(count)
+                    # Never show "Found 85/20": the request caps what is delivered.
+                    on_progress(min(count, max_results))
                 except Exception as cb_err:
                     logger.debug(f"[Scraper:{run_id}] on_progress error: {cb_err}")
             if soft_deadline and now >= soft_deadline and count >= max_results:
@@ -392,10 +439,11 @@ async def run_maps_scraper(
         _cleanup_temp_files(tmp_dir, input_file, output_file)
 
 
-def _parse_csv_results(output_file: str, max_results: int) -> list[dict]:
+def _parse_csv_results(output_file: str, max_results: int, quiet: bool = False) -> list[dict]:
     """
     Parse the CSV output from google-maps-scraper.
-    Returns a list of business dicts with normalized field names.
+    Returns up to `max_results` DISTINCT businesses (a place found by several
+    query variants appears once), with normalized field names.
     """
     if not os.path.exists(output_file):
         logger.warning(f"Output file does not exist: {output_file}")
@@ -413,6 +461,7 @@ def _parse_csv_results(output_file: str, max_results: int) -> list[dict]:
         raise RuntimeError("Scraper returned no data: output CSV empty.")
 
     results = []
+    seen: set[str] = set()
     raw_count = 0
     try:
         with open(output_file, "r", encoding="utf-8", errors="replace") as f:
@@ -422,9 +471,12 @@ def _parse_csv_results(output_file: str, max_results: int) -> list[dict]:
                 if len(results) >= max_results:
                     continue # keep counting raw lines for logging
                 business = _normalize_row(row)
-                if business.get("business_name"):
+                key = _business_key(business)
+                if business.get("business_name") and key not in seen:
+                    seen.add(key)
                     results.append(business)
-        logger.info(f"CSV Parse: {raw_count} raw rows found, {len(results)} distinct businesses returned (max {max_results})")
+        if not quiet:
+            logger.info(f"CSV Parse: {raw_count} raw rows found, {len(results)} distinct businesses returned (max {max_results})")
     except Exception as e:
         logger.error(f"Failed to parse CSV: {e}")
         # Try to read raw content for debugging
@@ -507,6 +559,7 @@ async def run_maps_scraper_parallel(
     soft_deadline_seconds: int | None = None,
     workers: int | None = None,
     on_progress=None,
+    should_cancel=None,
 ) -> list[dict]:
     """Run N Go scraper processes in parallel, each with a query shard.
 
@@ -556,12 +609,13 @@ async def run_maps_scraper_parallel(
             soft_deadline_seconds=soft_deadline_seconds,
             on_progress=on_progress,
             concurrency=single_c,
+            should_cancel=should_cancel,
         )
         got = _dedupe_businesses(first or [])
         # Serial second pass in the SAME fleet (no new concurrent burst):
         # picks up queries Google slow-rolled the first time around.
         second_budget = int(timeout_seconds + 15 - (time.time() - t0))
-        if len(got) < max_results and second_budget >= 20:
+        if len(got) < max_results and second_budget >= 20 and not _cancel_requested(should_cancel):
             need = max_results - len(got)
             logger.info(
                 f"[Scraper] SECOND-PASS: have {len(got)}/{max_results}, "
@@ -576,6 +630,7 @@ async def run_maps_scraper_parallel(
                     soft_deadline_seconds=min(int(soft_deadline_seconds or 65), second_budget),
                     on_progress=on_progress,
                     concurrency=single_c,
+                    should_cancel=should_cancel,
                 )
                 got = _dedupe_businesses(got + (extra or []))[:max_results]
             except Exception as e:
@@ -642,6 +697,7 @@ async def run_maps_scraper_parallel(
                 concurrency=per_worker_c,
                 exit_inactivity=shard_inactivity,
                 stop_event=stop_event,
+                should_cancel=should_cancel,
             )
         except Exception as e:
             logger.warning(f"[Scraper:{run_id}] shard {idx} failed ({len(shard)} queries): {e}")
@@ -660,7 +716,8 @@ async def run_maps_scraper_parallel(
     elapsed = time.time() - t0
     failed_queries = [q for i, part in enumerate(nested) if not part for q in shards[i]]
     mop_budget = min(35, max(0, int(timeout_seconds + 15 - elapsed)))
-    if failed_queries and len(deduped) < max_results and mop_budget >= 25:
+    if (failed_queries and len(deduped) < max_results and mop_budget >= 25
+            and not _cancel_requested(should_cancel)):
         need = max_results - len(deduped)
         logger.info(
             f"[Scraper:{run_id}] MOP-UP: {len(failed_queries)} queries from "
@@ -675,6 +732,7 @@ async def run_maps_scraper_parallel(
                 soft_deadline_seconds=min(int(soft_deadline_seconds or 55), mop_budget),
                 concurrency=8,
                 exit_inactivity=shard_inactivity,
+                should_cancel=should_cancel,
             )
             deduped = _dedupe_businesses(deduped + (extra or []))[:max_results]
         except Exception as e:
@@ -685,6 +743,13 @@ async def run_maps_scraper_parallel(
         f"-> {len(deduped)} deduped (target {max_results}) in {time.time() - t0:.1f}s"
     )
     return deduped
+
+
+def _cancel_requested(should_cancel) -> bool:
+    try:
+        return bool(should_cancel and should_cancel())
+    except Exception:  # noqa: BLE001
+        return False
 
 
 def _cleanup_temp_files(tmp_dir: str, *files: str) -> None:

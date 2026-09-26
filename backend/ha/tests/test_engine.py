@@ -244,6 +244,52 @@ def test_cooperative_cancel_stops_spend():
     assert row["finished_at"] is not None
 
 
+def test_engine_stops_classifying_once_n_is_reached():
+    """Exact-N, not more: a round is classified in chunks and the engine stops
+    as soon as N leads are accepted - it never classifies (pays DeepSeek for)
+    the rest of the round's candidates."""
+    batches: list[int] = []
+
+    class CountingClassifier(MockClassifier):
+        def classify_batch(self, candidates, **kwargs):  # type: ignore[no-untyped-def]
+            batches.append(len(candidates))
+            return super().classify_batch(candidates, **kwargs)
+
+    store = MemoryStore()
+    sid = _mk_search(store, needed=1)
+    summary = run_search(sid, store=store, discovery=MockDiscoveryClient(),
+                         classifier=CountingClassifier(),
+                         settings=_settings(classifier_concurrency=1))
+    assert summary.status == "completed"
+    assert summary.accepted == 1
+    # Round 1 has 10 candidates; the first chunk already holds a lead.
+    assert batches == [7]
+    assert summary.scanned == 7
+
+
+def test_cancel_is_honoured_between_classifier_chunks():
+    """A cancel arriving mid-round stops the search before the next chunk,
+    instead of waiting for the whole (multi-minute) round to finish."""
+    batches: list[int] = []
+
+    class CountingClassifier(MockClassifier):
+        def classify_batch(self, candidates, **kwargs):  # type: ignore[no-untyped-def]
+            batches.append(len(candidates))
+            return super().classify_batch(candidates, **kwargs)
+
+    store = MemoryStore()
+    sid = _mk_search(store, needed=100)
+    # Cancel as soon as the first chunk has been classified.
+    summary = run_search(sid, store=store, discovery=MockDiscoveryClient(),
+                         classifier=CountingClassifier(),
+                         settings=_settings(classifier_concurrency=1),
+                         should_stop=lambda: len(batches) >= 1)
+    assert summary.status == "cancelled"
+    assert len(batches) == 1
+    assert store.get_search(sid)["status"] == "cancelled"
+    assert store.list_leads(search_id=sid) == []
+
+
 def test_engine_keeps_looping_until_exactly_n_is_reached():
     """The exact-count loop must keep iterating past the old 6-round cap until
     it collects exactly N qualified leads (discovery here drips out new posts

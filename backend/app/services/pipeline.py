@@ -371,6 +371,7 @@ async def _run_maps_search(
             depth=SCRAPER_FAST_DEPTH,
             soft_deadline_seconds=soft_deadline,
             on_progress=_on_progress,
+            should_cancel=lambda: is_search_cancelled(search_id),
         )
     except Exception as e:
         logger.error(f"[Pipeline:{search_id}] Maps scraper failed: {e}")

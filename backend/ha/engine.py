@@ -26,6 +26,7 @@ mark the search failed.
 from __future__ import annotations
 
 import logging
+import math
 import re
 import time
 from concurrent.futures import Future, ThreadPoolExecutor
@@ -506,6 +507,27 @@ def _run_search(
         progress("failed", raw_found, len(accepted), scanned, str(exc))
         return _summary(search_id, "failed", raw_found, len(accepted), scanned, iterations, str(exc))
 
+    def _cancel_requested() -> bool:
+        if should_stop is None:
+            return False
+        try:
+            return bool(should_stop())
+        except Exception:  # never let the cancel probe kill a search
+            log.debug("Cancel probe failed for %s (ignored)", search_id)
+            return False
+
+    def _cancelled() -> EngineSummary:
+        log.info("Search %s cancelled by user (iteration %d)", search_id, iterations)
+        if pending is not None:
+            pending.cancel()
+        store.update_search(
+            search_id, status="cancelled", error=None,
+            found_count=raw_found, accepted_count=len(accepted),
+            scanned_count=scanned, finished_at=datetime.now(UTC),
+        )
+        return _summary(search_id, "cancelled", raw_found, len(accepted), scanned,
+                        iterations, "cancelled by user")
+
     for iteration in range(max_iterations):
         iterations = iteration + 1
         if time.monotonic() > deadline:
@@ -520,19 +542,8 @@ def _run_search(
             stop_reason = "ceiling_hit"
             break
         # Cooperative cancel - lets a user cancel stop provider spend promptly.
-        if should_stop is not None:
-            try:
-                if should_stop():
-                    log.info("Search %s cancelled by user (iteration %d)", search_id, iteration + 1)
-                    store.update_search(
-                        search_id, status="cancelled", error=None,
-                        found_count=raw_found, accepted_count=len(accepted),
-                        scanned_count=scanned, finished_at=datetime.now(UTC),
-                    )
-                    return _summary(search_id, "cancelled", raw_found, len(accepted), scanned,
-                                    iterations, "cancelled by user")
-            except Exception:  # never let the cancel probe kill a search
-                log.debug("Cancel probe failed for %s (ignored)", search_id)
+        if _cancel_requested():
+            return _cancelled()
 
         _since, narrowed = _round_since(iteration)
         try:
@@ -658,142 +669,156 @@ def _run_search(
                 break
             continue
 
-        try:
-            classifications = list(_classify(candidates))
-        except Exception as exc:  # noqa: BLE001 - classifier unavailable == fail-closed
-            msg = f"classifier unavailable: {exc}"
-            errors.append(msg)
-            log.exception("Classifier batch failed (search %s) - fail-closed", search_id)
-            store.update_search(search_id, status="failed", error=msg, finished_at=datetime.now(UTC))
-            progress("failed", raw_found, len(accepted), scanned, msg)
-            return _summary(search_id, "failed", raw_found, len(accepted), scanned, iterations, msg)
-
-        outcomes = [_judge(p, c) for p, c in zip(candidates, classifications)]
-
-        # SNIPPET-FIRST FULL-TEXT ENRICHMENT: borderline verdicts get the public
-        # post page fetched and are re-classified on the full text. Bounded by
-        # the per-search enrichment budget and the DeepSeek ceiling; any fetch
-        # or classify failure keeps the original (snippet) verdict.
-        enrich_budget = max(0, settings.max_enrich_per_search - enriched) if full_text_fetcher else 0
-        if enrich_budget and llm_cap > 0:
-            enrich_budget = min(enrich_budget, max(0, llm_cap - _call_counts()[1]))
-        if enrich_budget:
-            picks = [i for i, (p, c, (kind, q)) in enumerate(zip(candidates, classifications, outcomes))
-                     if _worth_full_text(p, c, kind, q)][:enrich_budget]
-            if picks:
-                with ThreadPoolExecutor(max_workers=max(1, min(settings.enrich_concurrency, len(picks)))) as ex:
-                    texts = list(ex.map(lambda i: _safe_fetch(full_text_fetcher, candidates[i].post_url), picks))
-                redo: list[int] = []
-                for i, text in zip(picks, texts):
-                    post = candidates[i]
-                    if not text or len(text) <= len(post.text or "") + 20:
-                        continue  # nothing new to read
-                    post.text = text
-                    post.text_source = "full_post"
-                    # The saved lead carries the full text, so it must pass the
-                    # same save-time direction gate (exact-count honesty).
-                    if content_filter is not None:
-                        try:
-                            if not content_filter(text):
-                                outcomes[i] = ("gate", None)
-                                continue
-                        except Exception:  # noqa: BLE001
-                            log.debug("content_filter raised on full text (kept)", exc_info=True)
-                    redo.append(i)
-                if redo:
-                    try:
-                        again = list(_classify([candidates[i] for i in redo]))
-                    except Exception:  # noqa: BLE001 - keep snippet verdicts
-                        log.debug("Full-text re-classification failed (snippet verdicts kept)", exc_info=True)
-                        again = [None] * len(redo)
-                    for i, cl in zip(redo, again):
-                        enriched += 1
-                        if cl is None:
-                            continue  # fail-closed: keep the snippet verdict
-                        before = outcomes[i][0]
-                        classifications[i] = cl
-                        outcomes[i] = _judge(candidates[i], cl)
-                        if outcomes[i][0] == "accept" and before != "accept":
-                            enrich_flipped += 1
-
-        # LIVENESS: Google keeps deleted LinkedIn posts in its index for days,
-        # so every would-be lead is checked BEFORE it counts toward N - a dead
-        # post is replaced by the exact-N loop instead of reaching the user as
-        # "Post not found". Already-filled asks ("CONTRACT NOW AWARDED") are
-        # dropped the same way. Uncertain checks (throttle) keep the lead.
-        accept_idx = [i for i, (kind, _q) in enumerate(outcomes) if kind == "accept"]
-        for i in accept_idx:
-            if is_filled(candidates[i].text):
-                outcomes[i] = ("filled", None)
-        accept_idx = [i for i in accept_idx if outcomes[i][0] == "accept"]
-        if post_checker is not None and accept_idx:
-            workers = max(1, min(settings.liveness_concurrency, len(accept_idx)))
-            with ThreadPoolExecutor(max_workers=workers) as ex:
-                checks = list(ex.map(lambda i: _safe_check(post_checker, candidates[i].post_url), accept_idx))
-            for i, chk in zip(accept_idx, checks):
-                status = getattr(chk, "status", "unknown")
-                text = getattr(chk, "text", None)
-                post = candidates[i]
-                if status == "dead":
-                    outcomes[i] = ("dead", None)
-                elif status == "alive":
-                    if is_filled(text):
-                        outcomes[i] = ("filled", None)
-                    elif text and len(text) > len(post.text or "") + 20:
-                        # The live full post replaces the snippet on the saved
-                        # lead - same save-time direction gate applies.
-                        if content_filter is not None and not _gate_ok(content_filter, text):
-                            outcomes[i] = ("gate", None)
-                        else:
-                            post.text = text
-                            post.text_source = "full_post"
-                else:
-                    liveness_unknown += 1
-
+        # EXACT-N, NOT MORE: classify the round in small chunks and stop the
+        # moment N leads are accepted, instead of classifying (and paying for)
+        # every candidate of the round first. Each chunk is sized from the
+        # observed accept rate so it is usually just enough, and never below
+        # the classifier's parallelism. A user cancel is honoured between
+        # chunks instead of only once per (multi-minute) round.
         gained = 0
-        for post, classification, (kind, qualified) in zip(candidates, classifications, outcomes):
-            scanned += 1
-            if kind == "none":
-                classify_failed += 1  # fail-closed: dropped
-                _record_reject(post, None, reason="classifier returned no verdict / parse failed")
-            elif kind == "dead":
-                dead_dropped += 1
-                _record_reject(post, classification, verdict_type=classification.lead_type,
-                               reason="post deleted/removed on LinkedIn")
-            elif kind == "filled":
-                filled_dropped += 1
-                _record_reject(post, classification, verdict_type=classification.lead_type,
-                               reason="need already filled (post says hired/awarded/closed)")
-            elif kind == "gate":
-                dir_dropped += 1
-                _record_reject(post, classification, verdict_type=getattr(classification, "lead_type", None),
-                               reason="full post text contradicts the requested lead direction")
-            elif kind == "type" and classification.lead_type == "irrelevant":
-                # Not a buyer at all (seller, job ad, advice...) - a plain
-                # rejection, NOT a "different lead type" genuine buyer.
-                reject_reasons["not_a_buyer"] = reject_reasons.get("not_a_buyer", 0) + 1
-                _record_reject(post, classification, verdict_type="irrelevant",
-                               reason=classification.reason or "not a buyer")
-            elif kind == "type":
-                # TYPE GATE: the user asked for a specific buyer situation. When
-                # sibling-buyer acceptance is off, a genuine buyer of a
-                # DIFFERENT type (e.g. need_agency found during a
-                # need_freelancer search) is not a lead for THIS search.
-                type_mismatch += 1
-                _record_reject(post, classification, verdict_type=classification.lead_type,
-                               reason=classification.reason or "type mismatch")
-            elif kind == "accept":
-                # Cross-search ownership was already checked before the LLM call
-                # (Tier 1.1), so every survivor here is a NEW lead.
-                accepted.append(EngineResult(post=post, classification=classification, qualified=qualified))
-                gained += 1
-            else:
-                _note_reject(qualified)
-                _record_reject(post, classification,
-                               reason=qualified.reason or "failed scoring gates",
-                               verdict_type=classification.lead_type)
-        if scanned:
-            est_yield = max(0.02, len(accepted) / scanned)
+        pos = 0
+        while pos < len(candidates) and len(accepted) < leads_needed:
+            if _cancel_requested():
+                return _cancelled()
+            remaining = leads_needed - len(accepted)
+            size = max(settings.classifier_concurrency, math.ceil(remaining / max(est_yield, 0.02)))
+            chunk = candidates[pos:pos + size]
+            pos += len(chunk)
+            try:
+                classifications = list(_classify(chunk))
+            except Exception as exc:  # noqa: BLE001 - classifier unavailable == fail-closed
+                msg = f"classifier unavailable: {exc}"
+                errors.append(msg)
+                log.exception("Classifier batch failed (search %s) - fail-closed", search_id)
+                store.update_search(search_id, status="failed", error=msg, finished_at=datetime.now(UTC))
+                progress("failed", raw_found, len(accepted), scanned, msg)
+                return _summary(search_id, "failed", raw_found, len(accepted), scanned, iterations, msg)
+
+            outcomes = [_judge(p, c) for p, c in zip(chunk, classifications)]
+
+            # SNIPPET-FIRST FULL-TEXT ENRICHMENT: borderline verdicts get the public
+            # post page fetched and are re-classified on the full text. Bounded by
+            # the per-search enrichment budget and the DeepSeek ceiling; any fetch
+            # or classify failure keeps the original (snippet) verdict.
+            enrich_budget = max(0, settings.max_enrich_per_search - enriched) if full_text_fetcher else 0
+            if enrich_budget and llm_cap > 0:
+                enrich_budget = min(enrich_budget, max(0, llm_cap - _call_counts()[1]))
+            if enrich_budget:
+                picks = [i for i, (p, c, (kind, q)) in enumerate(zip(chunk, classifications, outcomes))
+                         if _worth_full_text(p, c, kind, q)][:enrich_budget]
+                if picks:
+                    with ThreadPoolExecutor(max_workers=max(1, min(settings.enrich_concurrency, len(picks)))) as ex:
+                        texts = list(ex.map(lambda i: _safe_fetch(full_text_fetcher, chunk[i].post_url), picks))
+                    redo: list[int] = []
+                    for i, text in zip(picks, texts):
+                        post = chunk[i]
+                        if not text or len(text) <= len(post.text or "") + 20:
+                            continue  # nothing new to read
+                        post.text = text
+                        post.text_source = "full_post"
+                        # The saved lead carries the full text, so it must pass the
+                        # same save-time direction gate (exact-count honesty).
+                        if content_filter is not None:
+                            try:
+                                if not content_filter(text):
+                                    outcomes[i] = ("gate", None)
+                                    continue
+                            except Exception:  # noqa: BLE001
+                                log.debug("content_filter raised on full text (kept)", exc_info=True)
+                        redo.append(i)
+                    if redo:
+                        try:
+                            again = list(_classify([chunk[i] for i in redo]))
+                        except Exception:  # noqa: BLE001 - keep snippet verdicts
+                            log.debug("Full-text re-classification failed (snippet verdicts kept)", exc_info=True)
+                            again = [None] * len(redo)
+                        for i, cl in zip(redo, again):
+                            enriched += 1
+                            if cl is None:
+                                continue  # fail-closed: keep the snippet verdict
+                            before = outcomes[i][0]
+                            classifications[i] = cl
+                            outcomes[i] = _judge(chunk[i], cl)
+                            if outcomes[i][0] == "accept" and before != "accept":
+                                enrich_flipped += 1
+
+            # LIVENESS: Google keeps deleted LinkedIn posts in its index for days,
+            # so every would-be lead is checked BEFORE it counts toward N - a dead
+            # post is replaced by the exact-N loop instead of reaching the user as
+            # "Post not found". Already-filled asks ("CONTRACT NOW AWARDED") are
+            # dropped the same way. Uncertain checks (throttle) keep the lead.
+            accept_idx = [i for i, (kind, _q) in enumerate(outcomes) if kind == "accept"]
+            for i in accept_idx:
+                if is_filled(chunk[i].text):
+                    outcomes[i] = ("filled", None)
+            accept_idx = [i for i in accept_idx if outcomes[i][0] == "accept"]
+            if post_checker is not None and accept_idx:
+                workers = max(1, min(settings.liveness_concurrency, len(accept_idx)))
+                with ThreadPoolExecutor(max_workers=workers) as ex:
+                    checks = list(ex.map(lambda i: _safe_check(post_checker, chunk[i].post_url), accept_idx))
+                for i, chk in zip(accept_idx, checks):
+                    status = getattr(chk, "status", "unknown")
+                    text = getattr(chk, "text", None)
+                    post = chunk[i]
+                    if status == "dead":
+                        outcomes[i] = ("dead", None)
+                    elif status == "alive":
+                        if is_filled(text):
+                            outcomes[i] = ("filled", None)
+                        elif text and len(text) > len(post.text or "") + 20:
+                            # The live full post replaces the snippet on the saved
+                            # lead - same save-time direction gate applies.
+                            if content_filter is not None and not _gate_ok(content_filter, text):
+                                outcomes[i] = ("gate", None)
+                            else:
+                                post.text = text
+                                post.text_source = "full_post"
+                    else:
+                        liveness_unknown += 1
+
+            for post, classification, (kind, qualified) in zip(chunk, classifications, outcomes):
+                scanned += 1
+                if kind == "none":
+                    classify_failed += 1  # fail-closed: dropped
+                    _record_reject(post, None, reason="classifier returned no verdict / parse failed")
+                elif kind == "dead":
+                    dead_dropped += 1
+                    _record_reject(post, classification, verdict_type=classification.lead_type,
+                                   reason="post deleted/removed on LinkedIn")
+                elif kind == "filled":
+                    filled_dropped += 1
+                    _record_reject(post, classification, verdict_type=classification.lead_type,
+                                   reason="need already filled (post says hired/awarded/closed)")
+                elif kind == "gate":
+                    dir_dropped += 1
+                    _record_reject(post, classification, verdict_type=getattr(classification, "lead_type", None),
+                                   reason="full post text contradicts the requested lead direction")
+                elif kind == "type" and classification.lead_type == "irrelevant":
+                    # Not a buyer at all (seller, job ad, advice...) - a plain
+                    # rejection, NOT a "different lead type" genuine buyer.
+                    reject_reasons["not_a_buyer"] = reject_reasons.get("not_a_buyer", 0) + 1
+                    _record_reject(post, classification, verdict_type="irrelevant",
+                                   reason=classification.reason or "not a buyer")
+                elif kind == "type":
+                    # TYPE GATE: the user asked for a specific buyer situation. When
+                    # sibling-buyer acceptance is off, a genuine buyer of a
+                    # DIFFERENT type (e.g. need_agency found during a
+                    # need_freelancer search) is not a lead for THIS search.
+                    type_mismatch += 1
+                    _record_reject(post, classification, verdict_type=classification.lead_type,
+                                   reason=classification.reason or "type mismatch")
+                elif kind == "accept":
+                    # Cross-search ownership was already checked before the LLM call
+                    # (Tier 1.1), so every survivor here is a NEW lead.
+                    accepted.append(EngineResult(post=post, classification=classification, qualified=qualified))
+                    gained += 1
+                else:
+                    _note_reject(qualified)
+                    _record_reject(post, classification,
+                                   reason=qualified.reason or "failed scoring gates",
+                                   verdict_type=classification.lead_type)
+            if scanned:
+                est_yield = max(0.02, len(accepted) / scanned)
 
         if gained:
             zero_yield_rounds = 0

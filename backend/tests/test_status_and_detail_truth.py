@@ -120,6 +120,36 @@ def test_terminal_status_clears_stale_progress_and_uses_db_counts(monkeypatch):
         hyperagent_service.clear_progress("s1")
 
 
+def test_user_cancel_is_not_overridden_by_a_still_running_engine(monkeypatch):
+    """The cancel endpoint flips the main row at once, but the engine thread
+    only notices at its next checkpoint. Until then ha_searches still says
+    'running' - the status poll must report 'cancelled', not 'scraping'
+    (the UI kept spinning and a 2nd click failed with "status 'cancelled'")."""
+    now = datetime.now(timezone.utc).isoformat()
+    client = FakeSupabase({
+        "searches": [{
+            "id": "s2", "user_id": "u1", "status": "cancelled", "source": "linkedin",
+            "progress_percent": 0, "message": "Search cancelled by user",
+            "total_results": 0, "hot_leads": 0, "warm_leads": 0, "skipped": 0,
+            "emails_found": 0, "created_at": now, "completed_at": now,
+            "niche": "logo design", "location": "Global", "max_results": 3,
+            "lead_types": ["freelancer"], "error_message": None,
+        }],
+        "ha_searches": [{"id": "s2", "status": "running", "scanned_count": 12,
+                         "accepted_count": 1, "leads_needed": 3, "finished_at": None,
+                         "error": None}],
+        "ha_leads": [],
+    })
+    _wire(monkeypatch, client)
+    hyperagent_service._progress_push("s2", "running", 40, 1, 12)
+    try:
+        result = search_router.get_search_status("s2", current_user={"id": "u1"})
+        assert result["status"] == "cancelled"
+        assert result["message"] == "Search cancelled by user"
+    finally:
+        hyperagent_service.clear_progress("s2")
+
+
 def test_lead_detail_row_is_coerced_before_schema_validation(monkeypatch):
     client = FakeSupabase({
         "leads": [{
